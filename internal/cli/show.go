@@ -41,12 +41,32 @@ commit message, diffstat, and unified patch diff.`,
 		if task.Assignee != "" {
 			sb.WriteString(fmt.Sprintf("Assignee: %s\n", task.Assignee))
 		}
+		if len(task.DependsOn) > 0 {
+			blockedText := ""
+			if task.IsBlocked {
+				blockedText = fmt.Sprintf(" 🔒 [BLOCKED by %s]", strings.Join(task.BlockedBy, ", "))
+			} else {
+				blockedText = " ⚡ [READY - prerequisites completed]"
+			}
+			sb.WriteString(fmt.Sprintf("Depends On: [%s]%s\n", strings.Join(task.DependsOn, ", "), blockedText))
+		}
+		if len(task.Blocks) > 0 {
+			sb.WriteString(fmt.Sprintf("Blocks:     [%s]\n", strings.Join(task.Blocks, ", ")))
+		}
 		sb.WriteString(fmt.Sprintf("Created:  %s", task.CreatedAt.Format("2006-01-02 15:04:05")))
 		if task.ClosedAt != nil {
 			sb.WriteString(fmt.Sprintf("   Closed: %s", task.ClosedAt.Format("2006-01-02 15:04:05")))
 		}
 		sb.WriteString("\n")
 		sb.WriteString(strings.Repeat("─", 80) + "\n")
+
+		if task.IsBlocked {
+			sb.WriteString("⚠️  TASK IS BLOCKED: Unfinished prerequisites must be completed first:\n")
+			for _, b := range task.BlockedBy {
+				sb.WriteString(fmt.Sprintf("   • %s\n", b))
+			}
+			sb.WriteString("   (Run 'tk show <id>' to inspect blockers, or 'tk done --force' to override)\n\n")
+		}
 
 		if task.Description != "" {
 			sb.WriteString(task.Description + "\n\n")

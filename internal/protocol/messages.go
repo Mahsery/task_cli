@@ -26,6 +26,9 @@ const (
 	ActionBackupRestore Action = "backup_restore"
 	ActionBackupVerify  Action = "backup_verify"
 	ActionListTombstones Action = "list_tombstones"
+	ActionAddDependency  Action = "add_dependency"
+	ActionRemoveDependency Action = "remove_dependency"
+	ActionGetDependencies Action = "get_dependencies"
 )
 
 type Request struct {
@@ -51,6 +54,7 @@ type CreateTaskPayload struct {
 	Tags        []string        `json:"tags"`
 	Author      string          `json:"author"`
 	Assignee    string          `json:"assignee,omitempty"`
+	DependsOn   []string        `json:"depends_on,omitempty"`
 }
 
 type UpdateTaskPayload struct {
@@ -65,6 +69,7 @@ type UpdateTaskPayload struct {
 	Assignee    *string          `json:"assignee,omitempty"`
 	AddNote     *string          `json:"add_note,omitempty"`
 	Author      string           `json:"author,omitempty"`
+	Force       bool             `json:"force,omitempty"`
 }
 
 type ClaimTaskPayload struct {
@@ -78,16 +83,20 @@ type GetTaskPayload struct {
 }
 
 type ListTasksPayload struct {
-	Scope    string           `json:"scope"`
-	RepoPath string           `json:"repo_path"`
-	Status   *domain.Status   `json:"status,omitempty"`
-	Priority *domain.Priority `json:"priority,omitempty"`
-	Tag      string           `json:"tag,omitempty"`
-	Assignee string           `json:"assignee,omitempty"`
-	Search   string           `json:"search,omitempty"`
+	Scope        string           `json:"scope"`
+	RepoPath     string           `json:"repo_path"`
+	Status       *domain.Status   `json:"status,omitempty"`
+	Priority     *domain.Priority `json:"priority,omitempty"`
+	Tag          string           `json:"tag,omitempty"`
+	Assignee     string           `json:"assignee,omitempty"`
+	Search       string           `json:"search,omitempty"`
 	Sort         string           `json:"sort,omitempty"`
 	Limit        int              `json:"limit,omitempty"`
 	IncludeNotes bool             `json:"include_notes,omitempty"`
+	OnlyReady    bool             `json:"only_ready,omitempty"`
+	OnlyBlocked  bool             `json:"only_blocked,omitempty"`
+	DependsOn    string           `json:"depends_on,omitempty"`
+	Blocks       string           `json:"blocks,omitempty"`
 }
 
 type DeleteTaskPayload struct {
@@ -106,6 +115,29 @@ type AttachGitPayload struct {
 	DiffStat    string `json:"diff_stat,omitempty"`
 	DiffContent string `json:"diff_content,omitempty"`
 	MarkDone    bool   `json:"mark_done"`
+	Force       bool   `json:"force,omitempty"`
+}
+
+type AddDependencyPayload struct {
+	TaskID      string `json:"task_id"`
+	DependsOnID string `json:"depends_on_id"`
+}
+
+type RemoveDependencyPayload struct {
+	TaskID      string `json:"task_id"`
+	DependsOnID string `json:"depends_on_id"`
+}
+
+type GetDependenciesPayload struct {
+	TaskID string `json:"task_id"`
+}
+
+type DependenciesData struct {
+	TaskID    string   `json:"task_id"`
+	DependsOn []string `json:"depends_on"`
+	BlockedBy []string `json:"blocked_by"`
+	Blocks    []string `json:"blocks"`
+	IsBlocked bool     `json:"is_blocked"`
 }
 
 type EventType string

@@ -263,6 +263,10 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		Sort:         filter.Sort,
 		Limit:        filter.Limit,
 		IncludeNotes: filter.IncludeNotes,
+		OnlyReady:    filter.OnlyReady,
+		OnlyBlocked:  filter.OnlyBlocked,
+		DependsOn:    filter.DependsOn,
+		Blocks:       filter.Blocks,
 	}
 	resp, err := c.call(protocol.ActionListTasks, p)
 	if err != nil {
@@ -316,7 +320,44 @@ func (c *Client) ListTombstones() ([]*domain.Task, error) {
 	return tasks, nil
 }
 
+func (c *Client) AddDependency(taskID, dependsOnID string) error {
+	p := protocol.AddDependencyPayload{
+		TaskID:      taskID,
+		DependsOnID: dependsOnID,
+	}
+	_, err := c.call(protocol.ActionAddDependency, p)
+	return err
+}
+
+func (c *Client) RemoveDependency(taskID, dependsOnID string) error {
+	p := protocol.RemoveDependencyPayload{
+		TaskID:      taskID,
+		DependsOnID: dependsOnID,
+	}
+	_, err := c.call(protocol.ActionRemoveDependency, p)
+	return err
+}
+
+func (c *Client) GetDependencies(taskID string) (*protocol.DependenciesData, error) {
+	p := protocol.GetDependenciesPayload{
+		TaskID: taskID,
+	}
+	resp, err := c.call(protocol.ActionGetDependencies, p)
+	if err != nil {
+		return nil, err
+	}
+	var data protocol.DependenciesData
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		return nil, err
+	}
+	return &data, nil
+}
+
 func (c *Client) AttachGit(taskID string, sha, msg, diffStat, diffContent string, markDone bool) (*domain.Task, error) {
+	return c.AttachGitWithForce(taskID, sha, msg, diffStat, diffContent, markDone, false)
+}
+
+func (c *Client) AttachGitWithForce(taskID string, sha, msg, diffStat, diffContent string, markDone, force bool) (*domain.Task, error) {
 	p := protocol.AttachGitPayload{
 		TaskID:      taskID,
 		CommitSHA:   sha,
@@ -324,6 +365,7 @@ func (c *Client) AttachGit(taskID string, sha, msg, diffStat, diffContent string
 		DiffStat:    diffStat,
 		DiffContent: diffContent,
 		MarkDone:    markDone,
+		Force:       force,
 	}
 	resp, err := c.call(protocol.ActionAttachGit, p)
 	if err != nil {

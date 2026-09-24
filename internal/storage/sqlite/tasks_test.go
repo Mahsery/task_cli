@@ -739,6 +739,165 @@ func TestRestoreTask(t *testing.T) {
 	}
 }
 
+func TestTaskDependenciesAndCycleDetection(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
 
+	// 1. Create three tasks: T-1, T-2, T-3
+	t1, err := db.CreateTask("local", "/repo/test", "Task 1: Setup DB", "", domain.StatusOpen, domain.PriorityNormal, nil, "Tester", "")
+	if err != nil {
+		t.Fatalf("failed to create T-1: %v", err)
+	}
+	t2, err := db.CreateTask("local", "/repo/test", "Task 2: Build API", "", domain.StatusOpen, domain.PriorityHigh, nil, "Tester", "")
+	if err != nil {
+		t.Fatalf("failed to create T-2: %v", err)
+	}
+	t3, err := db.CreateTask("local", "/repo/test", "Task 3: Build UI", "", domain.StatusOpen, domain.PriorityUrgent, nil, "Tester", "")
+	if err != nil {
+		t.Fatalf("failed to create T-3: %v", err)
+	}
 
+	// 2. Link T-2 -> depends on T-1
+	if err := db.AddDependency(t2.ID, t1.ID); err != nil {
+		t.Fatalf("failed to link T-2 to T-1: %v", err)
+	}
 
+	// 3. Link T-3 -> depends on T-2
+	if err := db.AddDependency(t3.ID, t2.ID); err != nil {
+		t.Fatalf("failed to link T-3 to T-2: %v", err)
+	}
+
+	// 4. Verify T-2 depends on T-1, and T-1 blocks T-2
+	t2Fetched, err := db.GetTask(t2.ID)
+	if err != nil {
+		t.Fatalf("failed to get T-2: %v", err)
+	}
+	if len(t2Fetched.DependsOn) != 1 || t2Fetched.DependsOn[0] != t1.ID {
+		t.Fatalf("expected T-2 to depend on T-1, got %v", t2Fetched.DependsOn)
+	}
+	if !t2Fetched.IsBlocked {
+		t.Fatalf("expected T-2 to be blocked since T-1 is OPEN")
+	}
+
+	t1Fetched, err := db.GetTask(t1.ID)
+	if err != nil {
+		t.Fatalf("failed to get T-1: %v", err)
+	}
+	if len(t1Fetched.Blocks) != 1 || t1Fetched.Blocks[0] != t2.ID {
+		t.Fatalf("expected T-1 to block T-2, got %v", t1Fetched.Blocks)
+	}
+
+	// 5. Test Cycle Detection
+	// Self-dependency: T-1 depends on T-1 -> should fail
+	if err := db.AddDependency(t1.ID, t1.ID); err == nil {
+		t.Fatalf("expected error for self-dependency T-1 -> T-1, got nil")
+	}
+
+	// Direct cycle: T-1 depends on T-2 (when T-2 already depends on T-1) -> should fail
+	if err := db.AddDependency(t1.ID, t2.ID); err == nil {
+		t.Fatalf("expected error for direct cycle T-1 -> T-2 -> T-1, got nil")
+	}
+
+	// Transitive cycle: T-1 depends on T-3 (when T-3 -> T-2 -> T-1) -> should fail
+	if err := db.AddDependency(t1.ID, t3.ID); err == nil {
+		t.Fatalf("expected error for transitive cycle T-1 -> T-3 -> T-2 -> T-1, got nil")
+	}
+
+	// 6. Test RemoveDependency
+	if err := db.RemoveDependency(t3.ID, t2.ID); err != nil {
+		t.Fatalf("failed to remove dependency T-3 -> T-2: %v", err)
+	}
+	t3AfterRm, err := db.GetTask(t3.ID)
+	if err != nil {
+		t.Fatalf("failed to get T-3 after rm: %v", err)
+	}
+	if len(t3AfterRm.DependsOn) != 0 {
+		t.Fatalf("expected T-3 to have 0 dependencies after removal, got %v", t3AfterRm.DependsOn)
+	}
+	if t3AfterRm.IsBlocked {
+		t.Fatalf("expected T-3 to not be blocked after removing dependency")
+	}
+}
+
+func TestTaskCheckBlockedAndFilters(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// T-1 (Prereq) -> T-2 (Dependent)
+	t1, _ := db.CreateTask("local", "/repo/test", "Setup DB", "", domain.StatusOpen, domain.PriorityNormal, nil, "Tester", "")
+	t2, _ := db.CreateTask("local", "/repo/test", "Build API", "", domain.StatusOpen, domain.PriorityHigh, nil, "Tester", "", t1.ID)
+
+	// CheckBlocked on T-2: should be blocked by T-1
+	blocked, prereqs, err := db.CheckBlocked(t2.ID)
+	if err != nil {
+		t.Fatalf("CheckBlocked failed: %v", err)
+	}
+	if !blocked {
+		t.Fatalf("expected T-2 to be blocked")
+	}
+	if len(prereqs) != 1 || prereqs[0].ID != t1.ID {
+		t.Fatalf("expected unfinished prereq T-1, got %v", prereqs)
+	}
+
+	// Test OnlyReady filter: T-1 is ready (no prereqs), T-2 is blocked
+	readyTasks, err := db.ListTasks(domain.TaskFilter{
+		Scope:     "local",
+		RepoPath:  "/repo/test",
+		OnlyReady: true,
+	})
+	if err != nil {
+		t.Fatalf("ListTasks OnlyReady failed: %v", err)
+	}
+	if len(readyTasks) != 1 || readyTasks[0].ID != t1.ID {
+		t.Fatalf("expected only T-1 in OnlyReady, got %v", readyTasks)
+	}
+
+	// Test OnlyBlocked filter: only T-2 should be returned
+	blockedTasks, err := db.ListTasks(domain.TaskFilter{
+		Scope:       "local",
+		RepoPath:    "/repo/test",
+		OnlyBlocked: true,
+	})
+	if err != nil {
+		t.Fatalf("ListTasks OnlyBlocked failed: %v", err)
+	}
+	if len(blockedTasks) != 1 || blockedTasks[0].ID != t2.ID {
+		t.Fatalf("expected only T-2 in OnlyBlocked, got %v", blockedTasks)
+	}
+
+	// Mark T-1 as DONE
+	doneStatus := domain.StatusDone
+	_, err = db.UpdateTask(t1.ID, nil, nil, &doneStatus, nil, nil, nil, nil, nil, nil, "Tester")
+	if err != nil {
+		t.Fatalf("failed to update T-1 to DONE: %v", err)
+	}
+
+	// CheckBlocked on T-2 again: should now be unblocked!
+	blockedAfter, prereqsAfter, err := db.CheckBlocked(t2.ID)
+	if err != nil {
+		t.Fatalf("CheckBlocked after completion failed: %v", err)
+	}
+	if blockedAfter {
+		t.Fatalf("expected T-2 to be UNBLOCKED after T-1 completed, but was blocked by %v", prereqsAfter)
+	}
+
+	// T-2 should now appear in OnlyReady list
+	readyAfter, err := db.ListTasks(domain.TaskFilter{
+		Scope:     "local",
+		RepoPath:  "/repo/test",
+		OnlyReady: true,
+	})
+	if err != nil {
+		t.Fatalf("ListTasks OnlyReady failed: %v", err)
+	}
+	// T-1 is DONE (so also ready/complete), T-2 is OPEN and unblocked
+	foundT2 := false
+	for _, rt := range readyAfter {
+		if rt.ID == t2.ID {
+			foundT2 = true
+		}
+	}
+	if !foundT2 {
+		t.Fatalf("expected T-2 to be in OnlyReady after T-1 is done")
+	}
+}

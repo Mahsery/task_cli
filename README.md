@@ -86,12 +86,17 @@ tk
 |---------|:-------:|-------------------|-------------|---------|
 | `tk` | — | — | Launch interactive TUI in terminal; prints help if non-TTY | `tk` |
 | `tk new` | — | `[-t title] [-p prio] [-l tags] [-a assignee] [-m desc]` | Create task via flags, piped stdin, or `$EDITOR` template | `tk new -t "Fix bug" -p high -l ui`<br>`echo "Piped Task" \| tk new` |
-| `tk list` | `ls` | `[-s status] [-p prio] [-t/-l tag] [-a assignee] [-q search] [--sort order] [--short] [--limit N]` | Query tasks (ordered by status, priority, ID by default) | `tk list -s open -p high`<br>`tk ls --sort recent` |
+| `tk tree` | `dag` | `[task-id] [-s status] [-r/--reverse] [--all] [--json]` | Render hierarchical tree of task dependencies (`├──`, `└──`, `🔒 BLOCKED`, `⚡ READY`) | `tk tree`<br>`tk tree T-1`<br>`tk tree -r` (breakdown)<br>`tk tree --json` |
+| `tk dep` | `deps` | `[add\|rm\|show\|tree]` | Manage task dependencies, blocker links, and inspect prerequisites | `tk dep add T-2 T-1`<br>`tk dep rm T-2 T-1`<br>`tk dep show T-2` |
+| `tk link` | — | `<task-id> <prereq-id...>` | Link a task to depend on prerequisite tasks (alias for `tk dep add`) | `tk link T-2 T-1` |
+| `tk unlink` | — | `<task-id> <prereq-id...>` | Unlink a task from prerequisite tasks (alias for `tk dep rm`) | `tk unlink T-2 T-1` |
+| `tk next` | — | `[--json]` | Identify the next actionable unblocked task to steer developers and AI agents | `tk next`<br>`tk next --json` |
+| `tk list` | `ls` | `[-s status] [-p prio] [-t/-l tag] [-a assignee] [-q search] [--tree] [--ready] [--blocked] [--after id] [--blocks id] [--sort order] [--short] [--limit N]` | Query tasks (supports tree view, unblocked ready tasks, and blockers) | `tk list -s open -p high`<br>`tk list --tree`<br>`tk list --ready`<br>`tk list --blocked` |
 | `tk search` | `find` | `<query...> [-s status] [-p prio] [-l tag] [-a assignee] [--short] [--limit N]` | Search tasks with boolean DSL (`AND`, `OR`, `NOT`, `tag:`, `s:`, `p:`, `a:`, `"exact"`) | `tk search bug AND odin`<br>`tk search tag:security priority:high`<br>`tk search "memory leak" NOT closed` |
-| `tk show` | — | `<id>` | Display task metadata, notes, commit SHA, and diff content | `tk show T-1`<br>`tk show G-2 --json` |
+| `tk show` | — | `<id>` | Display task metadata, prerequisites, blockers, notes, commit SHA, and diff | `tk show T-1`<br>`tk show G-2 --json` |
 | `tk claim` | — | `<id> [--actor actor] [--force]` | Atomically claim a task for the current actor; prevents race conditions | `tk claim T-1`<br>`tk claim T-1 --actor bot-1` |
 | `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [-l tags] [--add-tag tag] [--remove-tag tag] [--claim] [-a assignee] [-m/-n note] [-d desc]` | Modify task fields via CLI flags, atomically add/remove tags, or open `$EDITOR` | `tk edit T-1 -s in_progress`<br>`tk edit T-1 --add-tag review`<br>`tk edit T-1 --claim`<br>`tk edit T-1 -n "New note"` |
-| `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit]` | Mark task done; auto-attaches latest commit & diff by default | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 --no-commit` |
+| `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit] [-f/--force]` | Mark task done; enforces prerequisite completion check (override with `-f`) | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 -f` |
 | `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
 | `tk delete` | `rm` | `<id> [-y/--yes] [--force]` | Remove a task to the tombstone archive (prompts unless `-y` or `--force`) | `tk delete T-1`<br>`tk delete -y T-1`<br>`tk rm --force G-4` |
 | `tk restore` | `undo-delete` | `<id> [-l/--list]` | Restore deleted task from tombstone archive or list recoverable tasks | `tk restore T-1`<br>`tk restore -l` |
@@ -119,6 +124,8 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `Tab` / `Shift+Tab` | Toggle Active Pane | Switch focus between Tasks List (left) and Details & Messages (right) |
 | `l` / `→` | Focus Details Pane | Move focus from task list into details/messages pane |
 | `h` / `←` | Focus Tasks List | Return focus from details pane back to task list |
+| `t` | Toggle Tree Mode | Toggle between standard flat tabular list and hierarchical DAG tree view |
+| `L` | Link Dependency Modal | Open interactive modal to make the current task depend on a prerequisite task ID |
 | `j` / `k` / `↓` / `↑` | Move / Scroll | In **List**: navigate task selection; in **Details**: scroll message content line-by-line |
 | `g` / `G` | Top / Bottom | In **List**: jump to first/last task; in **Details**: jump to top/bottom of notes |
 | `Ctrl+D` / `Ctrl+U` / `J` / `K` | Fast Page Scroll | Page scroll details, notes, and patch diff content in split view |
@@ -126,11 +133,11 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `v` | Select / Deselect | Toggle task selection for current row without advancing cursor |
 | `V` | Select All / Deselect | Toggle selection across all currently visible tasks |
 | `u` | Multi-Level Undo | Revert recent mutations (restores deleted tasks, claims, done, status) |
-| `d` | Reversible / Batch Done | Mark task(s) done (or **reopen** if already done); auto-attaches git diff |
+| `d` | Reversible / Batch Done | Mark task(s) done (enforces prerequisite blockers; warns if blocked) |
 | `s` | Status / Batch Toggle | Cycle status between `open` and `in_progress` for selected tasks |
 | `a` | Claim / Batch Claim | Atomically claim selected task(s) for current actor |
 | `x` | Delete / Batch Delete | Prompt for confirmation (`[y/N]`) and remove selected tasks to tombstones |
-| `n` | New Task | Launch `$EDITOR` with a new task template |
+| `n` | New Task | Launch `$EDITOR` with a new task template (supports `--after` to link prerequisites) |
 | `e` | Edit Task | Launch `$EDITOR` with selected task pre-populated |
 | `Enter` | Toggle Diff | Expand or collapse unified patch diff view |
 | `/` | Search Filter | Enter live search query (`Enter` applies, `Esc` cancels) |

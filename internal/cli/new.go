@@ -22,6 +22,7 @@ var (
 	newAssignee    string
 	newMessage     string
 	newDescription string
+	newDependsOn   string
 )
 
 var newCmd = &cobra.Command{
@@ -134,6 +135,17 @@ and subsequent lines form the description.`,
 		if author == "" {
 			author = git.GetAuthor()
 		}
+
+		var dependsOn []string
+		if newDependsOn != "" {
+			for _, d := range strings.Split(newDependsOn, ",") {
+				d = strings.TrimSpace(d)
+				if d != "" {
+					dependsOn = append(dependsOn, d)
+				}
+			}
+		}
+
 		task, err := taskClient.CreateTask(protocol.CreateTaskPayload{
 			Title:       title,
 			Description: desc,
@@ -142,6 +154,7 @@ and subsequent lines form the description.`,
 			Tags:        tags,
 			Author:      author,
 			Assignee:    assignee,
+			DependsOn:   dependsOn,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create task: %w", err)
@@ -152,6 +165,13 @@ and subsequent lines form the description.`,
 		}
 
 		fmt.Printf("✓ Created %s: %s\n", task.ID, task.Title)
+		if len(task.DependsOn) > 0 {
+			if task.IsBlocked {
+				fmt.Printf("  🔒 Blocked by unfinished prerequisite(s): [%s]\n", strings.Join(task.BlockedBy, ", "))
+			} else {
+				fmt.Printf("  ⚡ Prerequisites completed: [%s]\n", strings.Join(task.DependsOn, ", "))
+			}
+		}
 		return nil
 	},
 }
@@ -164,4 +184,6 @@ func init() {
 	newCmd.Flags().StringVarP(&newAssignee, "assignee", "a", "", "Task assignee")
 	newCmd.Flags().StringVarP(&newMessage, "message", "m", "", "Task description")
 	newCmd.Flags().StringVarP(&newDescription, "desc", "d", "", "Task description")
+	newCmd.Flags().StringVar(&newDependsOn, "after", "", "Comma-separated list of prerequisite task IDs that this task depends on")
+	newCmd.Flags().StringVar(&newDependsOn, "depends-on", "", "Alias for --after")
 }

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -245,7 +246,7 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		if err != nil {
 			return errorResp(req.ID, err.Error())
 		}
-		task, err := db.CreateTask(req.Scope, req.RepoPath, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.Author, p.Assignee)
+		task, err := db.CreateTask(req.Scope, req.RepoPath, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.Author, p.Assignee, p.DependsOn...)
 		if err != nil {
 			return errorResp(req.ID, err.Error())
 		}
@@ -287,6 +288,18 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		if err != nil {
 			return errorResp(req.ID, err.Error())
 		}
+
+		// Hard completion enforcement: cannot mark done/closed if unfinished dependencies exist
+		if p.Status != nil && (*p.Status == domain.StatusDone || *p.Status == domain.StatusClosed) && !p.Force {
+			if blocked, prereqs, err := db.CheckBlocked(p.ID); err == nil && blocked {
+				var titles []string
+				for _, pr := range prereqs {
+					titles = append(titles, fmt.Sprintf("%s [%s] %q", pr.ID, pr.Status, pr.Title))
+				}
+				return errorResp(req.ID, fmt.Sprintf("cannot mark %s as %s: blocked by %d unfinished task(s):\n  • %s\n(use --force to override)", p.ID, *p.Status, len(prereqs), strings.Join(titles, "\n  • ")))
+			}
+		}
+
 		task, err := db.UpdateTask(p.ID, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.AddTags, p.RemoveTags, p.Assignee, p.AddNote, p.Author)
 		if err != nil {
 			return errorResp(req.ID, err.Error())
@@ -348,6 +361,10 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			Sort:         p.Sort,
 			Limit:        p.Limit,
 			IncludeNotes: p.IncludeNotes,
+			OnlyReady:    p.OnlyReady,
+			OnlyBlocked:  p.OnlyBlocked,
+			DependsOn:    p.DependsOn,
+			Blocks:       p.Blocks,
 		}
 		tasks, err := db.ListTasks(filter)
 		if err != nil {
@@ -428,6 +445,73 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		resp.Data = data
 		return resp
 
+	case protocol.ActionAddDependency:
+		var p protocol.AddDependencyPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		if err := db.AddDependency(p.TaskID, p.DependsOnID); err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+
+		s.pubsub.Publish(protocol.Event{
+			Type:      protocol.EventTaskUpdated,
+			Timestamp: time.Now(),
+			Message:   fmt.Sprintf("🔗 %s linked to depend on %s", p.TaskID, p.DependsOnID),
+		})
+
+		resp.Data = json.RawMessage(`{"status":"linked"}`)
+		return resp
+
+	case protocol.ActionRemoveDependency:
+		var p protocol.RemoveDependencyPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		if err := db.RemoveDependency(p.TaskID, p.DependsOnID); err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+
+		s.pubsub.Publish(protocol.Event{
+			Type:      protocol.EventTaskUpdated,
+			Timestamp: time.Now(),
+			Message:   fmt.Sprintf("🔓 %s unlinked from %s", p.TaskID, p.DependsOnID),
+		})
+
+		resp.Data = json.RawMessage(`{"status":"unlinked"}`)
+		return resp
+
+	case protocol.ActionGetDependencies:
+		var p protocol.GetDependenciesPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		task, err := db.GetTask(p.TaskID)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		data, _ := json.Marshal(protocol.DependenciesData{
+			TaskID:    task.ID,
+			DependsOn: task.DependsOn,
+			BlockedBy: task.BlockedBy,
+			Blocks:    task.Blocks,
+			IsBlocked: task.IsBlocked,
+		})
+		resp.Data = data
+		return resp
+
 	case protocol.ActionAttachGit:
 		var p protocol.AttachGitPayload
 		if err := json.Unmarshal(req.Payload, &p); err != nil {
@@ -437,6 +521,18 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		if err != nil {
 			return errorResp(req.ID, err.Error())
 		}
+
+		// Hard completion enforcement: cannot mark done if unfinished dependencies exist
+		if p.MarkDone && !p.Force {
+			if blocked, prereqs, err := db.CheckBlocked(p.TaskID); err == nil && blocked {
+				var titles []string
+				for _, pr := range prereqs {
+					titles = append(titles, fmt.Sprintf("%s [%s] %q", pr.ID, pr.Status, pr.Title))
+				}
+				return errorResp(req.ID, fmt.Sprintf("cannot mark %s as DONE: blocked by %d unfinished task(s):\n  • %s\n(use --force to override)", p.TaskID, len(prereqs), strings.Join(titles, "\n  • ")))
+			}
+		}
+
 		task, err := db.AttachGit(p.TaskID, p.CommitSHA, p.CommitMsg, p.DiffStat, p.DiffContent, p.MarkDone)
 		if err != nil {
 			return errorResp(req.ID, err.Error())

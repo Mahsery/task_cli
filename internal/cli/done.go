@@ -14,6 +14,7 @@ var (
 	doneCommit   string
 	doneDiff     bool
 	doneNoCommit bool
+	doneForce    bool
 )
 
 var doneCmd = &cobra.Command{
@@ -74,13 +75,14 @@ Use --diff to snapshot uncommitted working tree changes, or --no-commit to skip 
 		}
 
 		if sha != "" {
-			updated, err = taskClient.AttachGit(taskID, sha, msg, stat, diff, true)
+			updated, err = taskClient.AttachGitWithForce(taskID, sha, msg, stat, diff, true, doneForce)
 		} else {
 			status := domain.StatusDone
 			updated, err = taskClient.UpdateTask(protocol.UpdateTaskPayload{
 				ID:     taskID,
 				Status: &status,
 				Author: author,
+				Force:  doneForce,
 			})
 		}
 
@@ -112,4 +114,5 @@ func init() {
 	doneCmd.Flags().StringVarP(&doneCommit, "commit", "c", "", "Specific git commit hash or ref to attach")
 	doneCmd.Flags().BoolVar(&doneDiff, "diff", false, "Attach current uncommitted working tree diff instead of commit")
 	doneCmd.Flags().BoolVar(&doneNoCommit, "no-commit", false, "Do not auto-attach git commit")
+	doneCmd.Flags().BoolVarP(&doneForce, "force", "f", false, "Force completion even if prerequisite dependencies are unfinished")
 }

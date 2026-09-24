@@ -819,3 +819,160 @@ func TestTUIModalFloatingWindowRendering(t *testing.T) {
 	}
 }
 
+func TestTUITreeViewModeToggleAndRows(t *testing.T) {
+	now := time.Now()
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Parent Task", Status: domain.StatusDone, Priority: domain.PriorityNormal, Blocks: []string{"T-2"}, CreatedAt: now},
+		{ID: "T-2", Title: "Child Task", Status: domain.StatusOpen, Priority: domain.PriorityHigh, DependsOn: []string{"T-1"}, IsBlocked: false, CreatedAt: now},
+		{ID: "T-3", Title: "Independent Task", Status: domain.StatusOpen, Priority: domain.PriorityLow, CreatedAt: now},
+	}
+
+	m := Model{
+		tasks:        tasks,
+		cursor:       0,
+		width:        100,
+		height:       24,
+		theme:        NewKanagawaTheme(),
+		treeViewMode: false,
+	}
+
+	// 1. Verify getTreeRows builds correct hierarchy
+	treeRows := m.getTreeRows()
+	if len(treeRows) != 3 {
+		t.Fatalf("expected 3 tree rows, got %d", len(treeRows))
+	}
+	if treeRows[0].Task.ID != "T-1" || treeRows[0].Prefix != "" {
+		t.Errorf("expected row 0 to be root T-1 with empty prefix, got %s %q", treeRows[0].Task.ID, treeRows[0].Prefix)
+	}
+	if treeRows[1].Task.ID != "T-2" || (!strings.Contains(treeRows[1].Prefix, "└──") && !strings.Contains(treeRows[1].Prefix, "\\--")) {
+		t.Errorf("expected row 1 to be child T-2 with branch prefix, got %s %q", treeRows[1].Task.ID, treeRows[1].Prefix)
+	}
+	if treeRows[2].Task.ID != "T-3" || treeRows[2].Prefix != "" {
+		t.Errorf("expected row 2 to be root T-3 with empty prefix, got %s %q", treeRows[2].Task.ID, treeRows[2].Prefix)
+	}
+
+	// 2. Test 't' key toggles tree mode
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	m = updated.(Model)
+	if !m.treeViewMode {
+		t.Fatalf("expected treeViewMode to be true after pressing 't'")
+	}
+	if !strings.Contains(m.statusMsg, "Tree view mode enabled") {
+		t.Errorf("expected statusMsg to confirm tree mode, got %q", m.statusMsg)
+	}
+
+	// 3. Render View in tree mode: verify TREE / TITLE header and branch prefix
+	viewOut := m.View()
+	if !strings.Contains(viewOut, "TREE / TITLE") {
+		t.Errorf("expected 'TREE / TITLE' column in tree mode view, got:\n%s", viewOut)
+	}
+	if !strings.Contains(viewOut, "TREE MODE") {
+		t.Errorf("expected 'TREE MODE' in top header, got:\n%s", viewOut)
+	}
+	if !strings.Contains(viewOut, "Child Task") {
+		t.Errorf("expected child task in tree mode view, got:\n%s", viewOut)
+	}
+
+	// 4. Toggle back with 't'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	m = updated.(Model)
+	if m.treeViewMode {
+		t.Fatalf("expected treeViewMode to be false after second 't'")
+	}
+}
+
+func TestTUIBlockedTaskDoneProtection(t *testing.T) {
+	now := time.Now()
+	tasks := []*domain.Task{
+		{
+			ID:        "T-2",
+			Title:     "Blocked Child Task",
+			Status:    domain.StatusOpen,
+			Priority:  domain.PriorityHigh,
+			DependsOn: []string{"T-1"},
+			IsBlocked: true,
+			BlockedBy: []string{"T-1"},
+			CreatedAt: now,
+		},
+	}
+
+	m := Model{
+		tasks:  tasks,
+		cursor: 0,
+		width:  100,
+		height: 24,
+		theme:  NewKanagawaTheme(),
+	}
+
+	// Press 'd' to mark done on blocked task: should be rejected with warning!
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+
+	if m.confirmDialog != nil {
+		t.Fatalf("expected NO confirmDialog when attempting to complete blocked task, got %v", m.confirmDialog)
+	}
+	if !strings.Contains(m.statusMsg, "blocked by unfinished prerequisite") {
+		t.Fatalf("expected warning message about unfinished prerequisites, got %q", m.statusMsg)
+	}
+}
+
+func TestTUILinkModalInteraction(t *testing.T) {
+	now := time.Now()
+	tasks := []*domain.Task{
+		{ID: "T-2", Title: "Build API", Status: domain.StatusOpen, Priority: domain.PriorityNormal, CreatedAt: now},
+	}
+
+	m := Model{
+		tasks:  tasks,
+		cursor: 0,
+		width:  100,
+		height: 24,
+		theme:  NewKanagawaTheme(),
+	}
+
+	// 1. Press 'L' to open link modal
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	m = updated.(Model)
+
+	if !m.isLinking {
+		t.Fatalf("expected isLinking to be true after 'L'")
+	}
+	if m.linkTaskID != "T-2" {
+		t.Fatalf("expected linkTaskID to be T-2, got %s", m.linkTaskID)
+	}
+
+	// 2. View() should display floating link modal
+	modalView := m.View()
+	if !strings.Contains(modalView, "LINK PREREQUISITE DEPENDENCY") {
+		t.Fatalf("expected modal title in View(), got:\n%s", modalView)
+	}
+	if !strings.Contains(modalView, "Make task T-2 depend on prerequisite") {
+		t.Fatalf("expected prompt in View(), got:\n%s", modalView)
+	}
+
+	// 3. Type 'T', '-', '1'
+	for _, r := range []rune{'T', '-', '1'} {
+		up, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = up.(Model)
+	}
+	if m.linkInput != "T-1" {
+		t.Fatalf("expected linkInput to be 'T-1', got %q", m.linkInput)
+	}
+
+	// 4. Test backspace
+	up, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = up.(Model)
+	if m.linkInput != "T-" {
+		t.Fatalf("expected linkInput to be 'T-' after backspace, got %q", m.linkInput)
+	}
+
+	// 5. Test Escape cancels link modal
+	up, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = up.(Model)
+	if m.isLinking {
+		t.Fatalf("expected isLinking to be false after Esc")
+	}
+	if m.statusMsg != "Link cancelled" {
+		t.Fatalf("expected 'Link cancelled' statusMsg, got %q", m.statusMsg)
+	}
+}

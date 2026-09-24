@@ -17,8 +17,13 @@ var (
 	listTagLabel string
 	listAssignee string
 	listSearch   string
-	listShort    bool
-	listLimit    int
+	listShort     bool
+	listLimit     int
+	listTree      bool
+	listReady     bool
+	listBlocked   bool
+	listDependsOn string
+	listBlocks    string
 )
 
 var listCmd = &cobra.Command{
@@ -35,19 +40,27 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
   tk ls --short --limit 10
   tk -g list --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if listTree {
+			return treeCmd.RunE(cmd, args)
+		}
+
 		tagFilter := listTag
 		if tagFilter == "" && listTagLabel != "" {
 			tagFilter = listTagLabel
 		}
 
 		filter := domain.TaskFilter{
-			Scope:    scope,
-			RepoPath: repoRoot,
-			Tag:      tagFilter,
-			Assignee: listAssignee,
-			Search:   listSearch,
-			Sort:     listSort,
-			Limit:    listLimit,
+			Scope:       scope,
+			RepoPath:    repoRoot,
+			Tag:         tagFilter,
+			Assignee:    listAssignee,
+			Search:      listSearch,
+			Sort:        listSort,
+			Limit:       listLimit,
+			OnlyReady:   listReady,
+			OnlyBlocked: listBlocked,
+			DependsOn:   listDependsOn,
+			Blocks:      listBlocks,
 		}
 
 		if listStatus != "" {
@@ -117,6 +130,12 @@ func init() {
 	listCmd.Flags().StringVar(&listSort, "sort", "", "Sort order: 'status,priority,id' (default), 'id', 'recent', 'created', 'updated'")
 	listCmd.Flags().BoolVar(&listShort, "short", false, "Output simple one-line list")
 	listCmd.Flags().IntVar(&listLimit, "limit", 0, "Limit number of results")
+	listCmd.Flags().BoolVar(&listTree, "tree", false, "Display tasks in a hierarchical dependency tree view")
+	listCmd.Flags().BoolVar(&listReady, "ready", false, "Show only actionable tasks whose prerequisites are complete")
+	listCmd.Flags().BoolVar(&listBlocked, "blocked", false, "Show only tasks blocked by unfinished prerequisites")
+	listCmd.Flags().StringVar(&listDependsOn, "after", "", "Show tasks that depend on the specified task ID")
+	listCmd.Flags().StringVar(&listDependsOn, "depends-on", "", "Alias for --after")
+	listCmd.Flags().StringVar(&listBlocks, "blocks", "", "Show tasks that are prerequisite blockers for the specified task ID")
 }
 
 func formatAge(t time.Time) string {

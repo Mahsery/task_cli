@@ -22,8 +22,21 @@
 
 ## 2. Agent Command Reference
 
-### Discovering Work
+### Discovering & Steering Work
 ```bash
+# Find the next actionable, unblocked task (steers agents to ready work)
+tk next
+tk next --json
+
+# Render hierarchical dependency DAG tree
+tk tree
+
+# View only ready tasks whose prerequisites are complete
+tk list --ready
+
+# View only tasks blocked by unfinished prerequisites
+tk list --blocked
+
 # List all tasks in current repository (ordered by status, priority, and ID)
 tk list
 
@@ -33,17 +46,24 @@ tk list -s open,in_progress
 # Search using boolean DSL
 tk search "priority:urgent OR (bug AND status:open)"
 
-# Inspect full task details, notes, and attached Git diffs
+# Inspect full task details, notes, prerequisites, blockers, and attached Git diffs
 tk show <ID>
 ```
 
-### Claiming & Creating Work
+### Claiming & Linking Work
 ```bash
-# Create a new scoped task
-tk new -t "Descriptive task title" -p urgent -l "backend,storage" -d "Detailed spec..."
+# Create a new scoped task (optionally link prerequisites via --after)
+tk new -t "Descriptive task title" -p urgent -l "backend,storage" --after T-1 -d "Detailed spec..."
 
 # Atomically claim a task as your agent identity
 tk claim <ID> --actor "agent-antigravity"
+
+# Link dependencies (T-2 depends on T-1; T-1 blocks T-2)
+tk link T-2 T-1
+tk unlink T-2 T-1
+
+# Inspect dependency blockers and dependents for a task
+tk dep show <ID>
 ```
 
 ### Updating & Documenting Progress

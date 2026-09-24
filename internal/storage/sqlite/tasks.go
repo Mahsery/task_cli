@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func (d *DB) CreateTask(scope, repoPath, title, description string, status domain.Status, priority domain.Priority, tags []string, author, assignee string) (*domain.Task, error) {
+func (d *DB) CreateTask(scope, repoPath, title, description string, status domain.Status, priority domain.Priority, tags []string, author, assignee string, dependsOn ...string) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -76,26 +76,31 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 		return nil, fmt.Errorf("failed to insert task: %w", err)
 	}
 
+	var linkedDeps []string
+	for _, depID := range dependsOn {
+		depID = strings.TrimSpace(depID)
+		if depID == "" {
+			continue
+		}
+		if depID == taskID {
+			return nil, fmt.Errorf("task %s cannot depend on itself", taskID)
+		}
+		var exists int
+		if err := tx.QueryRow("SELECT 1 FROM tasks WHERE id = ?", depID).Scan(&exists); err != nil {
+			return nil, fmt.Errorf("prerequisite task %s not found", depID)
+		}
+		_, err = tx.Exec("INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, created_at) VALUES (?, ?, ?)", taskID, depID, now)
+		if err != nil {
+			return nil, fmt.Errorf("failed to link dependency %s -> %s: %w", taskID, depID, err)
+		}
+		linkedDeps = append(linkedDeps, depID)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit task insert: %w", err)
 	}
 
-	return &domain.Task{
-		ID:          taskID,
-		Scope:       scope,
-		RepoPath:    repoPath,
-		Title:       title,
-		Description: description,
-		Status:      status,
-		Priority:    priority,
-		Tags:        tags,
-		Author:      author,
-		Assignee:    assignee,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		ClosedAt:    closedAt,
-		Notes:       []domain.TaskNote{},
-	}, nil
+	return d.getTaskLocked(d.conn, taskID)
 }
 
 type queryRower interface {
@@ -157,6 +162,47 @@ func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to iterate task notes: %w", err)
+	}
+
+	// Fetch dependencies (prerequisites that must be completed)
+	depQuery := `
+	SELECT td.depends_on_id, COALESCE(p.status, 'open')
+	FROM task_dependencies td
+	LEFT JOIN tasks p ON td.depends_on_id = p.id
+	WHERE td.task_id = ?
+	ORDER BY td.depends_on_id ASC
+	`
+	depRows, err := q.Query(depQuery, id)
+	if err == nil {
+		defer depRows.Close()
+		task.DependsOn = []string{}
+		task.BlockedBy = []string{}
+		for depRows.Next() {
+			var depID, depStatus string
+			if err := depRows.Scan(&depID, &depStatus); err == nil {
+				task.DependsOn = append(task.DependsOn, depID)
+				if domain.Status(depStatus) != domain.StatusDone && domain.Status(depStatus) != domain.StatusClosed {
+					task.BlockedBy = append(task.BlockedBy, depID)
+					task.IsBlocked = true
+				}
+			}
+		}
+	}
+
+	// Fetch downstream (tasks that depend on this task)
+	downstreamQuery := `
+	SELECT task_id FROM task_dependencies WHERE depends_on_id = ? ORDER BY task_id ASC
+	`
+	downRows, err := q.Query(downstreamQuery, id)
+	if err == nil {
+		defer downRows.Close()
+		task.Blocks = []string{}
+		for downRows.Next() {
+			var blockedID string
+			if err := downRows.Scan(&blockedID); err == nil {
+				task.Blocks = append(task.Blocks, blockedID)
+			}
+		}
 	}
 
 	return &task, nil
@@ -499,6 +545,88 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		}
 	}
 
+	// Batch load dependencies for listed tasks
+	if len(tasks) > 0 {
+		taskMap := make(map[string]*domain.Task, len(tasks))
+		var taskIDs []any
+		var placeholders []string
+		for _, t := range tasks {
+			t.DependsOn = []string{}
+			t.BlockedBy = []string{}
+			t.Blocks = []string{}
+			taskMap[t.ID] = t
+			taskIDs = append(taskIDs, t.ID)
+			placeholders = append(placeholders, "?")
+		}
+
+		inClause := strings.Join(placeholders, ",")
+		depsQuery := fmt.Sprintf(`
+			SELECT td.task_id, td.depends_on_id, COALESCE(p.status, 'open')
+			FROM task_dependencies td
+			LEFT JOIN tasks p ON td.depends_on_id = p.id
+			WHERE td.task_id IN (%s) OR td.depends_on_id IN (%s)
+		`, inClause, inClause)
+
+		args := append(taskIDs, taskIDs...)
+		depRows, err := d.conn.Query(depsQuery, args...)
+		if err == nil {
+			defer depRows.Close()
+			for depRows.Next() {
+				var tID, depID, depStatus string
+				if err := depRows.Scan(&tID, &depID, &depStatus); err == nil {
+					if t, ok := taskMap[tID]; ok {
+						t.DependsOn = append(t.DependsOn, depID)
+						if domain.Status(depStatus) != domain.StatusDone && domain.Status(depStatus) != domain.StatusClosed {
+							t.BlockedBy = append(t.BlockedBy, depID)
+							t.IsBlocked = true
+						}
+					}
+					if depT, ok := taskMap[depID]; ok {
+						depT.Blocks = append(depT.Blocks, tID)
+					}
+				}
+			}
+		}
+	}
+
+	if filter.OnlyReady || filter.OnlyBlocked || filter.DependsOn != "" || filter.Blocks != "" {
+		var filtered []*domain.Task
+		for _, t := range tasks {
+			if filter.OnlyReady && (t.Status != domain.StatusOpen || t.IsBlocked) {
+				continue
+			}
+			if filter.OnlyBlocked && !t.IsBlocked {
+				continue
+			}
+			if filter.DependsOn != "" {
+				hasDep := false
+				for _, d := range t.DependsOn {
+					if d == filter.DependsOn {
+						hasDep = true
+						break
+					}
+				}
+				if !hasDep {
+					continue
+				}
+			}
+			if filter.Blocks != "" {
+				blocksIt := false
+				for _, b := range t.Blocks {
+					if b == filter.Blocks {
+						blocksIt = true
+						break
+					}
+				}
+				if !blocksIt {
+					continue
+				}
+			}
+			filtered = append(filtered, t)
+		}
+		tasks = filtered
+	}
+
 	// Evaluate search DSL filter across all fields including tags and notes
 	if filter.Search != "" {
 		compiled := search.Compile(filter.Search)
@@ -691,6 +819,15 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		return fmt.Errorf("failed to update sequence: %w", err)
 	}
 
+	// Restore dependencies if present in task.DependsOn
+	now := time.Now().UTC()
+	for _, depID := range task.DependsOn {
+		var exists int
+		if err := tx.QueryRow("SELECT 1 FROM tasks WHERE id = ?", depID).Scan(&exists); err == nil {
+			_, _ = tx.Exec("INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, created_at) VALUES (?, ?, ?)", task.ID, depID, now)
+		}
+	}
+
 	_, _ = tx.Exec("DELETE FROM task_tombstones WHERE id = ?", task.ID)
 	return nil
 }
@@ -784,4 +921,153 @@ func (d *DB) ListTombstones(scope, repoPath string) ([]*domain.Task, error) {
 		return nil, fmt.Errorf("failed to iterate tombstones: %w", err)
 	}
 	return tasks, nil
+}
+
+func (d *DB) AddDependency(taskID, dependsOnID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	taskID = strings.TrimSpace(taskID)
+	dependsOnID = strings.TrimSpace(dependsOnID)
+	if taskID == "" || dependsOnID == "" {
+		return fmt.Errorf("task ID and dependency ID cannot be empty")
+	}
+	if taskID == dependsOnID {
+		return fmt.Errorf("task %s cannot depend on itself", taskID)
+	}
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Verify both tasks exist
+	var exists int
+	if err := tx.QueryRow("SELECT 1 FROM tasks WHERE id = ?", taskID).Scan(&exists); err != nil {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+	if err := tx.QueryRow("SELECT 1 FROM tasks WHERE id = ?", dependsOnID).Scan(&exists); err != nil {
+		return fmt.Errorf("prerequisite task %s not found", dependsOnID)
+	}
+
+	// Cycle detection: Does dependsOnID already depend on taskID (directly or transitively)?
+	cycleQuery := `
+	WITH RECURSIVE chain(id) AS (
+		SELECT depends_on_id FROM task_dependencies WHERE task_id = ?
+		UNION
+		SELECT d.depends_on_id FROM task_dependencies d
+		JOIN chain c ON d.task_id = c.id
+	)
+	SELECT 1 FROM chain WHERE id = ? LIMIT 1;
+	`
+	var cycleExists int
+	if err := tx.QueryRow(cycleQuery, dependsOnID, taskID).Scan(&cycleExists); err == nil {
+		return fmt.Errorf("cannot link %s -> %s: dependency cycle detected", taskID, dependsOnID)
+	}
+
+	now := time.Now().UTC()
+	_, err = tx.Exec(`
+		INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, created_at)
+		VALUES (?, ?, ?)
+	`, taskID, dependsOnID, now)
+	if err != nil {
+		return fmt.Errorf("failed to insert dependency: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (d *DB) RemoveDependency(taskID, dependsOnID string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	taskID = strings.TrimSpace(taskID)
+	dependsOnID = strings.TrimSpace(dependsOnID)
+
+	res, err := d.conn.Exec("DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_id = ?", taskID, dependsOnID)
+	if err != nil {
+		return fmt.Errorf("failed to delete dependency: %w", err)
+	}
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("dependency %s -> %s not found", taskID, dependsOnID)
+	}
+	return nil
+}
+
+func (d *DB) GetDependencies(taskID string) (dependsOn []string, blocks []string, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	depRows, err := d.conn.Query("SELECT depends_on_id FROM task_dependencies WHERE task_id = ? ORDER BY depends_on_id ASC", taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer depRows.Close()
+
+	dependsOn = []string{}
+	for depRows.Next() {
+		var id string
+		if err := depRows.Scan(&id); err == nil {
+			dependsOn = append(dependsOn, id)
+		}
+	}
+
+	blockRows, err := d.conn.Query("SELECT task_id FROM task_dependencies WHERE depends_on_id = ? ORDER BY task_id ASC", taskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer blockRows.Close()
+
+	blocks = []string{}
+	for blockRows.Next() {
+		var id string
+		if err := blockRows.Scan(&id); err == nil {
+			blocks = append(blocks, id)
+		}
+	}
+
+	return dependsOn, blocks, nil
+}
+
+func (d *DB) CheckBlocked(taskID string) (blocked bool, unfinishedPrereqs []*domain.Task, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	query := `
+	SELECT p.id, p.scope, p.repo_path, p.title, p.description, p.status, p.priority, p.tags, p.author, p.assignee,
+	       p.created_at, p.updated_at, p.closed_at, p.commit_sha, p.commit_msg, p.diff_stat, p.diff_content
+	FROM task_dependencies td
+	JOIN tasks p ON td.depends_on_id = p.id
+	WHERE td.task_id = ? AND p.status NOT IN ('done', 'closed')
+	ORDER BY p.id ASC;
+	`
+	rows, err := d.conn.Query(query, taskID)
+	if err != nil {
+		return false, nil, err
+	}
+	defer rows.Close()
+
+	var prereqs []*domain.Task
+	for rows.Next() {
+		var task domain.Task
+		var statusStr, priorityStr, tagsJSON string
+		var closedAt sql.NullTime
+
+		err := rows.Scan(
+			&task.ID, &task.Scope, &task.RepoPath, &task.Title, &task.Description,
+			&statusStr, &priorityStr, &tagsJSON, &task.Author, &task.Assignee,
+			&task.CreatedAt, &task.UpdatedAt, &closedAt,
+			&task.CommitSHA, &task.CommitMsg, &task.DiffStat, &task.DiffContent,
+		)
+		if err != nil {
+			return false, nil, err
+		}
+		task.Status = domain.Status(statusStr)
+		task.Priority = domain.Priority(priorityStr)
+		prereqs = append(prereqs, &task)
+	}
+
+	return len(prereqs) > 0, prereqs, nil
 }

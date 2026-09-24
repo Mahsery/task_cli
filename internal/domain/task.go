@@ -87,7 +87,19 @@ type Task struct {
 	DiffStat    string     `json:"diff_stat,omitempty"`
 	DiffContent string     `json:"diff_content,omitempty"`
 
+	// Dependencies & DAG
+	DependsOn []string `json:"depends_on,omitempty"` // Prerequisite task IDs that must be completed before this task
+	BlockedBy []string `json:"blocked_by,omitempty"` // Unfinished prerequisite task IDs that currently block this task
+	Blocks    []string `json:"blocks,omitempty"`     // Downstream task IDs that depend on this task
+	IsBlocked bool     `json:"is_blocked,omitempty"` // True if any prerequisite task is not done/closed
+
 	Notes []TaskNote `json:"notes,omitempty"`
+}
+
+type TaskDependency struct {
+	TaskID      string    `json:"task_id"`
+	DependsOnID string    `json:"depends_on_id"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type TaskFilter struct {
@@ -102,4 +114,8 @@ type TaskFilter struct {
 	Limit        int
 	OmitNotes    bool
 	IncludeNotes bool
+	OnlyReady    bool   // Return tasks with status open and 0 unfinished blockers
+	OnlyBlocked  bool   // Return tasks that have unfinished blockers
+	DependsOn    string // Filter by prerequisite task ID
+	Blocks       string // Filter by downstream task ID
 }

@@ -62,7 +62,7 @@ func (d *DB) Checkpoint(mode string) error {
 	return err
 }
 
-const CurrentSchemaVersion = 1
+const CurrentSchemaVersion = 2
 
 func (d *DB) migrate() error {
 	var userVersion int
@@ -148,6 +148,16 @@ func (d *DB) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_tombstones_scope_repo ON task_tombstones(scope, repo_path, deleted_at DESC);
+
+	CREATE TABLE IF NOT EXISTS task_dependencies (
+		task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+		depends_on_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+		created_at DATETIME NOT NULL,
+		PRIMARY KEY (task_id, depends_on_id)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_deps_task ON task_dependencies(task_id);
+	CREATE INDEX IF NOT EXISTS idx_deps_parent ON task_dependencies(depends_on_id);
 	`
 
 	if _, err := d.conn.Exec(schema); err != nil {

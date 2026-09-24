@@ -89,6 +89,16 @@ type Model struct {
 	deleteTaskID       string
 	confirmDialog      *ConfirmDialog
 	undoStack          []UndoAction
+	treeViewMode       bool
+	isLinking          bool
+	linkInput          string
+	linkTaskID         string
+}
+
+type TreeRow struct {
+	Task   *domain.Task
+	Prefix string
+	Depth  int
 }
 
 func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
@@ -208,11 +218,124 @@ func (m Model) getDetailDimensions() (detailWidth, visibleBody int) {
 	return detailWidth, visibleBody
 }
 
+func (m Model) currentTask() *domain.Task {
+	if len(m.tasks) == 0 || m.cursor < 0 || m.cursor >= len(m.tasks) {
+		return nil
+	}
+	if m.treeViewMode {
+		rows := m.getTreeRows()
+		if m.cursor < len(rows) {
+			return rows[m.cursor].Task
+		}
+	}
+	return m.tasks[m.cursor]
+}
+
+func (m Model) getTreeRows() []TreeRow {
+	if len(m.tasks) == 0 {
+		return nil
+	}
+	taskMap := make(map[string]*domain.Task, len(m.tasks))
+	for _, t := range m.tasks {
+		taskMap[t.ID] = t
+	}
+
+	var roots []*domain.Task
+	visited := make(map[string]bool)
+
+	for _, t := range m.tasks {
+		hasPrereqInSet := false
+		for _, depID := range t.DependsOn {
+			if _, ok := taskMap[depID]; ok {
+				hasPrereqInSet = true
+				break
+			}
+		}
+		if !hasPrereqInSet {
+			roots = append(roots, t)
+		}
+	}
+
+	var rows []TreeRow
+	var traverse func(t *domain.Task, prefix string, isLast bool, isRoot bool, branchVisited map[string]bool)
+	traverse = func(t *domain.Task, prefix string, isLast bool, isRoot bool, branchVisited map[string]bool) {
+		branchGlyph := "├── "
+		lastGlyph := "└── "
+		contGlyph := "│   "
+		emptyGlyph := "    "
+		if isASCIIOnly() {
+			branchGlyph = "|-- "
+			lastGlyph = "\\-- "
+			contGlyph = "|   "
+			emptyGlyph = "    "
+		}
+
+		rowPrefix := prefix
+		if !isRoot {
+			if isLast {
+				rowPrefix += lastGlyph
+			} else {
+				rowPrefix += branchGlyph
+			}
+		}
+
+		rows = append(rows, TreeRow{
+			Task:   t,
+			Prefix: rowPrefix,
+			Depth:  len(branchVisited),
+		})
+		visited[t.ID] = true
+		branchVisited[t.ID] = true
+
+		newPrefix := prefix
+		if !isRoot {
+			if isLast {
+				newPrefix += emptyGlyph
+			} else {
+				newPrefix += contGlyph
+			}
+		}
+
+		var children []*domain.Task
+		for _, blkID := range t.Blocks {
+			if child, ok := taskMap[blkID]; ok && !branchVisited[blkID] {
+				children = append(children, child)
+			}
+		}
+
+		for i, child := range children {
+			childLast := (i == len(children)-1)
+			childBranchVisited := make(map[string]bool, len(branchVisited)+1)
+			for k, v := range branchVisited {
+				childBranchVisited[k] = v
+			}
+			traverse(child, newPrefix, childLast, false, childBranchVisited)
+		}
+	}
+
+	for _, root := range roots {
+		if !visited[root.ID] {
+			traverse(root, "", true, true, make(map[string]bool))
+		}
+	}
+
+	for _, t := range m.tasks {
+		if !visited[t.ID] {
+			traverse(t, "", true, true, make(map[string]bool))
+		}
+	}
+
+	return rows
+}
+
 func (m Model) getDetailContentLines(detailWidth int) []string {
 	if len(m.tasks) == 0 || m.cursor >= len(m.tasks) {
 		return nil
 	}
-	t := m.tasks[m.cursor]
+	t := m.currentTask()
+	if t == nil {
+		return nil
+	}
 	theme := m.theme
 	var contentLines []string
 
@@ -271,6 +394,31 @@ func (m Model) getDetailContentLines(detailWidth int) []string {
 		}
 	}
 	contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
+
+	// Dependencies & Blocked Status
+	if t.IsBlocked {
+		contentLines = append(contentLines, theme.DiffSub.Render("  🔒 BLOCKED: Must complete unfinished prerequisites first:"))
+		for _, b := range t.BlockedBy {
+			contentLines = append(contentLines, theme.DiffSub.Render(fmt.Sprintf("    • %s", b)))
+		}
+		contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
+	}
+	if len(t.DependsOn) > 0 {
+		depText := "Depends on: " + strings.Join(t.DependsOn, ", ")
+		if t.IsBlocked {
+			depText += " 🔒 [BLOCKED]"
+		} else {
+			depText += " ⚡ [READY]"
+		}
+		contentLines = append(contentLines, theme.DetailLabel.Render("  "+depText))
+	}
+	if len(t.Blocks) > 0 {
+		blkText := "Blocks: " + strings.Join(t.Blocks, ", ")
+		contentLines = append(contentLines, theme.DetailLabel.Render("  "+blkText))
+	}
+	if len(t.DependsOn) > 0 || len(t.Blocks) > 0 {
+		contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
+	}
 
 	// Description
 	if t.Description != "" {
@@ -705,6 +853,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.isLinking {
+			switch msg.String() {
+			case "enter":
+				m.isLinking = false
+				prereqID := strings.TrimSpace(m.linkInput)
+				if prereqID != "" {
+					targetID := m.linkTaskID
+					return m, m.linkTaskCmd(targetID, prereqID)
+				}
+				m.statusMsg = "Link cancelled"
+				return m, nil
+			case "esc":
+				m.isLinking = false
+				m.statusMsg = "Link cancelled"
+				return m, nil
+			case "backspace":
+				runes := []rune(m.linkInput)
+				if len(runes) > 0 {
+					m.linkInput = string(runes[:len(runes)-1])
+				}
+				return m, nil
+			default:
+				if len(msg.Runes) > 0 {
+					m.linkInput += string(msg.Runes)
+				}
+				return m, nil
+			}
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -1022,10 +1199,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+		case "t":
+			m.treeViewMode = !m.treeViewMode
+			if m.treeViewMode {
+				m.statusMsg = "Tree view mode enabled"
+			} else {
+				m.statusMsg = "Standard list view enabled"
+			}
+			return m, nil
+
+		case "L":
+			cur := m.currentTask()
+			if cur != nil {
+				m.isLinking = true
+				m.linkInput = ""
+				m.linkTaskID = cur.ID
+				m.statusMsg = fmt.Sprintf("Linking %s (enter prerequisite ID)", cur.ID)
+			}
+			return m, nil
+
 		case "d":
 			// Batch Done if tasks selected, otherwise single-task reversible done
 			if len(m.selected) > 0 {
 				ids := m.getSelectedIDs()
+				var blockedIDs []string
+				for _, id := range ids {
+					for _, task := range m.tasks {
+						if task.ID == id && task.IsBlocked {
+							blockedIDs = append(blockedIDs, id)
+							break
+						}
+					}
+				}
+				if len(blockedIDs) > 0 {
+					m.statusMsg = fmt.Sprintf("⚠️ Cannot mark done: %d task(s) are blocked by prerequisites (%s)", len(blockedIDs), strings.Join(blockedIDs, ", "))
+					return m, nil
+				}
 				m.confirmDialog = &ConfirmDialog{
 					Kind:         ConfirmDone,
 					Title:        "CONFIRM BATCH DONE",
@@ -1037,26 +1246,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-				t := m.tasks[m.cursor]
-				if t.Status == domain.StatusDone || t.Status == domain.StatusClosed {
+			cur := m.currentTask()
+			if cur != nil {
+				if cur.Status == domain.StatusDone || cur.Status == domain.StatusClosed {
 					m.confirmDialog = &ConfirmDialog{
 						Kind:         ConfirmReopen,
 						Title:        "CONFIRM REOPEN TASK",
-						Prompt:       fmt.Sprintf("Reopen task %s to IN_PROGRESS?", t.ID),
-						Details:      []string{fmt.Sprintf("%s: %s", t.ID, t.Title)},
-						TargetIDs:    []string{t.ID},
+						Prompt:       fmt.Sprintf("Reopen task %s to IN_PROGRESS?", cur.ID),
+						Details:      []string{fmt.Sprintf("%s: %s", cur.ID, cur.Title)},
+						TargetIDs:    []string{cur.ID},
 						IsBatch:      false,
 						TargetStatus: domain.StatusInProgress,
 					}
 					return m, nil
 				}
+				if cur.IsBlocked {
+					m.statusMsg = fmt.Sprintf("⚠️ Cannot mark %s DONE: blocked by unfinished prerequisite(s): %s", cur.ID, strings.Join(cur.BlockedBy, ", "))
+					return m, nil
+				}
 				m.confirmDialog = &ConfirmDialog{
 					Kind:         ConfirmDone,
 					Title:        "CONFIRM TASK DONE",
-					Prompt:       fmt.Sprintf("Mark task %s as DONE?", t.ID),
-					Details:      []string{fmt.Sprintf("%s: %s", t.ID, t.Title)},
-					TargetIDs:    []string{t.ID},
+					Prompt:       fmt.Sprintf("Mark task %s as DONE?", cur.ID),
+					Details:      []string{fmt.Sprintf("%s: %s", cur.ID, cur.Title)},
+					TargetIDs:    []string{cur.ID},
 					IsBatch:      false,
 					TargetStatus: domain.StatusDone,
 				}
@@ -1191,6 +1404,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m Model) linkTaskCmd(taskID, prereqID string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.AddDependency(taskID, prereqID)
+		if err != nil {
+			return errMsg(fmt.Errorf("failed to link %s -> %s: %w", taskID, prereqID, err))
+		}
+		return m.fetchTasksCmd()()
+	}
 }
 
 func (m Model) deleteTaskCmd(taskID string) tea.Cmd {
@@ -1470,7 +1693,11 @@ func (m Model) View() string {
 		theme.CountProg.Render(fmt.Sprintf("%d Active", progCount)),
 		theme.CountDone.Render(fmt.Sprintf("%d Done", doneCount)),
 	)
-	headerText := fmt.Sprintf("%s %s  ─  %s", titleStyle.Render("tk: task_cli"), scopeBadge, countsLabel)
+	modeBadge := ""
+	if m.treeViewMode {
+		modeBadge = "  ─  " + theme.ModalTitle.Render("[TREE MODE (t)]")
+	}
+	headerText := fmt.Sprintf("%s %s%s  ─  %s", titleStyle.Render("tk: task_cli"), scopeBadge, modeBadge, countsLabel)
 	if m.isSearch {
 		headerText += "  ─  " + theme.SearchPrompt.Render(fmt.Sprintf("[Search: %s_] (Enter apply, Esc cancel)", m.filterText))
 	} else if m.filterText != "" {
@@ -1486,6 +1713,9 @@ func (m Model) View() string {
 
 	if dlg := m.activeConfirmDialog(); dlg != nil {
 		return m.overlayModal(rawView, dlg)
+	}
+	if m.isLinking {
+		return m.overlayModalString(rawView, m.renderLinkModal(width, height))
 	}
 	return rawView
 }
@@ -1530,13 +1760,17 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 	}
 
 	// Table columns header
+	colTitle := "TITLE"
+	if m.treeViewMode {
+		colTitle = "TREE / TITLE"
+	}
 	var colHeader string
 	if tagsWidth > 0 {
 		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s %-*s",
 			idWidth, "ID",
 			statusWidth, "STATUS",
 			priWidth, "PRI",
-			titleWidth, "TITLE",
+			titleWidth, colTitle,
 			tagsWidth, "TAGS",
 			ageWidth, "AGE",
 		)
@@ -1545,7 +1779,7 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 			idWidth, "ID",
 			statusWidth, "STATUS",
 			priWidth, "PRI",
-			titleWidth, "TITLE",
+			titleWidth, colTitle,
 			ageWidth, "AGE",
 		)
 	}
@@ -1559,13 +1793,29 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 	if len(m.tasks) == 0 {
 		sb.WriteString("  No tasks found. Press 'n' to create a new task.\n")
 	} else {
+		var displayTasks []*domain.Task
+		var displayPrefixes []string
+		if m.treeViewMode {
+			treeRows := m.getTreeRows()
+			for _, r := range treeRows {
+				displayTasks = append(displayTasks, r.Task)
+				displayPrefixes = append(displayPrefixes, r.Prefix)
+			}
+		} else {
+			displayTasks = m.tasks
+			for range m.tasks {
+				displayPrefixes = append(displayPrefixes, "")
+			}
+		}
+
 		endIdx := m.scrollOffset + maxRows
-		if endIdx > len(m.tasks) {
-			endIdx = len(m.tasks)
+		if endIdx > len(displayTasks) {
+			endIdx = len(displayTasks)
 		}
 
 		for i := m.scrollOffset; i < endIdx; i++ {
-			t := m.tasks[i]
+			t := displayTasks[i]
+			treeBranch := displayPrefixes[i]
 			isCursor := (i == m.cursor)
 			prefix := "  "
 			if len(m.selected) > 0 {
@@ -1585,7 +1835,12 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 				}
 			}
 
-			title := t.Title
+			title := treeBranch + t.Title
+			if t.IsBlocked {
+				title += " 🔒"
+			} else if t.Status != domain.StatusDone && t.Status != domain.StatusClosed && len(t.DependsOn) > 0 {
+				title += " ⚡"
+			}
 			if len(title) > titleWidth {
 				if titleWidth > 3 {
 					title = title[:titleWidth-2] + ".."
@@ -1850,13 +2105,17 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 		titleWidth = 10
 	}
 
+	colTitle := "TITLE"
+	if m.treeViewMode {
+		colTitle = "TREE / TITLE"
+	}
 	var colHeader string
 	if tagsWidth > 0 {
 		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s %-*s",
-			idWidth, "ID", statusWidth, "STATUS", priWidth, "PRI", titleWidth, "TITLE", tagsWidth, "TAGS", ageWidth, "AGE")
+			idWidth, "ID", statusWidth, "STATUS", priWidth, "PRI", titleWidth, colTitle, tagsWidth, "TAGS", ageWidth, "AGE")
 	} else {
 		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s",
-			idWidth, "ID", statusWidth, "STATUS", priWidth, "PRI", titleWidth, "TITLE", ageWidth, "AGE")
+			idWidth, "ID", statusWidth, "STATUS", priWidth, "PRI", titleWidth, colTitle, ageWidth, "AGE")
 	}
 	var tableHeaderStyled string
 	if m.activePane == PaneList {
@@ -1875,16 +2134,32 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 		maxRows = 4
 	}
 
-	endIdx := m.scrollOffset + maxRows
-	if endIdx > len(m.tasks) {
-		endIdx = len(m.tasks)
-	}
-
 	if len(m.tasks) == 0 {
 		leftLines = append(leftLines, theme.RowNormal.Width(tableWidth).Render("  No tasks found. Press 'n' to create."))
 	} else {
+		var displayTasks []*domain.Task
+		var displayPrefixes []string
+		if m.treeViewMode {
+			treeRows := m.getTreeRows()
+			for _, r := range treeRows {
+				displayTasks = append(displayTasks, r.Task)
+				displayPrefixes = append(displayPrefixes, r.Prefix)
+			}
+		} else {
+			displayTasks = m.tasks
+			for range m.tasks {
+				displayPrefixes = append(displayPrefixes, "")
+			}
+		}
+
+		endIdx := m.scrollOffset + maxRows
+		if endIdx > len(displayTasks) {
+			endIdx = len(displayTasks)
+		}
+
 		for i := m.scrollOffset; i < endIdx; i++ {
-			t := m.tasks[i]
+			t := displayTasks[i]
+			treeBranch := displayPrefixes[i]
 			isCursor := (i == m.cursor)
 			prefix := "  "
 			if len(m.selected) > 0 {
@@ -1904,7 +2179,12 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 				}
 			}
 
-			title := t.Title
+			title := treeBranch + t.Title
+			if t.IsBlocked {
+				title += " 🔒"
+			} else if t.Status != domain.StatusDone && t.Status != domain.StatusClosed && len(t.DependsOn) > 0 {
+				title += " ⚡"
+			}
 			if len(title) > titleWidth {
 				if titleWidth > 3 {
 					title = title[:titleWidth-2] + ".."
@@ -2107,6 +2387,47 @@ func (m Model) renderConfirmationModal(dlg *ConfirmDialog, termWidth, termHeight
 	return theme.ModalBox.Width(boxWidth).Render(inner)
 }
 
+func (m Model) renderLinkModal(termWidth, termHeight int) string {
+	theme := m.theme
+	boxWidth := 56
+	if termWidth > 0 && termWidth-6 < boxWidth {
+		boxWidth = termWidth - 6
+	}
+	if boxWidth < 36 {
+		boxWidth = 36
+	}
+
+	contentWidth := boxWidth - 4
+	var lines []string
+
+	titleStr := theme.ModalTitle.Render(" LINK PREREQUISITE DEPENDENCY ")
+	lines = append(lines, titleStr)
+	lines = append(lines, "")
+
+	promptStr := fmt.Sprintf("Make task %s depend on prerequisite:", m.linkTaskID)
+	for _, pw := range wrapText(promptStr, contentWidth, "") {
+		lines = append(lines, theme.ModalPrompt.Render(pw))
+	}
+	lines = append(lines, "")
+
+	inputStr := fmt.Sprintf("  Prereq Task ID: %s_", m.linkInput)
+	lines = append(lines, theme.SearchPrompt.Render(inputStr))
+	lines = append(lines, "")
+
+	hint := fmt.Sprintf("E.g. enter T-1 to require T-1 before %s can be closed.", m.linkTaskID)
+	for _, hw := range wrapText(hint, contentWidth, "") {
+		lines = append(lines, theme.ModalDesc.Render(hw))
+	}
+	lines = append(lines, "")
+
+	confirmKey := theme.ModalKey.Render("[Enter]") + " " + theme.ModalPrompt.Render("Link")
+	cancelKey := theme.ModalCancel.Render("[Esc]") + " " + theme.ModalPrompt.Render("Cancel")
+	lines = append(lines, fmt.Sprintf("%s    %s", confirmKey, cancelKey))
+
+	inner := strings.Join(lines, "\n")
+	return theme.ModalBox.Width(boxWidth).Render(inner)
+}
+
 func (m Model) overlayModal(bg string, dlg *ConfirmDialog) string {
 	width := m.width
 	if width <= 0 {
@@ -2118,6 +2439,19 @@ func (m Model) overlayModal(bg string, dlg *ConfirmDialog) string {
 	}
 
 	modalStr := m.renderConfirmationModal(dlg, width, height)
+	return m.overlayModalString(bg, modalStr)
+}
+
+func (m Model) overlayModalString(bg string, modalStr string) string {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	height := m.height
+	if height <= 0 {
+		height = 24
+	}
+
 	modalLines := strings.Split(modalStr, "\n")
 	bgLines := strings.Split(bg, "\n")
 
@@ -2276,6 +2610,12 @@ func (m Model) renderFooter(width int) string {
 		}
 	}
 
+	treeLabel := key("t", "Tree")
+	if m.treeViewMode {
+		treeLabel = theme.ModalKey.Render("[t] List")
+	}
+	linkLabel := key("L", "Link")
+
 	if m.activePane == PaneDetail {
 		var keys []string
 		if width >= 115 {
@@ -2286,6 +2626,7 @@ func (m Model) renderFooter(width int) string {
 				key("g/G", "Top/Bottom"),
 				key("Tab/h", "Tasks List"),
 				key("Enter", "Diff"),
+				linkLabel,
 				doneLabel,
 				statusLabel,
 				theme.DiffSub.Render("[x] Del"),
@@ -2300,6 +2641,7 @@ func (m Model) renderFooter(width int) string {
 				key("j/k", "Scroll"),
 				key("Tab", "Tasks"),
 				key("Enter", "Diff"),
+				linkLabel,
 				doneLabel,
 				statusLabel,
 			}
@@ -2330,6 +2672,8 @@ func (m Model) renderFooter(width int) string {
 		keys = []string{
 			key("j/k", "Move"),
 			key("Tab/l", "Details"),
+			treeLabel,
+			linkLabel,
 			key("Space", "Sel"),
 			key("n", "New"),
 			key("e", "Edit"),
@@ -2353,6 +2697,8 @@ func (m Model) renderFooter(width int) string {
 		keys = []string{
 			key("j/k", "Move"),
 			key("Tab/l", "Details"),
+			treeLabel,
+			linkLabel,
 			key("Space", "Sel"),
 			key("n", "New"),
 			key("e", "Edit"),
@@ -2422,4 +2768,15 @@ func timeAgo(t time.Time) string {
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+}
+
+func isASCIIOnly() bool {
+	if strings.ToLower(os.Getenv("TERM")) == "dumb" {
+		return true
+	}
+	lc := os.Getenv("LC_ALL")
+	if lc == "" {
+		lc = os.Getenv("LANG")
+	}
+	return lc == "C" || lc == "POSIX"
 }
