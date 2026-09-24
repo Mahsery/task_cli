@@ -19,6 +19,7 @@ import (
 type Model struct {
 	client       *client.Client
 	editorCmd    string
+	theme        Theme
 	tasks        []*domain.Task
 	cursor       int
 	scrollOffset int
@@ -38,6 +39,7 @@ func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
 	return Model{
 		client:       c,
 		editorCmd:    editorCmd,
+		theme:        NewKanagawaTheme(),
 		scope:        scope,
 		repoPath:     repoPath,
 		cursor:       0,
@@ -383,15 +385,7 @@ func (m Model) View() string {
 		width = 80
 	}
 
-	headerStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("236")).
-		Padding(0, 1)
-
-	borderStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240"))
-
+	theme := m.theme
 	var sb strings.Builder
 
 	// 1. Header
@@ -407,22 +401,33 @@ func (m Model) View() string {
 		}
 	}
 
-	scopeLabel := fmt.Sprintf("[%s]", m.scope)
-	countsLabel := fmt.Sprintf("%d Open | %d Active | %d Done", openCount, progCount, doneCount)
-	headerText := fmt.Sprintf("tk: task_cli %s  ─  %s", scopeLabel, countsLabel)
-	if m.isSearch {
-		headerText += fmt.Sprintf("  ─  [Search: %s_] (Enter apply, Esc cancel)", m.filterText)
-	} else if m.filterText != "" {
-		headerText += fmt.Sprintf("  ─  [Filter: %q (Esc to clear)]", m.filterText)
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(WaveAqua2))
+	var scopeBadge string
+	if m.scope == "global" {
+		scopeBadge = theme.ScopeGlobal.Render("[global]")
+	} else {
+		scopeBadge = theme.ScopeLocal.Render("[local]")
 	}
-	sb.WriteString(headerStyle.Width(width).Render(headerText))
+
+	countsLabel := fmt.Sprintf("%s │ %s │ %s",
+		theme.CountOpen.Render(fmt.Sprintf("%d Open", openCount)),
+		theme.CountProg.Render(fmt.Sprintf("%d Active", progCount)),
+		theme.CountDone.Render(fmt.Sprintf("%d Done", doneCount)),
+	)
+	headerText := fmt.Sprintf("%s %s  ─  %s", titleStyle.Render("tk: task_cli"), scopeBadge, countsLabel)
+	if m.isSearch {
+		headerText += "  ─  " + theme.SearchPrompt.Render(fmt.Sprintf("[Search: %s_] (Enter apply, Esc cancel)", m.filterText))
+	} else if m.filterText != "" {
+		headerText += "  ─  " + theme.FilterIndicator.Render(fmt.Sprintf("[Filter: %q (Esc to clear)]", m.filterText))
+	}
+	sb.WriteString(theme.Header.Width(width).Render(headerText))
 	sb.WriteString("\n")
 
 	// Table columns header
-	colHeader := fmt.Sprintf("  %-6s %-10s %-8s %-32s %-14s %s", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250")).Render(colHeader))
+	colHeader := fmt.Sprintf("  %-6s %-12s %-8s %-32s %-14s %s", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
+	sb.WriteString(theme.ColHeader.Render(colHeader))
 	sb.WriteString("\n")
-	sb.WriteString(borderStyle.Render(strings.Repeat("─", width)))
+	sb.WriteString(theme.Border.Render(strings.Repeat("─", width)))
 	sb.WriteString("\n")
 
 	// 2. Task rows (scrollable window)
@@ -437,11 +442,10 @@ func (m Model) View() string {
 
 		for i := m.scrollOffset; i < endIdx; i++ {
 			t := m.tasks[i]
+			isCursor := (i == m.cursor)
 			cursor := " "
-			rowStyle := lipgloss.NewStyle()
-			if i == m.cursor {
-				cursor = "►"
-				rowStyle = rowStyle.Bold(true).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
+			if isCursor {
+				cursor = theme.Cursor.Render("►")
 			}
 
 			title := t.Title
@@ -463,106 +467,168 @@ func (m Model) View() string {
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
 
-			line := fmt.Sprintf("%s %-6s %-10s %-8s %-32s %-14s %s",
-				cursor, t.ID, string(t.Status), string(t.Priority), title, tagsStr, age,
+			idStr := theme.TaskID.Render(fmt.Sprintf("%-6s", t.ID))
+			statusStr := StatusStyle(t.Status).Render(fmt.Sprintf("%-12s", string(t.Status)))
+			priStr := PriorityStyle(t.Priority).Render(fmt.Sprintf("%-8s", string(t.Priority)))
+			titleStr := theme.TaskTitle.Render(fmt.Sprintf("%-32s", title))
+			tagsDisplay := theme.Tag.Render(fmt.Sprintf("%-14s", tagsStr))
+			ageDisplay := theme.Age.Render(age)
+
+			line := fmt.Sprintf("%s %s %s %s %s %s %s",
+				cursor, idStr, statusStr, priStr, titleStr, tagsDisplay, ageDisplay,
 			)
-			sb.WriteString(rowStyle.Width(width).Render(line))
+
+			if isCursor {
+				sb.WriteString(theme.RowSelected.Width(width).Render(line))
+			} else {
+				sb.WriteString(line)
+			}
 			sb.WriteString("\n")
 		}
 
 		if len(m.tasks) > maxRows {
 			pagination := fmt.Sprintf("  ── Showing %d-%d of %d tasks (▲/▼ to scroll) ──", m.scrollOffset+1, endIdx, len(m.tasks))
-			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(pagination))
+			sb.WriteString(theme.FooterDesc.Render(pagination))
 			sb.WriteString("\n")
 		}
 	}
 
-	sb.WriteString(borderStyle.Render(strings.Repeat("─", width)))
+	sb.WriteString(theme.Border.Render(strings.Repeat("─", width)))
 	sb.WriteString("\n")
 
 	// 3. Detail Pane
 	if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 		t := m.tasks[m.cursor]
-		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14")).Render(fmt.Sprintf("%s: %s", t.ID, t.Title)))
-		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("  %s %s\n",
+			theme.DetailID.Render(t.ID+":"),
+			theme.DetailTitle.Render(t.Title),
+		))
+
+		// Metadata line
+		metaLine := fmt.Sprintf("  %s %s   %s %s   %s %s",
+			theme.DetailLabel.Render("Status:"),
+			StatusStyle(t.Status).Render(string(t.Status)),
+			theme.DetailLabel.Render("Priority:"),
+			PriorityStyle(t.Priority).Render(string(t.Priority)),
+			theme.DetailLabel.Render("Scope:"),
+			theme.TaskID.Render(t.Scope),
+		)
+		if t.Assignee != "" {
+			metaLine += fmt.Sprintf("   %s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(t.Assignee))
+		}
+		if len(t.Tags) > 0 {
+			metaLine += fmt.Sprintf("   %s %s", theme.DetailLabel.Render("Tags:"), theme.Tag.Render(strings.Join(t.Tags, ", ")))
+		}
+		sb.WriteString(metaLine + "\n\n")
 
 		if t.Description != "" {
 			descLines := strings.Split(t.Description, "\n")
 			for i, line := range descLines {
 				if i >= 4 {
-					sb.WriteString("  ...\n")
+					sb.WriteString(theme.Age.Render("    ...\n"))
 					break
 				}
-				sb.WriteString("  " + line + "\n")
+				sb.WriteString("    " + theme.DetailDesc.Render(line) + "\n")
 			}
 		}
 
 		if t.CommitSHA != "" {
-			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(
-				fmt.Sprintf("  + Resolved by commit %s: %s\n", t.CommitSHA, t.CommitMsg),
+			sb.WriteString(theme.DetailResolved.Render(
+				fmt.Sprintf("  ✓ Resolved by commit %s: %s\n", t.CommitSHA, t.CommitMsg),
 			))
 			if t.DiffStat != "" {
 				statLines := strings.Split(t.DiffStat, "\n")
 				for _, sl := range statLines {
-					sb.WriteString("    " + sl + "\n")
+					sb.WriteString("    " + theme.DiffStat.Render(sl) + "\n")
 				}
 			}
 			if m.showDiff && t.DiffContent != "" {
-				sb.WriteString("\n" + borderStyle.Render("── Diff Content ──") + "\n")
+				sb.WriteString("\n  " + theme.Border.Render("── Diff Content ──") + "\n")
 				diffLines := strings.Split(t.DiffContent, "\n")
 				for i, dl := range diffLines {
 					if i >= 10 {
-						sb.WriteString("  [diff truncated, press enter to collapse]\n")
+						sb.WriteString(theme.Age.Render("    [diff truncated, press enter to collapse]\n"))
 						break
 					}
-					sb.WriteString("  " + dl + "\n")
+					if strings.HasPrefix(dl, "+") {
+						sb.WriteString("    " + theme.DiffAdd.Render(dl) + "\n")
+					} else if strings.HasPrefix(dl, "-") {
+						sb.WriteString("    " + theme.DiffSub.Render(dl) + "\n")
+					} else if strings.HasPrefix(dl, "@@") {
+						sb.WriteString("    " + theme.DiffHunk.Render(dl) + "\n")
+					} else {
+						sb.WriteString("    " + theme.DetailDesc.Render(dl) + "\n")
+					}
 				}
 			}
 		}
 
 		if len(t.Notes) > 0 {
-			sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(
+			sb.WriteString(theme.NoteHeader.Render(
 				fmt.Sprintf("  • %d note(s):\n", len(t.Notes)),
 			))
 			for i, n := range t.Notes {
 				if i >= 3 {
-					sb.WriteString(fmt.Sprintf("    ... and %d more note(s)\n", len(t.Notes)-3))
+					sb.WriteString(theme.Age.Render(fmt.Sprintf("    ... and %d more note(s)\n", len(t.Notes)-3)))
 					break
 				}
 				authorStr := ""
 				if n.Author != "" {
-					authorStr = fmt.Sprintf(" by %s", n.Author)
+					authorStr = " by " + theme.NoteAuthor.Render(n.Author)
 				}
-				sb.WriteString(fmt.Sprintf("    [%s%s] %s\n", timeAgo(n.CreatedAt), authorStr, n.Content))
+				sb.WriteString(fmt.Sprintf("    [%s%s] %s\n",
+					theme.NoteTime.Render(timeAgo(n.CreatedAt)),
+					authorStr,
+					theme.NoteContent.Render(n.Content),
+				))
 			}
 		}
 	}
 
-	sb.WriteString(borderStyle.Render(strings.Repeat("─", width)))
+	sb.WriteString(theme.Border.Render(strings.Repeat("─", width)))
 	sb.WriteString("\n")
 
 	// 4. Status Bar / Hotkey footer
-	doneLabel := "[d] Done"
-	statusLabel := "[s] In Prog"
+	doneLabel := theme.CountProg.Render("[d] Done")
+	statusLabel := theme.CountOpen.Render("[s] In Prog")
 	if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 		switch m.tasks[m.cursor].Status {
 		case domain.StatusDone, domain.StatusClosed:
-			doneLabel = "[d] Reopen"
-			statusLabel = "[s] In Prog"
+			doneLabel = theme.CountDone.Render("[d] Reopen")
+			statusLabel = theme.CountProg.Render("[s] In Prog")
 		case domain.StatusInProgress:
-			doneLabel = "[d] Done"
-			statusLabel = "[s] Open"
+			doneLabel = theme.CountProg.Render("[d] Done")
+			statusLabel = theme.CountOpen.Render("[s] Open")
 		default: // open
-			doneLabel = "[d] Done"
-			statusLabel = "[s] In Prog"
+			doneLabel = theme.CountDone.Render("[d] Done")
+			statusLabel = theme.CountProg.Render("[s] In Prog")
 		}
 	}
 
-	footer := fmt.Sprintf("[j/k] Move  [n] New  [e] Edit  %s  %s  [x] Del  [Enter] Diff  [/] Search  [Esc] Clear  [g] Scope  [r] Refresh  [q] Quit", doneLabel, statusLabel)
-	if m.statusMsg != "" {
-		footer = fmt.Sprintf("[%s]  %s", m.statusMsg, footer)
+	key := func(k, action string) string {
+		return theme.FooterKey.Render("["+k+"]") + " " + theme.FooterDesc.Render(action)
 	}
-	sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(footer))
+
+	keys := []string{
+		key("j/k", "Move"),
+		key("n", "New"),
+		key("e", "Edit"),
+		doneLabel,
+		statusLabel,
+		theme.DiffSub.Render("[x]") + " " + theme.FooterDesc.Render("Del"),
+		key("Enter", "Diff"),
+		key("/", "Search"),
+		theme.FilterIndicator.Render("[Esc]") + " " + theme.FooterDesc.Render("Clear"),
+		key("g", "Scope"),
+		key("r", "Refresh"),
+		theme.Age.Render("[q] Quit"),
+	}
+
+	footerText := strings.Join(keys, "  ")
+	if m.statusMsg != "" {
+		footerText = theme.FooterStatus.Render("["+m.statusMsg+"]") + "  " + footerText
+	}
+	sb.WriteString(theme.FooterBg.Width(width).Render(footerText))
 
 	return sb.String()
 }

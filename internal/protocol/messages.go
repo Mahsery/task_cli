@@ -93,6 +93,7 @@ const (
 	EventTaskUpdated EventType = "task_updated"
 	EventTaskDeleted EventType = "task_deleted"
 	EventGitAttached EventType = "git_attached"
+	EventSnapshot    EventType = "snapshot"
 )
 
 type Event struct {
