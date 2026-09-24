@@ -1,0 +1,102 @@
+package protocol
+
+import (
+	"encoding/json"
+	"time"
+
+	"task_cli/internal/domain"
+)
+
+type Action string
+
+const (
+	ActionPing         Action = "ping"
+	ActionCreateTask   Action = "create_task"
+	ActionUpdateTask   Action = "update_task"
+	ActionGetTask      Action = "get_task"
+	ActionListTasks    Action = "list_tasks"
+	ActionDeleteTask   Action = "delete_task"
+	ActionAttachGit    Action = "attach_git"
+	ActionStreamEvents Action = "stream_events"
+	ActionShutdown     Action = "shutdown"
+)
+
+type Request struct {
+	ID        string          `json:"id"`
+	Action    Action          `json:"action"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
+	Scope     string          `json:"scope,omitempty"`     // "local" or "global"
+	RepoPath  string          `json:"repo_path,omitempty"` // current repo root
+}
+
+type Response struct {
+	ID      string          `json:"id"`
+	Success bool            `json:"success"`
+	Error   string          `json:"error,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
+}
+
+type CreateTaskPayload struct {
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	Status      domain.Status   `json:"status"`
+	Priority    domain.Priority `json:"priority"`
+	Tags        []string        `json:"tags"`
+	Author      string          `json:"author"`
+	Assignee    string          `json:"assignee,omitempty"`
+}
+
+type UpdateTaskPayload struct {
+	ID          string           `json:"id"`
+	Title       *string          `json:"title,omitempty"`
+	Description *string          `json:"description,omitempty"`
+	Status      *domain.Status   `json:"status,omitempty"`
+	Priority    *domain.Priority `json:"priority,omitempty"`
+	Tags        *[]string        `json:"tags,omitempty"`
+	Assignee    *string          `json:"assignee,omitempty"`
+	AddNote     *string          `json:"add_note,omitempty"`
+	Author      string           `json:"author,omitempty"`
+}
+
+type GetTaskPayload struct {
+	ID string `json:"id"`
+}
+
+type ListTasksPayload struct {
+	Scope    string           `json:"scope"`
+	RepoPath string           `json:"repo_path"`
+	Status   *domain.Status   `json:"status,omitempty"`
+	Priority *domain.Priority `json:"priority,omitempty"`
+	Tag      string           `json:"tag,omitempty"`
+	Search   string           `json:"search,omitempty"`
+	Limit    int              `json:"limit,omitempty"`
+}
+
+type DeleteTaskPayload struct {
+	ID string `json:"id"`
+}
+
+type AttachGitPayload struct {
+	TaskID      string `json:"task_id"`
+	CommitSHA   string `json:"commit_sha,omitempty"`
+	CommitMsg   string `json:"commit_msg,omitempty"`
+	DiffStat    string `json:"diff_stat,omitempty"`
+	DiffContent string `json:"diff_content,omitempty"`
+	MarkDone    bool   `json:"mark_done"`
+}
+
+type EventType string
+
+const (
+	EventTaskCreated EventType = "task_created"
+	EventTaskUpdated EventType = "task_updated"
+	EventTaskDeleted EventType = "task_deleted"
+	EventGitAttached EventType = "git_attached"
+)
+
+type Event struct {
+	Type      EventType    `json:"type"`
+	Timestamp time.Time    `json:"timestamp"`
+	Task      *domain.Task `json:"task,omitempty"`
+	Message   string       `json:"message"`
+}
