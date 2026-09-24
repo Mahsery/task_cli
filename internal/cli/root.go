@@ -91,6 +91,7 @@ func init() {
 	RootCmd.AddCommand(newCmd)
 	RootCmd.AddCommand(editCmd)
 	RootCmd.AddCommand(listCmd)
+	RootCmd.AddCommand(searchCmd)
 	RootCmd.AddCommand(showCmd)
 	RootCmd.AddCommand(doneCmd)
 	RootCmd.AddCommand(attachCmd)

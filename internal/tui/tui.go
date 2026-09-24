@@ -126,7 +126,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.fetchTasksCmd()
 			case "esc":
 				m.isSearch = false
-				m.filterText = m.prevFilter
+				m.filterText = ""
 				return m, m.fetchTasksCmd()
 			case "backspace":
 				runes := []rune(m.filterText)
@@ -163,10 +163,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "c":
+		case "esc", "c":
 			if m.filterText != "" {
 				m.filterText = ""
-				m.statusMsg = "Filter cleared"
+				m.statusMsg = "Filter reset"
 				return m, m.fetchTasksCmd()
 			}
 
@@ -202,10 +202,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "d":
-			// Mark done + auto-attach git commit
+			// Reversible Done: marks done or reopens if already done
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
+				if t.Status == domain.StatusDone || t.Status == domain.StatusClosed {
+					return m, m.reopenTaskCmd(t.ID)
+				}
 				return m, m.markDoneCmd(t.ID)
+			}
+
+		case "s":
+			// Toggle status: open <-> in_progress
+			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
+				t := m.tasks[m.cursor]
+				newStatus := domain.StatusInProgress
+				if t.Status == domain.StatusInProgress {
+					newStatus = domain.StatusOpen
+				} else if t.Status == domain.StatusDone || t.Status == domain.StatusClosed {
+					newStatus = domain.StatusInProgress
+				}
+				return m, m.updateStatusCmd(t.ID, newStatus)
 			}
 
 		case "n":
@@ -304,6 +320,35 @@ func (m Model) deleteTaskCmd(taskID string) tea.Cmd {
 	}
 }
 
+func (m Model) reopenTaskCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		st := domain.StatusOpen
+		note := "Reopened task"
+		_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+			ID:      taskID,
+			Status:  &st,
+			AddNote: &note,
+		})
+		if err != nil {
+			return errMsg(err)
+		}
+		return m.fetchTasksCmd()()
+	}
+}
+
+func (m Model) updateStatusCmd(taskID string, newStatus domain.Status) tea.Cmd {
+	return func() tea.Msg {
+		_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+			ID:     taskID,
+			Status: &newStatus,
+		})
+		if err != nil {
+			return errMsg(err)
+		}
+		return m.fetchTasksCmd()()
+	}
+}
+
 func (m Model) markDoneCmd(taskID string) tea.Cmd {
 	return func() tea.Msg {
 		// Attempt to grab latest git commit if local
@@ -368,7 +413,7 @@ func (m Model) View() string {
 	if m.isSearch {
 		headerText += fmt.Sprintf("  ─  [Search: %s_] (Enter apply, Esc cancel)", m.filterText)
 	} else if m.filterText != "" {
-		headerText += fmt.Sprintf("  ─  [Filter: %q (press 'c' to clear)]", m.filterText)
+		headerText += fmt.Sprintf("  ─  [Filter: %q (Esc to clear)]", m.filterText)
 	}
 	sb.WriteString(headerStyle.Width(width).Render(headerText))
 	sb.WriteString("\n")
@@ -497,7 +542,23 @@ func (m Model) View() string {
 	sb.WriteString("\n")
 
 	// 4. Status Bar / Hotkey footer
-	footer := "[j/k] Move  [n] New  [e] Edit  [d] Done  [x] Del  [Enter] Diff  [/] Filter  [c] Clear  [g] Scope  [r] Refresh  [q] Quit"
+	doneLabel := "[d] Done"
+	statusLabel := "[s] In Prog"
+	if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
+		switch m.tasks[m.cursor].Status {
+		case domain.StatusDone, domain.StatusClosed:
+			doneLabel = "[d] Reopen"
+			statusLabel = "[s] In Prog"
+		case domain.StatusInProgress:
+			doneLabel = "[d] Done"
+			statusLabel = "[s] Open"
+		default: // open
+			doneLabel = "[d] Done"
+			statusLabel = "[s] In Prog"
+		}
+	}
+
+	footer := fmt.Sprintf("[j/k] Move  [n] New  [e] Edit  %s  %s  [x] Del  [Enter] Diff  [/] Search  [Esc] Clear  [g] Scope  [r] Refresh  [q] Quit", doneLabel, statusLabel)
 	if m.statusMsg != "" {
 		footer = fmt.Sprintf("[%s]  %s", m.statusMsg, footer)
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"task_cli/internal/domain"
+	"task_cli/internal/search"
 
 	"github.com/google/uuid"
 )
@@ -271,11 +272,6 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		conditions = append(conditions, "assignee = ?")
 		args = append(args, filter.Assignee)
 	}
-	if filter.Search != "" {
-		conditions = append(conditions, "(title LIKE ? OR description LIKE ?)")
-		s := "%" + filter.Search + "%"
-		args = append(args, s, s)
-	}
 
 	whereClause := ""
 	if len(conditions) > 0 {
@@ -283,7 +279,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	}
 
 	limitClause := ""
-	if filter.Limit > 0 {
+	if filter.Limit > 0 && filter.Search == "" {
 		limitClause = fmt.Sprintf("LIMIT %d", filter.Limit)
 	}
 
@@ -358,6 +354,20 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 					}
 				}
 			}
+		}
+	}
+
+	// Evaluate search DSL filter across all fields including tags and notes
+	if filter.Search != "" {
+		var matched []*domain.Task
+		for _, task := range tasks {
+			if search.Match(filter.Search, task) {
+				matched = append(matched, task)
+			}
+		}
+		tasks = matched
+		if filter.Limit > 0 && len(tasks) > filter.Limit {
+			tasks = tasks[:filter.Limit]
 		}
 	}
 

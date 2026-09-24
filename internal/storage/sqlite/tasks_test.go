@@ -345,4 +345,46 @@ func TestListTasksFiltersAndNotes(t *testing.T) {
 	}
 }
 
+func TestSearchTagsAndDSL(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	_, err := db.CreateTask("local", "/repo/test", "Compiler Refactor", "Description here", domain.StatusOpen, domain.PriorityHigh, []string{"compiler", "odin"}, "Dev", "")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	_, err = db.CreateTask("local", "/repo/test", "UI Fixes", "Button styling", domain.StatusOpen, domain.PriorityNormal, []string{"frontend", "odin"}, "Dev", "")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// 1. Search for a word that ONLY appears in tags: "odin"
+	odinTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", Search: "odin"})
+	if err != nil {
+		t.Fatalf("search odin failed: %v", err)
+	}
+	if len(odinTasks) != 2 {
+		t.Fatalf("expected 2 tasks with tag 'odin', got %d", len(odinTasks))
+	}
+
+	// 2. Boolean AND search: "compiler AND odin"
+	andTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", Search: "compiler AND odin"})
+	if err != nil {
+		t.Fatalf("search compiler AND odin failed: %v", err)
+	}
+	if len(andTasks) != 1 || andTasks[0].Title != "Compiler Refactor" {
+		t.Fatalf("expected 1 task matching 'compiler AND odin', got %d", len(andTasks))
+	}
+
+	// 3. Boolean NOT search: "odin NOT compiler"
+	notTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", Search: "odin NOT compiler"})
+	if err != nil {
+		t.Fatalf("search odin NOT compiler failed: %v", err)
+	}
+	if len(notTasks) != 1 || notTasks[0].Title != "UI Fixes" {
+		t.Fatalf("expected 1 task matching 'odin NOT compiler', got %d", len(notTasks))
+	}
+}
+
+
 

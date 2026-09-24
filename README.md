@@ -86,7 +86,8 @@ tk
 |---------|:-------:|-------------------|-------------|---------|
 | `tk` | — | — | Launch interactive TUI in terminal; prints help if non-TTY | `tk` |
 | `tk new` | — | `[-t title] [-p prio] [-l tags] [-a assignee] [-m desc]` | Create task via flags, piped stdin, or `$EDITOR` template | `tk new -t "Fix bug" -p high -l ui`<br>`echo "Piped Task" \| tk new` |
-| `tk list` | `ls` | `[-s status] [-p prio] [-t tag] [-q search] [--short] [--limit N]` | Query tasks with formatted table, one-liners, or JSON | `tk list -s open -p high`<br>`tk ls -q "auth" --short` |
+| `tk list` | `ls` | `[-s status] [-p prio] [-l tag] [-a assignee] [-q search] [--short] [--limit N]` | Query tasks with formatted table, one-liners, or JSON | `tk list -s open -p high`<br>`tk ls -l auth --short` |
+| `tk search` | `find` | `<query...> [-s status] [-p prio] [-l tag] [-a assignee] [--short] [--limit N]` | Search tasks with boolean DSL (`AND`, `OR`, `NOT`, `tag:`, `s:`, `p:`, `a:`, `"exact"`) | `tk search bug AND odin`<br>`tk search tag:security priority:high`<br>`tk search "memory leak" NOT closed` |
 | `tk show` | — | `<id>` | Display task metadata, notes, commit SHA, and diff content | `tk show T-1`<br>`tk show G-2 --json` |
 | `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [-l tags] [--add-tag tag] [-a assignee] [-m note] [-d desc]` | Modify task fields via CLI flags or open interactive `$EDITOR` buffer | `tk edit T-1 -s in_progress`<br>`tk edit T-1 -m "Patch reviewed"` |
 | `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit]` | Mark task done; auto-attaches latest commit & diff by default | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 --no-commit` |
@@ -110,13 +111,16 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 
 | Keybinding | Action | Description |
 |:----------:|--------|-------------|
-| `j` / `↓` | Move Down | Select next task in the list |
+| `j` / `↓` | Move Down | Select next task in the list (with viewport windowing) |
 | `k` / `↑` | Move Up | Select previous task in the list |
 | `n` | New Task | Launch `$EDITOR` with a new task template |
 | `e` | Edit Task | Launch `$EDITOR` with selected task pre-populated |
-| `d` | Mark Done | Mark selected task done and auto-attach latest git commit/diff |
+| `d` | Reversible Done | Mark selected task done (or **reopen** if already done) |
+| `s` | Toggle Status | Cycle status between `open` and `in_progress` |
+| `x` | Delete Task | Delete selected task with immediate list refresh |
 | `Enter` | Toggle Diff | Expand or collapse unified patch diff view |
-| `/` | Search Filter | Enter live fuzzy search filter (`Enter`/`Esc` to confirm, `Backspace` to delete) |
+| `/` | Search Filter | Enter live search query (`Enter` applies, `Esc` cancels) |
+| `Esc` / `c` | Reset Filter | Clear active search filter and restore full task list |
 | `g` | Toggle Scope | Switch view between `local` (git repository) and `global` scopes |
 | `r` | Refresh | Re-query tasks from daemon |
 | `q` / `Ctrl+C` | Quit | Exit the TUI |
