@@ -279,6 +279,18 @@ func (c *Client) DeleteTask(id string) error {
 	return err
 }
 
+func (c *Client) RestoreTask(task *domain.Task) (*domain.Task, error) {
+	resp, err := c.call(protocol.ActionRestoreTask, protocol.RestoreTaskPayload{Task: task})
+	if err != nil {
+		return nil, err
+	}
+	var res domain.Task
+	if err := json.Unmarshal(resp.Data, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 func (c *Client) AttachGit(taskID string, sha, msg, diffStat, diffContent string, markDone bool) (*domain.Task, error) {
 	p := protocol.AttachGitPayload{
 		TaskID:      taskID,

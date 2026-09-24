@@ -641,6 +641,51 @@ func TestEmptyTitleValidation(t *testing.T) {
 	}
 }
 
+func TestRestoreTask(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	task, err := db.CreateTask("local", "/repo/test", "Original Task", "Original Desc", domain.StatusInProgress, domain.PriorityHigh, []string{"bug", "ui"}, "Tester", "Worker")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	noteContent := "Working on fix"
+	taskWithNote, err := db.UpdateTask(task.ID, nil, nil, nil, nil, nil, nil, nil, nil, &noteContent, "Worker")
+	if err != nil {
+		t.Fatalf("add note failed: %v", err)
+	}
+	task = taskWithNote
+
+	// Delete task
+	if err := db.DeleteTask(task.ID); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	// Verify task is gone
+	_, err = db.GetTask(task.ID)
+	if err == nil {
+		t.Fatal("expected task to be deleted")
+	}
+
+	// Restore task
+	if err := db.RestoreTask(task); err != nil {
+		t.Fatalf("restore task failed: %v", err)
+	}
+
+	// Verify restored task
+	restored, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("get restored task failed: %v", err)
+	}
+	if restored.ID != task.ID || restored.Title != task.Title || restored.Status != task.Status {
+		t.Fatalf("restored task mismatch: got %+v, want %+v", restored, task)
+	}
+	if len(restored.Notes) != 1 || restored.Notes[0].Content != "Working on fix" {
+		t.Fatalf("restored notes mismatch: got %+v", restored.Notes)
+	}
+}
+
 
 
 

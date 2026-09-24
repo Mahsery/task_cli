@@ -594,3 +594,228 @@ func TestTUIScrollBoundsInBothPanes(t *testing.T) {
 		t.Errorf("Expected cursor to move immediately to 1 on single 'k', got %d", m.cursor)
 	}
 }
+
+func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal},
+		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress, Priority: domain.PriorityHigh},
+		{ID: "T-3", Title: "Task Three", Status: domain.StatusDone, Priority: domain.PriorityUrgent},
+	}
+
+	m := Model{
+		tasks:     tasks,
+		cursor:    0,
+		width:     100,
+		height:    30,
+		theme:     NewKanagawaTheme(),
+		undoStack: make([]UndoAction, 0),
+	}
+
+	// 1. Test 'x' (Delete) opens ConfirmDelete dialog
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(Model)
+	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmDelete {
+		t.Fatalf("Expected confirmDialog of kind ConfirmDelete, got %+v", m.confirmDialog)
+	}
+	if len(m.confirmDialog.TargetIDs) != 1 || m.confirmDialog.TargetIDs[0] != "T-1" {
+		t.Errorf("Expected target ID T-1, got %v", m.confirmDialog.TargetIDs)
+	}
+
+	// 1b. Test cancellation with 'n'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(Model)
+	if m.confirmDialog != nil {
+		t.Errorf("Expected confirmDialog to be nil after 'n', got %+v", m.confirmDialog)
+	}
+	if m.statusMsg != "Action cancelled" {
+		t.Errorf("Expected statusMsg 'Action cancelled', got %q", m.statusMsg)
+	}
+
+	// 2. Test 'd' (Done) on open task opens ConfirmDone dialog
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmDone {
+		t.Fatalf("Expected confirmDialog of kind ConfirmDone, got %+v", m.confirmDialog)
+	}
+	// Cancel with esc
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.confirmDialog != nil {
+		t.Errorf("Expected confirmDialog to be nil after esc, got %+v", m.confirmDialog)
+	}
+
+	// 2b. Move to T-3 (Done task) and test 'd' triggers ConfirmReopen
+	m.cursor = 2
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmReopen {
+		t.Fatalf("Expected confirmDialog of kind ConfirmReopen on done task, got %+v", m.confirmDialog)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(Model)
+
+	// 3. Test 's' (Status toggle) opens ConfirmStatus dialog
+	m.cursor = 0
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = updated.(Model)
+	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmStatus {
+		t.Fatalf("Expected confirmDialog of kind ConfirmStatus, got %+v", m.confirmDialog)
+	}
+	if m.confirmDialog.TargetStatus != domain.StatusInProgress {
+		t.Errorf("Expected target status InProgress, got %s", m.confirmDialog.TargetStatus)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(Model)
+
+	// 4. Test 'a' (Claim) opens ConfirmClaim dialog
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = updated.(Model)
+	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmClaim {
+		t.Fatalf("Expected confirmDialog of kind ConfirmClaim, got %+v", m.confirmDialog)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(Model)
+}
+
+func TestTUIBatchConfirmationDialogs(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal},
+		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress, Priority: domain.PriorityHigh},
+	}
+
+	m := Model{
+		tasks:    tasks,
+		cursor:   0,
+		width:    100,
+		height:   30,
+		theme:    NewKanagawaTheme(),
+		selected: map[string]bool{"T-1": true, "T-2": true},
+	}
+
+	// 1. Batch delete
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(Model)
+	if m.confirmDialog == nil || !m.confirmDialog.IsBatch || m.confirmDialog.Kind != ConfirmDelete {
+		t.Fatalf("Expected batch ConfirmDelete, got %+v", m.confirmDialog)
+	}
+	if len(m.confirmDialog.TargetIDs) != 2 {
+		t.Errorf("Expected 2 target IDs, got %d", len(m.confirmDialog.TargetIDs))
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(Model)
+
+	// 2. Batch done
+	m.selected = map[string]bool{"T-1": true, "T-2": true}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.confirmDialog == nil || !m.confirmDialog.IsBatch || m.confirmDialog.Kind != ConfirmDone {
+		t.Fatalf("Expected batch ConfirmDone, got %+v", m.confirmDialog)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(Model)
+
+	// 3. Batch claim
+	m.selected = map[string]bool{"T-1": true, "T-2": true}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = updated.(Model)
+	if m.confirmDialog == nil || !m.confirmDialog.IsBatch || m.confirmDialog.Kind != ConfirmClaim {
+		t.Fatalf("Expected batch ConfirmClaim, got %+v", m.confirmDialog)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = updated.(Model)
+}
+
+func TestTUIUndoStackOperations(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal, Assignee: "initial-author"},
+	}
+
+	m := Model{
+		tasks:     tasks,
+		cursor:    0,
+		width:     120,
+		height:    30,
+		theme:     NewKanagawaTheme(),
+		undoStack: make([]UndoAction, 0),
+	}
+
+	// 1. Initial state: 'u' reports nothing to undo
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	m = updated.(Model)
+	if m.statusMsg != "Nothing to undo" {
+		t.Errorf("Expected 'Nothing to undo', got %q", m.statusMsg)
+	}
+
+	// 2. Open Claim dialog and confirm with 'y'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = updated.(Model)
+	if m.confirmDialog == nil {
+		t.Fatal("Expected confirmDialog to be open")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(Model)
+
+	// Confirm dialog must be closed and undo stack must have 1 entry
+	if m.confirmDialog != nil {
+		t.Errorf("Expected confirmDialog to be cleared after confirmation")
+	}
+	if len(m.undoStack) != 1 {
+		t.Fatalf("Expected 1 item on undoStack, got %d", len(m.undoStack))
+	}
+	if m.undoStack[0].Kind != UndoClaim {
+		t.Errorf("Expected UndoClaim kind, got %v", m.undoStack[0].Kind)
+	}
+	if m.undoStack[0].Snapshots[0].PreviousAssignee != "initial-author" {
+		t.Errorf("Expected previous assignee 'initial-author', got %q", m.undoStack[0].Snapshots[0].PreviousAssignee)
+	}
+
+	// Footer must now display [u] Undo
+	footer := m.renderFooter(m.width)
+	if !strings.Contains(footer, "[u] Undo") {
+		t.Errorf("Expected footer to contain '[u] Undo' when undoStack is non-empty, got:\n%s", footer)
+	}
+
+	// 3. Pop undo with 'u'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	m = updated.(Model)
+	if len(m.undoStack) != 0 {
+		t.Errorf("Expected undoStack to be empty after 'u', got %d", len(m.undoStack))
+	}
+	if !strings.Contains(m.statusMsg, "Undid:") {
+		t.Errorf("Expected statusMsg to contain 'Undid:', got %q", m.statusMsg)
+	}
+}
+
+func TestTUIModalFloatingWindowRendering(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Database migration task", Status: domain.StatusOpen, Priority: domain.PriorityUrgent},
+	}
+
+	m := Model{
+		tasks:  tasks,
+		cursor: 0,
+		width:  100,
+		height: 24,
+		theme:  NewKanagawaTheme(),
+		confirmDialog: &ConfirmDialog{
+			Kind:      ConfirmDelete,
+			Title:     "CONFIRM DELETION",
+			Prompt:    "Delete task T-1 permanently?",
+			Details:   []string{"T-1: Database migration task"},
+			TargetIDs: []string{"T-1"},
+		},
+	}
+
+	out := m.View()
+	if !strings.Contains(out, "CONFIRM DELETION") {
+		t.Errorf("Expected modal title 'CONFIRM DELETION' in View(), got:\n%s", out)
+	}
+	if !strings.Contains(out, "Delete task T-1 permanently?") {
+		t.Errorf("Expected modal prompt in View(), got:\n%s", out)
+	}
+	if !strings.Contains(out, "[y / Enter]") || !strings.Contains(out, "[n / Esc]") {
+		t.Errorf("Expected modal action keys in View(), got:\n%s", out)
+	}
+}
+

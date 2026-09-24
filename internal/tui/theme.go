@@ -83,6 +83,12 @@ type Theme struct {
 	FooterKey        lipgloss.Style
 	FooterDesc       lipgloss.Style
 	FooterStatus     lipgloss.Style
+	ModalBox         lipgloss.Style
+	ModalTitle       lipgloss.Style
+	ModalPrompt      lipgloss.Style
+	ModalKey         lipgloss.Style
+	ModalDesc        lipgloss.Style
+	ModalCancel      lipgloss.Style
 }
 
 func NewKanagawaTheme() Theme {
@@ -236,6 +242,32 @@ func NewKanagawaTheme() Theme {
 		FooterStatus: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color(CarpYellow)),
+
+		ModalBox: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(SurimiOrange)).
+			Background(lipgloss.Color(DragonBlack2)).
+			Padding(1, 2),
+
+		ModalTitle: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(DragonBlack0)).
+			Background(lipgloss.Color(SurimiOrange)).
+			Padding(0, 1),
+
+		ModalPrompt: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(FujiWhite)),
+
+		ModalKey: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(WaveAqua2)),
+
+		ModalDesc: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(DragonGray)),
+
+		ModalCancel: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(DragonRed)),
 	}
 }
 

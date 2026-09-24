@@ -549,3 +549,71 @@ func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, m
 
 	return d.GetTask(id)
 }
+
+func (d *DB) RestoreTask(task *domain.Task) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if task == nil {
+		return fmt.Errorf("task cannot be nil")
+	}
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	tagsJSON, err := json.Marshal(task.Tags)
+	if err != nil {
+		tagsJSON = []byte("[]")
+	}
+
+	var closedAt any
+	if task.ClosedAt != nil {
+		closedAt = *task.ClosedAt
+	}
+
+	var seqNum int
+	if parts := strings.Split(task.ID, "-"); len(parts) == 2 {
+		fmt.Sscanf(parts[1], "%d", &seqNum)
+	}
+
+	insertSQL := `
+	INSERT INTO tasks (
+		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at,
+		commit_sha, commit_msg, diff_stat, diff_content
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	_, err = tx.Exec(insertSQL,
+		task.ID, task.Scope, task.RepoPath, seqNum, task.Title, task.Description,
+		string(task.Status), string(task.Priority), string(tagsJSON), task.Author, task.Assignee,
+		task.CreatedAt, task.UpdatedAt, closedAt,
+		task.CommitSHA, task.CommitMsg, task.DiffStat, task.DiffContent,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert restored task: %w", err)
+	}
+
+	// Restore notes
+	for _, n := range task.Notes {
+		noteID := n.ID
+		if noteID == "" {
+			noteID = uuid.New().String()
+		}
+		_, err = tx.Exec(`INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`,
+			noteID, task.ID, n.Author, n.Content, n.CreatedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to restore note: %w", err)
+		}
+	}
+
+	// Monotonic sequence safety: ensure last_seq is at least seqNum
+	_, _ = tx.Exec(`
+	INSERT INTO task_sequences (scope, repo_path, last_seq) VALUES (?, ?, ?)
+	ON CONFLICT(scope, repo_path) DO UPDATE SET last_seq = MAX(last_seq, excluded.last_seq)
+	`, task.Scope, task.RepoPath, seqNum)
+
+	return tx.Commit()
+}

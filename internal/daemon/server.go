@@ -378,6 +378,33 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		resp.Data = json.RawMessage(`{"status":"deleted"}`)
 		return resp
 
+	case protocol.ActionRestoreTask:
+		var p protocol.RestoreTaskPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		if p.Task == nil {
+			return errorResp(req.ID, "task cannot be nil")
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		if err := db.RestoreTask(p.Task); err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+
+		s.pubsub.Publish(protocol.Event{
+			Type:      protocol.EventTaskCreated,
+			Timestamp: time.Now(),
+			Task:      p.Task,
+			Message:   fmt.Sprintf("+ %s restored: %q", p.Task.ID, p.Task.Title),
+		})
+
+		data, _ := json.Marshal(p.Task)
+		resp.Data = data
+		return resp
+
 	case protocol.ActionAttachGit:
 		var p protocol.AttachGitPayload
 		if err := json.Unmarshal(req.Payload, &p); err != nil {

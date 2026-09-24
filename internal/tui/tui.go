@@ -23,6 +23,48 @@ const (
 	PaneDetail
 )
 
+type ConfirmKind int
+
+const (
+	ConfirmDelete ConfirmKind = iota
+	ConfirmDone
+	ConfirmReopen
+	ConfirmStatus
+	ConfirmClaim
+)
+
+type ConfirmDialog struct {
+	Kind           ConfirmKind
+	Title          string
+	Prompt         string
+	Details        []string
+	TargetIDs      []string
+	IsBatch        bool
+	TargetStatus   domain.Status
+	TargetAssignee string
+}
+
+type UndoKind int
+
+const (
+	UndoStatusChange UndoKind = iota
+	UndoClaim
+	UndoDelete
+)
+
+type TaskUndoSnapshot struct {
+	Task             *domain.Task
+	PreviousStatus   domain.Status
+	PreviousAssignee string
+	PreviousClosedAt *time.Time
+}
+
+type UndoAction struct {
+	Kind        UndoKind
+	Description string
+	Snapshots   []TaskUndoSnapshot
+}
+
 type Model struct {
 	client             *client.Client
 	editorCmd          string
@@ -45,6 +87,8 @@ type Model struct {
 	showDiff           bool
 	confirmDelete      bool
 	deleteTaskID       string
+	confirmDialog      *ConfirmDialog
+	undoStack          []UndoAction
 }
 
 func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
@@ -303,6 +347,217 @@ func (m Model) maxDetailScrollOffset() int {
 	return maxOffset
 }
 
+func (m Model) getTaskTitlesForIDs(ids []string) []string {
+	idMap := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		idMap[id] = true
+	}
+	var res []string
+	for _, t := range m.tasks {
+		if idMap[t.ID] {
+			res = append(res, fmt.Sprintf("%s: %s", t.ID, t.Title))
+			if len(res) >= 5 {
+				remaining := len(ids) - 5
+				if remaining > 0 {
+					res = append(res, fmt.Sprintf("...and %d more", remaining))
+				}
+				break
+			}
+		}
+	}
+	return res
+}
+
+func (m Model) activeConfirmDialog() *ConfirmDialog {
+	if m.confirmDialog != nil {
+		return m.confirmDialog
+	}
+	if m.confirmDelete {
+		if m.deleteTaskID != "" {
+			return &ConfirmDialog{
+				Kind:      ConfirmDelete,
+				Title:     "CONFIRM DELETION",
+				Prompt:    fmt.Sprintf("Delete task %s permanently?", m.deleteTaskID),
+				TargetIDs: []string{m.deleteTaskID},
+			}
+		}
+		if len(m.selected) > 0 {
+			ids := m.getSelectedIDs()
+			return &ConfirmDialog{
+				Kind:      ConfirmDelete,
+				Title:     "CONFIRM BATCH DELETION",
+				Prompt:    fmt.Sprintf("Delete %d selected tasks permanently?", len(ids)),
+				TargetIDs: ids,
+				IsBatch:   true,
+			}
+		}
+	}
+	return nil
+}
+
+func (m Model) buildUndoAction(dlg *ConfirmDialog) UndoAction {
+	var snapshots []TaskUndoSnapshot
+	idMap := make(map[string]bool, len(dlg.TargetIDs))
+	for _, id := range dlg.TargetIDs {
+		idMap[id] = true
+	}
+
+	for _, t := range m.tasks {
+		if idMap[t.ID] {
+			clone := *t
+			if t.Tags != nil {
+				clone.Tags = append([]string(nil), t.Tags...)
+			}
+			if t.Notes != nil {
+				clone.Notes = append([]domain.TaskNote(nil), t.Notes...)
+			}
+			var prevClosed *time.Time
+			if t.ClosedAt != nil {
+				tCopy := *t.ClosedAt
+				prevClosed = &tCopy
+			}
+			snapshots = append(snapshots, TaskUndoSnapshot{
+				Task:             &clone,
+				PreviousStatus:   t.Status,
+				PreviousAssignee: t.Assignee,
+				PreviousClosedAt: prevClosed,
+			})
+		}
+	}
+
+	var kind UndoKind
+	var desc string
+	switch dlg.Kind {
+	case ConfirmDelete:
+		kind = UndoDelete
+		if dlg.IsBatch {
+			desc = fmt.Sprintf("Delete %d tasks", len(dlg.TargetIDs))
+		} else if len(dlg.TargetIDs) > 0 {
+			desc = fmt.Sprintf("Delete %s", dlg.TargetIDs[0])
+		}
+	case ConfirmClaim:
+		kind = UndoClaim
+		if dlg.IsBatch {
+			desc = fmt.Sprintf("Claim %d tasks", len(dlg.TargetIDs))
+		} else if len(dlg.TargetIDs) > 0 {
+			desc = fmt.Sprintf("Claim %s", dlg.TargetIDs[0])
+		}
+	case ConfirmDone, ConfirmReopen, ConfirmStatus:
+		kind = UndoStatusChange
+		if dlg.IsBatch {
+			desc = fmt.Sprintf("Status change on %d tasks", len(dlg.TargetIDs))
+		} else if len(dlg.TargetIDs) > 0 {
+			desc = fmt.Sprintf("Status change on %s", dlg.TargetIDs[0])
+		}
+	}
+
+	return UndoAction{
+		Kind:        kind,
+		Description: desc,
+		Snapshots:   snapshots,
+	}
+}
+
+func (m Model) executeConfirmedDialog(dlg *ConfirmDialog) (tea.Model, tea.Cmd) {
+	switch dlg.Kind {
+	case ConfirmDelete:
+		if dlg.IsBatch {
+			m.statusMsg = fmt.Sprintf("Deleted %d tasks (press 'u' to undo)", len(dlg.TargetIDs))
+			return m, m.batchDeleteCmd(dlg.TargetIDs)
+		}
+		if len(dlg.TargetIDs) > 0 {
+			m.statusMsg = fmt.Sprintf("Deleted %s (press 'u' to undo)", dlg.TargetIDs[0])
+			return m, m.deleteTaskCmd(dlg.TargetIDs[0])
+		}
+
+	case ConfirmDone:
+		if dlg.IsBatch {
+			m.statusMsg = fmt.Sprintf("Marked %d tasks as DONE (press 'u' to undo)", len(dlg.TargetIDs))
+			return m, m.batchDoneCmd(dlg.TargetIDs)
+		}
+		if len(dlg.TargetIDs) > 0 {
+			m.statusMsg = fmt.Sprintf("Marked %s as DONE (press 'u' to undo)", dlg.TargetIDs[0])
+			return m, m.markDoneCmd(dlg.TargetIDs[0])
+		}
+
+	case ConfirmReopen:
+		if len(dlg.TargetIDs) > 0 {
+			m.statusMsg = fmt.Sprintf("Reopened %s (press 'u' to undo)", dlg.TargetIDs[0])
+			return m, m.reopenTaskCmd(dlg.TargetIDs[0])
+		}
+
+	case ConfirmStatus:
+		if dlg.IsBatch {
+			m.statusMsg = fmt.Sprintf("Cycled status on %d tasks (press 'u' to undo)", len(dlg.TargetIDs))
+			return m, m.batchStatusCmd(dlg.TargetIDs)
+		}
+		if len(dlg.TargetIDs) > 0 {
+			m.statusMsg = fmt.Sprintf("Updated %s status to %s (press 'u' to undo)", dlg.TargetIDs[0], dlg.TargetStatus)
+			return m, m.updateStatusCmd(dlg.TargetIDs[0], dlg.TargetStatus)
+		}
+
+	case ConfirmClaim:
+		if dlg.IsBatch {
+			m.statusMsg = fmt.Sprintf("Claimed %d tasks (press 'u' to undo)", len(dlg.TargetIDs))
+			return m, m.batchClaimCmd(dlg.TargetIDs)
+		}
+		if len(dlg.TargetIDs) > 0 {
+			m.statusMsg = fmt.Sprintf("Claimed %s as %s (press 'u' to undo)", dlg.TargetIDs[0], dlg.TargetAssignee)
+			return m, m.claimTaskCmd(dlg.TargetIDs[0])
+		}
+	}
+	return m, nil
+}
+
+func (m Model) executeUndoCmd(undo UndoAction) tea.Cmd {
+	return func() tea.Msg {
+		switch undo.Kind {
+		case UndoStatusChange:
+			for _, snap := range undo.Snapshots {
+				note := fmt.Sprintf("Undo: reverted status to %s", snap.PreviousStatus)
+				_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+					ID:      snap.Task.ID,
+					Status:  &snap.PreviousStatus,
+					AddNote: &note,
+				})
+				if err != nil {
+					return errMsg(fmt.Errorf("failed to undo status for %s: %w", snap.Task.ID, err))
+				}
+			}
+		case UndoClaim:
+			for _, snap := range undo.Snapshots {
+				note := fmt.Sprintf("Undo: reverted claim to %q", snap.PreviousAssignee)
+				prevAssignee := snap.PreviousAssignee
+				_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+					ID:       snap.Task.ID,
+					Status:   &snap.PreviousStatus,
+					Assignee: &prevAssignee,
+					AddNote:  &note,
+				})
+				if err != nil {
+					return errMsg(fmt.Errorf("failed to undo claim for %s: %w", snap.Task.ID, err))
+				}
+			}
+		case UndoDelete:
+			for _, snap := range undo.Snapshots {
+				_, err := m.client.RestoreTask(snap.Task)
+				if err != nil {
+					return errMsg(fmt.Errorf("failed to restore %s: %w", snap.Task.ID, err))
+				}
+			}
+		}
+		tasks, err := m.client.ListTasks(domain.TaskFilter{
+			Scope:    m.scope,
+			RepoPath: m.repoPath,
+			Search:   m.filterText,
+		})
+		if err != nil {
+			return errMsg(err)
+		}
+		return reloadMsg(tasks)
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	maxRows := m.getMaxRows()
 
@@ -390,23 +645,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.confirmDelete {
-			m.confirmDelete = false
-			if msg.String() == "y" || msg.String() == "Y" {
-				if m.deleteTaskID != "" {
-					taskID := m.deleteTaskID
-					m.deleteTaskID = ""
-					m.statusMsg = fmt.Sprintf("Deleting %s...", taskID)
-					return m, m.deleteTaskCmd(taskID)
-				} else if len(m.selected) > 0 {
-					ids := m.getSelectedIDs()
-					m.selected = make(map[string]bool)
-					m.statusMsg = fmt.Sprintf("Deleting %d tasks...", len(ids))
-					return m, m.batchDeleteCmd(ids)
+		if dlg := m.activeConfirmDialog(); dlg != nil {
+			k := msg.String()
+			if k == "y" || k == "Y" || k == "enter" {
+				undo := m.buildUndoAction(dlg)
+				m.undoStack = append(m.undoStack, undo)
+				if len(m.undoStack) > 50 {
+					m.undoStack = m.undoStack[len(m.undoStack)-50:]
 				}
+
+				m.confirmDialog = nil
+				m.confirmDelete = false
+				m.deleteTaskID = ""
+				if dlg.IsBatch {
+					m.selected = make(map[string]bool)
+				}
+				return m.executeConfirmedDialog(dlg)
 			}
-			m.deleteTaskID = ""
-			m.statusMsg = "Deletion cancelled"
+			if k == "n" || k == "N" || k == "esc" {
+				m.confirmDialog = nil
+				m.confirmDelete = false
+				m.deleteTaskID = ""
+				m.statusMsg = "Action cancelled"
+				return m, nil
+			}
 			return m, nil
 		}
 
@@ -698,53 +960,113 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "x":
 			// Batch delete prompt if tasks selected, otherwise single-task
 			if len(m.selected) > 0 {
-				m.confirmDelete = true
-				m.deleteTaskID = ""
+				ids := m.getSelectedIDs()
+				m.confirmDialog = &ConfirmDialog{
+					Kind:      ConfirmDelete,
+					Title:     "CONFIRM BATCH DELETION",
+					Prompt:    fmt.Sprintf("Permanently delete %d selected tasks?", len(ids)),
+					Details:   m.getTaskTitlesForIDs(ids),
+					TargetIDs: ids,
+					IsBatch:   true,
+				}
 				return m, nil
 			}
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
-				m.confirmDelete = true
-				m.deleteTaskID = t.ID
+				m.confirmDialog = &ConfirmDialog{
+					Kind:      ConfirmDelete,
+					Title:     "CONFIRM DELETION",
+					Prompt:    fmt.Sprintf("Permanently delete task %s?", t.ID),
+					Details:   []string{fmt.Sprintf("%s: %s", t.ID, t.Title)},
+					TargetIDs: []string{t.ID},
+					IsBatch:   false,
+				}
 				return m, nil
 			}
 
 		case "a":
-			// Batch claim if tasks selected, otherwise single-task claim
+			actor := git.GetAuthor()
 			if len(m.selected) > 0 {
 				ids := m.getSelectedIDs()
-				m.selected = make(map[string]bool)
-				m.statusMsg = fmt.Sprintf("Claiming %d tasks...", len(ids))
-				return m, m.batchClaimCmd(ids)
+				m.confirmDialog = &ConfirmDialog{
+					Kind:           ConfirmClaim,
+					Title:          "CONFIRM BATCH CLAIM",
+					Prompt:         fmt.Sprintf("Claim %d selected tasks as %q?", len(ids), actor),
+					Details:        m.getTaskTitlesForIDs(ids),
+					TargetIDs:      ids,
+					IsBatch:        true,
+					TargetAssignee: actor,
+				}
+				return m, nil
 			}
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
-				return m, m.claimTaskCmd(t.ID)
+				m.confirmDialog = &ConfirmDialog{
+					Kind:           ConfirmClaim,
+					Title:          "CONFIRM TASK CLAIM",
+					Prompt:         fmt.Sprintf("Claim task %s as %q?", t.ID, actor),
+					Details:        []string{fmt.Sprintf("%s: %s", t.ID, t.Title)},
+					TargetIDs:      []string{t.ID},
+					IsBatch:        false,
+					TargetAssignee: actor,
+				}
+				return m, nil
 			}
 
 		case "d":
 			// Batch Done if tasks selected, otherwise single-task reversible done
 			if len(m.selected) > 0 {
 				ids := m.getSelectedIDs()
-				m.selected = make(map[string]bool)
-				m.statusMsg = fmt.Sprintf("Marking %d tasks done...", len(ids))
-				return m, m.batchDoneCmd(ids)
+				m.confirmDialog = &ConfirmDialog{
+					Kind:         ConfirmDone,
+					Title:        "CONFIRM BATCH DONE",
+					Prompt:       fmt.Sprintf("Mark %d selected tasks as DONE?", len(ids)),
+					Details:      m.getTaskTitlesForIDs(ids),
+					TargetIDs:    ids,
+					IsBatch:      true,
+					TargetStatus: domain.StatusDone,
+				}
+				return m, nil
 			}
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
 				if t.Status == domain.StatusDone || t.Status == domain.StatusClosed {
-					return m, m.reopenTaskCmd(t.ID)
+					m.confirmDialog = &ConfirmDialog{
+						Kind:         ConfirmReopen,
+						Title:        "CONFIRM REOPEN TASK",
+						Prompt:       fmt.Sprintf("Reopen task %s to IN_PROGRESS?", t.ID),
+						Details:      []string{fmt.Sprintf("%s: %s", t.ID, t.Title)},
+						TargetIDs:    []string{t.ID},
+						IsBatch:      false,
+						TargetStatus: domain.StatusInProgress,
+					}
+					return m, nil
 				}
-				return m, m.markDoneCmd(t.ID)
+				m.confirmDialog = &ConfirmDialog{
+					Kind:         ConfirmDone,
+					Title:        "CONFIRM TASK DONE",
+					Prompt:       fmt.Sprintf("Mark task %s as DONE?", t.ID),
+					Details:      []string{fmt.Sprintf("%s: %s", t.ID, t.Title)},
+					TargetIDs:    []string{t.ID},
+					IsBatch:      false,
+					TargetStatus: domain.StatusDone,
+				}
+				return m, nil
 			}
 
 		case "s":
 			// Batch status toggle if tasks selected, otherwise single-task toggle
 			if len(m.selected) > 0 {
 				ids := m.getSelectedIDs()
-				m.selected = make(map[string]bool)
-				m.statusMsg = fmt.Sprintf("Updating %d tasks...", len(ids))
-				return m, m.batchStatusCmd(ids)
+				m.confirmDialog = &ConfirmDialog{
+					Kind:      ConfirmStatus,
+					Title:     "CONFIRM BATCH STATUS CYCLE",
+					Prompt:    fmt.Sprintf("Cycle status for %d selected tasks?", len(ids)),
+					Details:   m.getTaskTitlesForIDs(ids),
+					TargetIDs: ids,
+					IsBatch:   true,
+				}
+				return m, nil
 			}
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
@@ -754,8 +1076,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if t.Status == domain.StatusDone || t.Status == domain.StatusClosed {
 					newStatus = domain.StatusInProgress
 				}
-				return m, m.updateStatusCmd(t.ID, newStatus)
+				m.confirmDialog = &ConfirmDialog{
+					Kind:         ConfirmStatus,
+					Title:        "CONFIRM STATUS CHANGE",
+					Prompt:       fmt.Sprintf("Change status of %s to %s?", t.ID, strings.ToUpper(string(newStatus))),
+					Details:      []string{fmt.Sprintf("%s: %s (current: %s)", t.ID, t.Title, t.Status)},
+					TargetIDs:    []string{t.ID},
+					IsBatch:      false,
+					TargetStatus: newStatus,
+				}
+				return m, nil
 			}
+
+		case "u":
+			if len(m.undoStack) == 0 {
+				m.statusMsg = "Nothing to undo"
+				return m, nil
+			}
+			lastUndo := m.undoStack[len(m.undoStack)-1]
+			m.undoStack = m.undoStack[:len(m.undoStack)-1]
+			m.statusMsg = fmt.Sprintf("Undid: %s", lastUndo.Description)
+			return m, m.executeUndoCmd(lastUndo)
 
 		case "n":
 			// Create new task via editor
@@ -1127,10 +1468,17 @@ func (m Model) View() string {
 		headerText += "  ─  " + theme.FilterIndicator.Render(fmt.Sprintf("[Filter: %q (Esc to clear)]", m.filterText))
 	}
 
+	var rawView string
 	if m.isSplitView() {
-		return m.renderSplitView(width, height, headerText)
+		rawView = m.renderSplitView(width, height, headerText)
+	} else {
+		rawView = m.renderStackedView(width, height, headerText)
 	}
-	return m.renderStackedView(width, height, headerText)
+
+	if dlg := m.activeConfirmDialog(); dlg != nil {
+		return m.overlayModal(rawView, dlg)
+	}
+	return rawView
 }
 
 func (m Model) renderStackedView(width, height int, headerText string) string {
@@ -1704,19 +2052,134 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 	return sb.String()
 }
 
+func (m Model) renderConfirmationModal(dlg *ConfirmDialog, termWidth, termHeight int) string {
+	theme := m.theme
+	boxWidth := 56
+	if termWidth > 0 && termWidth-6 < boxWidth {
+		boxWidth = termWidth - 6
+	}
+	if boxWidth < 32 {
+		boxWidth = 32
+	}
+
+	contentWidth := boxWidth - 4 // interior padding
+
+	var lines []string
+	// Title
+	titleStr := theme.ModalTitle.Render(" " + dlg.Title + " ")
+	lines = append(lines, titleStr)
+	lines = append(lines, "")
+
+	// Prompt
+	promptWrapped := wrapText(dlg.Prompt, contentWidth, "")
+	for _, pw := range promptWrapped {
+		lines = append(lines, theme.ModalPrompt.Render(pw))
+	}
+
+	// Details
+	if len(dlg.Details) > 0 {
+		lines = append(lines, "")
+		for _, det := range dlg.Details {
+			wrapped := wrapText("• "+det, contentWidth, "  ")
+			for _, w := range wrapped {
+				lines = append(lines, theme.ModalDesc.Render(w))
+			}
+		}
+	}
+
+	// Actions footer
+	lines = append(lines, "")
+	confirmKey := theme.ModalKey.Render("[y / Enter]") + " " + theme.ModalPrompt.Render("Confirm")
+	cancelKey := theme.ModalCancel.Render("[n / Esc]") + " " + theme.ModalPrompt.Render("Cancel")
+	actions := fmt.Sprintf("%s    %s", confirmKey, cancelKey)
+	lines = append(lines, actions)
+
+	inner := strings.Join(lines, "\n")
+	return theme.ModalBox.Width(boxWidth).Render(inner)
+}
+
+func (m Model) overlayModal(bg string, dlg *ConfirmDialog) string {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	height := m.height
+	if height <= 0 {
+		height = 24
+	}
+
+	modalStr := m.renderConfirmationModal(dlg, width, height)
+	modalLines := strings.Split(modalStr, "\n")
+	bgLines := strings.Split(bg, "\n")
+
+	modalHeight := len(modalLines)
+	if modalHeight == 0 {
+		return bg
+	}
+
+	// Ensure bgLines has at least height lines, preserving the footer on the bottom-most line
+	if len(bgLines) < height {
+		footer := ""
+		if len(bgLines) > 0 {
+			footer = bgLines[len(bgLines)-1]
+			bgLines = bgLines[:len(bgLines)-1]
+		}
+		for len(bgLines) < height-1 {
+			bgLines = append(bgLines, strings.Repeat(" ", width))
+		}
+		bgLines = append(bgLines, footer)
+	}
+
+	startY := (len(bgLines) - modalHeight) / 2
+	if startY < 2 {
+		startY = 2
+	}
+	if startY+modalHeight >= len(bgLines) {
+		startY = len(bgLines) - modalHeight - 1
+		if startY < 0 {
+			startY = 0
+		}
+	}
+
+	for i, mLine := range modalLines {
+		targetY := startY + i
+		centeredLine := lipgloss.PlaceHorizontal(width, lipgloss.Center, mLine)
+		if targetY < len(bgLines) {
+			bgLines[targetY] = centeredLine
+		} else {
+			bgLines = append(bgLines, centeredLine)
+		}
+	}
+
+	return strings.Join(bgLines, "\n")
+}
+
 func (m Model) renderFooter(width int) string {
 	theme := m.theme
-	if m.confirmDelete {
-		var warnText string
-		if m.deleteTaskID != "" {
-			warnText = fmt.Sprintf(" ⚠️  Delete task %s permanently? Press [y] to confirm, [n/Esc] to cancel ", m.deleteTaskID)
-			if width < len(warnText) {
-				warnText = fmt.Sprintf(" Delete %s? [y/N] ", m.deleteTaskID)
-			}
-		} else {
-			warnText = fmt.Sprintf(" ⚠️  Delete %d selected tasks permanently? Press [y] to confirm, [n/Esc] to cancel ", len(m.selected))
-			if width < len(warnText) {
-				warnText = fmt.Sprintf(" Delete %d tasks? [y/N] ", len(m.selected))
+	if dlg := m.activeConfirmDialog(); dlg != nil {
+		warnText := fmt.Sprintf(" ⚠️  %s  Press [y/Enter] to confirm, [n/Esc] to cancel ", dlg.Prompt)
+		if width < len(warnText) {
+			switch dlg.Kind {
+			case ConfirmDelete:
+				if dlg.IsBatch {
+					warnText = fmt.Sprintf(" Delete %d tasks? [y/N] ", len(dlg.TargetIDs))
+				} else if len(dlg.TargetIDs) > 0 {
+					warnText = fmt.Sprintf(" Delete %s? [y/N] ", dlg.TargetIDs[0])
+				}
+			case ConfirmDone:
+				if dlg.IsBatch {
+					warnText = fmt.Sprintf(" Done %d tasks? [y/N] ", len(dlg.TargetIDs))
+				} else if len(dlg.TargetIDs) > 0 {
+					warnText = fmt.Sprintf(" Done %s? [y/N] ", dlg.TargetIDs[0])
+				}
+			case ConfirmClaim:
+				if dlg.IsBatch {
+					warnText = fmt.Sprintf(" Claim %d tasks? [y/N] ", len(dlg.TargetIDs))
+				} else if len(dlg.TargetIDs) > 0 {
+					warnText = fmt.Sprintf(" Claim %s? [y/N] ", dlg.TargetIDs[0])
+				}
+			default:
+				warnText = fmt.Sprintf(" %s [y/N] ", dlg.Prompt)
 			}
 		}
 		return theme.FooterBg.Width(width).Render(theme.DiffSub.Render(warnText))
@@ -1724,6 +2187,11 @@ func (m Model) renderFooter(width int) string {
 
 	key := func(k, action string) string {
 		return theme.FooterKey.Render("["+k+"]") + " " + theme.FooterDesc.Render(action)
+	}
+
+	undoKey := ""
+	if len(m.undoStack) > 0 {
+		undoKey = theme.ModalKey.Render("[u] Undo")
 	}
 
 	if len(m.selected) > 0 {
@@ -1737,29 +2205,44 @@ func (m Model) renderFooter(width int) string {
 				theme.CountProg.Render(fmt.Sprintf("[s] Status (%d)", selCount)),
 				theme.CountOpen.Render(fmt.Sprintf("[a] Claim (%d)", selCount)),
 				theme.DiffSub.Render(fmt.Sprintf("[x] Del (%d)", selCount)),
+			}
+			if undoKey != "" {
+				keys = append(keys, undoKey)
+			}
+			keys = append(keys,
 				key("Space", "Toggle"),
 				key("V", "All"),
 				theme.FilterIndicator.Render("[Esc] Clear"),
 				theme.Age.Render("[q] Quit"),
-			}
+			)
 		} else if width >= 80 {
 			keys = []string{
 				selBadge,
 				theme.CountDone.Render(fmt.Sprintf("[d] Done(%d)", selCount)),
 				theme.CountProg.Render(fmt.Sprintf("[s] Status(%d)", selCount)),
 				theme.DiffSub.Render(fmt.Sprintf("[x] Del(%d)", selCount)),
+			}
+			if undoKey != "" {
+				keys = append(keys, undoKey)
+			}
+			keys = append(keys,
 				key("Space", "Tgl"),
 				theme.FilterIndicator.Render("[Esc]"),
 				theme.Age.Render("[q]"),
-			}
+			)
 		} else {
 			keys = []string{
 				selBadge,
 				theme.CountDone.Render(fmt.Sprintf("[d](%d)", selCount)),
 				theme.DiffSub.Render(fmt.Sprintf("[x](%d)", selCount)),
+			}
+			if undoKey != "" {
+				keys = append(keys, undoKey)
+			}
+			keys = append(keys,
 				theme.FilterIndicator.Render("[Esc]"),
 				theme.Age.Render("[q]"),
-			}
+			)
 		}
 		footerText := strings.Join(keys, "  ")
 		if m.statusMsg != "" {
@@ -1797,8 +2280,11 @@ func (m Model) renderFooter(width int) string {
 				doneLabel,
 				statusLabel,
 				theme.DiffSub.Render("[x] Del"),
-				theme.Age.Render("[q] Quit"),
 			}
+			if undoKey != "" {
+				keys = append(keys, undoKey)
+			}
+			keys = append(keys, theme.Age.Render("[q] Quit"))
 		} else if width >= 80 {
 			keys = []string{
 				theme.BatchBadge.Render("DETAILS"),
@@ -1807,15 +2293,21 @@ func (m Model) renderFooter(width int) string {
 				key("Enter", "Diff"),
 				doneLabel,
 				statusLabel,
-				theme.Age.Render("[q]"),
 			}
+			if undoKey != "" {
+				keys = append(keys, undoKey)
+			}
+			keys = append(keys, theme.Age.Render("[q]"))
 		} else {
 			keys = []string{
 				theme.BatchBadge.Render("DET"),
 				key("j/k", "Scroll"),
 				key("Tab", "Back"),
-				theme.Age.Render("[q]"),
 			}
+			if undoKey != "" {
+				keys = append(keys, undoKey)
+			}
+			keys = append(keys, theme.Age.Render("[q]"))
 		}
 		footerText := strings.Join(keys, "  ")
 		if m.statusMsg != "" {
@@ -1836,13 +2328,18 @@ func (m Model) renderFooter(width int) string {
 			doneLabel,
 			statusLabel,
 			theme.DiffSub.Render("[x]") + " " + theme.FooterDesc.Render("Del"),
+		}
+		if undoKey != "" {
+			keys = append(keys, undoKey)
+		}
+		keys = append(keys,
 			key("Enter", "Diff"),
 			key("/", "Search"),
 			theme.FilterIndicator.Render("[Esc]") + " " + theme.FooterDesc.Render("Clear"),
 			key("S", "Scope"),
 			key("r", "Refresh"),
 			theme.Age.Render("[q] Quit"),
-		}
+		)
 	} else if width >= 90 {
 		keys = []string{
 			key("j/k", "Move"),
@@ -1854,11 +2351,16 @@ func (m Model) renderFooter(width int) string {
 			doneLabel,
 			statusLabel,
 			theme.DiffSub.Render("[x] Del"),
+		}
+		if undoKey != "" {
+			keys = append(keys, undoKey)
+		}
+		keys = append(keys,
 			key("Enter", "Diff"),
 			key("/", "Search"),
 			key("S", "Scope"),
 			theme.Age.Render("[q] Quit"),
-		}
+		)
 	} else if width >= 70 {
 		keys = []string{
 			key("j/k", "Nav"),
@@ -1867,9 +2369,14 @@ func (m Model) renderFooter(width int) string {
 			key("a", "Claim"),
 			doneLabel,
 			key("x", "Del"),
+		}
+		if undoKey != "" {
+			keys = append(keys, undoKey)
+		}
+		keys = append(keys,
 			key("/", "Find"),
 			theme.Age.Render("[q] Quit"),
-		}
+		)
 	} else {
 		// Ultra-compact footer for narrow/split terminal panes (< 70 cols)
 		keys = []string{
@@ -1877,9 +2384,14 @@ func (m Model) renderFooter(width int) string {
 			key("a", "Claim"),
 			doneLabel,
 			key("x", "Del"),
+		}
+		if undoKey != "" {
+			keys = append(keys, undoKey)
+		}
+		keys = append(keys,
 			key("/", "Find"),
 			theme.Age.Render("[q]"),
-		}
+		)
 	}
 
 	footerText := strings.Join(keys, "  ")

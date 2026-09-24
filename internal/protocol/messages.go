@@ -12,14 +12,15 @@ type Action string
 const (
 	ActionPing         Action = "ping"
 	ActionCreateTask   Action = "create_task"
-	ActionUpdateTask   Action = "update_task"
-	ActionClaimTask    Action = "claim_task"
-	ActionGetTask      Action = "get_task"
-	ActionListTasks    Action = "list_tasks"
-	ActionDeleteTask   Action = "delete_task"
-	ActionAttachGit    Action = "attach_git"
-	ActionStreamEvents Action = "stream_events"
-	ActionShutdown     Action = "shutdown"
+	ActionUpdateTask    Action = "update_task"
+	ActionClaimTask     Action = "claim_task"
+	ActionGetTask       Action = "get_task"
+	ActionListTasks     Action = "list_tasks"
+	ActionDeleteTask    Action = "delete_task"
+	ActionRestoreTask   Action = "restore_task"
+	ActionAttachGit     Action = "attach_git"
+	ActionStreamEvents  Action = "stream_events"
+	ActionShutdown      Action = "shutdown"
 	ActionBackupCreate  Action = "backup_create"
 	ActionBackupList    Action = "backup_list"
 	ActionBackupRestore Action = "backup_restore"
@@ -89,6 +90,10 @@ type ListTasksPayload struct {
 
 type DeleteTaskPayload struct {
 	ID string `json:"id"`
+}
+
+type RestoreTaskPayload struct {
+	Task *domain.Task `json:"task"`
 }
 
 type AttachGitPayload struct {
