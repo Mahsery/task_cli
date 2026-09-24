@@ -261,7 +261,7 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		if err != nil {
 			return errorResp(req.ID, err.Error())
 		}
-		task, err := db.UpdateTask(p.ID, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.Assignee, p.AddNote, p.Author)
+		task, err := db.UpdateTask(p.ID, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.AddTags, p.RemoveTags, p.Assignee, p.AddNote, p.Author)
 		if err != nil {
 			return errorResp(req.ID, err.Error())
 		}
@@ -271,6 +271,31 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			Timestamp: time.Now(),
 			Task:      task,
 			Message:   fmt.Sprintf("~ %s updated (status: %s)", task.ID, task.Status),
+		})
+
+		data, _ := json.Marshal(task)
+		resp.Data = data
+		return resp
+
+	case protocol.ActionClaimTask:
+		var p protocol.ClaimTaskPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		task, err := db.ClaimTask(p.ID, p.Assignee, p.Force)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+
+		s.pubsub.Publish(protocol.Event{
+			Type:      protocol.EventTaskUpdated,
+			Timestamp: time.Now(),
+			Task:      task,
+			Message:   fmt.Sprintf("* %s claimed by %q", task.ID, p.Assignee),
 		})
 
 		data, _ := json.Marshal(task)

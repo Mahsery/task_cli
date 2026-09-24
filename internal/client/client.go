@@ -214,6 +214,24 @@ func (c *Client) UpdateTask(p protocol.UpdateTaskPayload) (*domain.Task, error) 
 	return &task, nil
 }
 
+func (c *Client) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
+	p := protocol.ClaimTaskPayload{
+		ID:       id,
+		Assignee: assignee,
+		Force:    force,
+	}
+	resp, err := c.call(protocol.ActionClaimTask, p)
+	if err != nil {
+		return nil, err
+	}
+	var task domain.Task
+	if err := json.Unmarshal(resp.Data, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+
 func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	p := protocol.ListTasksPayload{
 		Scope:    c.Scope,

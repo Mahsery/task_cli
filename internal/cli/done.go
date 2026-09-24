@@ -33,28 +33,45 @@ Use --diff to snapshot uncommitted working tree changes, or --no-commit to skip 
 		taskID := args[0]
 
 		var sha, msg, stat, diff string
+		autoHead := false
 		if !doneNoCommit && repoRoot != "" {
 			var commitInfo *git.CommitInfo
 			var err error
 
 			if doneDiff {
 				commitInfo, err = git.GetWorkingDiff(repoRoot)
+				if err != nil {
+					return fmt.Errorf("failed to get working tree diff: %w", err)
+				}
 			} else if doneCommit != "" {
 				commitInfo, err = git.GetCommit(repoRoot, doneCommit)
+				if err != nil {
+					return fmt.Errorf("failed to lookup commit %q: %w", doneCommit, err)
+				}
 			} else {
 				commitInfo, err = git.GetLatestCommit(repoRoot)
+				if err == nil && commitInfo != nil {
+					autoHead = true
+				}
 			}
 
-			if err == nil && commitInfo != nil {
+			if commitInfo != nil {
 				sha = commitInfo.ShortSHA
 				msg = commitInfo.Subject
 				stat = commitInfo.DiffStat
 				diff = commitInfo.DiffContent
 			}
+		} else if doneCommit != "" && repoRoot == "" {
+			return fmt.Errorf("cannot attach commit %q: not in a git repository", doneCommit)
 		}
 
 		var updated *domain.Task
 		var err error
+
+		author := cfg.Actor
+		if author == "" {
+			author = git.GetAuthor()
+		}
 
 		if sha != "" {
 			updated, err = taskClient.AttachGit(taskID, sha, msg, stat, diff, true)
@@ -63,7 +80,7 @@ Use --diff to snapshot uncommitted working tree changes, or --no-commit to skip 
 			updated, err = taskClient.UpdateTask(protocol.UpdateTaskPayload{
 				ID:     taskID,
 				Status: &status,
-				Author: git.GetAuthor(),
+				Author: author,
 			})
 		}
 
@@ -77,7 +94,11 @@ Use --diff to snapshot uncommitted working tree changes, or --no-commit to skip 
 
 		fmt.Printf("✓ Marked %s as DONE\n", updated.ID)
 		if updated.CommitSHA != "" {
-			fmt.Printf("+ Attached commit %s (%q)\n", updated.CommitSHA, updated.CommitMsg)
+			if autoHead {
+				fmt.Printf("+ Auto-attached HEAD commit %s (%q) [use -c <ref> to bind a specific commit]\n", updated.CommitSHA, updated.CommitMsg)
+			} else {
+				fmt.Printf("+ Attached commit %s (%q)\n", updated.CommitSHA, updated.CommitMsg)
+			}
 			if updated.DiffStat != "" {
 				fmt.Println(updated.DiffStat)
 			}

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"task_cli/internal/git"
 )
 
 type Config struct {
@@ -11,6 +13,7 @@ type Config struct {
 	TCPAddr    string
 	GlobalDir  string
 	Editor     string
+	Actor      string
 }
 
 func Load() *Config {
@@ -49,11 +52,26 @@ func Load() *Config {
 		editor = "nvim"
 	}
 
+	actor := os.Getenv("TK_ACTOR")
+	if actor == "" {
+		actor = os.Getenv("TK_AUTHOR")
+	}
+	if actor == "" {
+		actor = git.GetAuthor()
+	}
+	if actor == "" {
+		actor = os.Getenv("USER")
+	}
+	if actor == "" {
+		actor = "anonymous"
+	}
+
 	return &Config{
 		SocketPath: socketPath,
 		TCPAddr:    tcpAddr,
 		GlobalDir:  appDir,
 		Editor:     editor,
+		Actor:      actor,
 	}
 }
 

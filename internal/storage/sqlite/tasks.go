@@ -37,24 +37,16 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 	}
 	defer tx.Rollback()
 
-	// Compute next sequential number for this scope
-	var maxSeq sql.NullInt64
-	var query string
-	var queryArgs []any
-	if scope == "global" {
-		query = "SELECT MAX(seq_num) FROM tasks WHERE scope = 'global'"
-	} else {
-		query = "SELECT MAX(seq_num) FROM tasks WHERE scope = ? AND repo_path = ?"
-		queryArgs = []any{scope, repoPath}
-	}
-
-	if err := tx.QueryRow(query, queryArgs...).Scan(&maxSeq); err != nil && err != sql.ErrNoRows {
-		return nil, fmt.Errorf("failed to get max seq_num: %w", err)
-	}
-
-	nextSeq := int64(1)
-	if maxSeq.Valid {
-		nextSeq = maxSeq.Int64 + 1
+	// Monotonically allocate sequence number from persistent task_sequences table
+	var nextSeq int64
+	seqRow := tx.QueryRow(`
+		INSERT INTO task_sequences (scope, repo_path, last_seq)
+		VALUES (?, ?, 1)
+		ON CONFLICT(scope, repo_path) DO UPDATE SET last_seq = task_sequences.last_seq + 1
+		RETURNING last_seq;
+	`, scope, repoPath)
+	if err := seqRow.Scan(&nextSeq); err != nil {
+		return nil, fmt.Errorf("failed to allocate task sequence number: %w", err)
 	}
 
 	taskID := fmt.Sprintf("%s-%d", prefix, nextSeq)
@@ -159,13 +151,24 @@ func (d *DB) GetTask(id string) (*domain.Task, error) {
 	return &task, nil
 }
 
-func (d *DB) UpdateTask(id string, title, description *string, status *domain.Status, priority *domain.Priority, tags *[]string, assignee *string, addNote *string, author string) (*domain.Task, error) {
+func (d *DB) UpdateTask(id string, title, description *string, status *domain.Status, priority *domain.Priority, tags *[]string, addTags []string, removeTags []string, assignee *string, addNote *string, author string) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	task, err := d.GetTask(id)
+	tx, err := d.conn.Begin()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Verify task exists and load current state in transaction
+	var currentTagsJSON string
+	err = tx.QueryRow("SELECT tags FROM tasks WHERE id = ?", id).Scan(&currentTagsJSON)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("task %s not found", id)
+		}
+		return nil, fmt.Errorf("failed to query task: %w", err)
 	}
 
 	now := time.Now().UTC()
@@ -173,57 +176,80 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 	args := []any{now}
 
 	if title != nil {
-		task.Title = *title
 		updates = append(updates, "title = ?")
 		args = append(args, *title)
 	}
 	if description != nil {
-		task.Description = *description
 		updates = append(updates, "description = ?")
 		args = append(args, *description)
 	}
 	if status != nil {
-		task.Status = *status
 		updates = append(updates, "status = ?")
 		args = append(args, string(*status))
 
 		if *status == domain.StatusDone || *status == domain.StatusClosed {
-			task.ClosedAt = &now
 			updates = append(updates, "closed_at = ?")
 			args = append(args, now)
 		} else {
-			task.ClosedAt = nil
 			updates = append(updates, "closed_at = NULL")
 		}
 	}
 	if priority != nil {
-		task.Priority = *priority
 		updates = append(updates, "priority = ?")
 		args = append(args, string(*priority))
 	}
-	if tags != nil {
-		task.Tags = *tags
-		tagsJSON, err := json.Marshal(*tags)
+
+	// Atomic tag mutations inside the transaction
+	if tags != nil || len(addTags) > 0 || len(removeTags) > 0 {
+		var currentTags []string
+		if currentTagsJSON != "" && currentTagsJSON != "[]" {
+			_ = json.Unmarshal([]byte(currentTagsJSON), &currentTags)
+		}
+
+		if tags != nil {
+			currentTags = *tags
+		}
+		if len(addTags) > 0 {
+			tagSet := make(map[string]bool)
+			for _, t := range currentTags {
+				tagSet[t] = true
+			}
+			for _, t := range addTags {
+				t = strings.TrimSpace(t)
+				if t != "" && !tagSet[t] {
+					tagSet[t] = true
+					currentTags = append(currentTags, t)
+				}
+			}
+		}
+		if len(removeTags) > 0 {
+			removeSet := make(map[string]bool)
+			for _, t := range removeTags {
+				removeSet[strings.TrimSpace(t)] = true
+			}
+			var filtered []string
+			for _, t := range currentTags {
+				if !removeSet[t] {
+					filtered = append(filtered, t)
+				}
+			}
+			currentTags = filtered
+		}
+		newTagsBytes, err := json.Marshal(currentTags)
 		if err != nil {
 			return nil, err
 		}
 		updates = append(updates, "tags = ?")
-		args = append(args, string(tagsJSON))
+		args = append(args, string(newTagsBytes))
 	}
+
 	if assignee != nil {
-		task.Assignee = *assignee
 		updates = append(updates, "assignee = ?")
 		args = append(args, *assignee)
 	}
 
 	args = append(args, id)
 	updateSQL := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(updates, ", "))
-
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
 
 	if _, err := tx.Exec(updateSQL, args...); err != nil {
 		return nil, fmt.Errorf("failed to update task: %w", err)
@@ -239,6 +265,55 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit update: %w", err)
+	}
+
+	return d.GetTask(id)
+}
+
+func (d *DB) ClaimTask(id string, assignee string, force bool) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentAssignee, currentStatus string
+	query := "SELECT assignee, status FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("task %s not found", id)
+		}
+		return nil, fmt.Errorf("failed to query task: %w", err)
+	}
+
+	// Conditional atomic claim: competing claim fails unless force is true
+	if currentAssignee != "" && currentAssignee != assignee && !force {
+		return nil, fmt.Errorf("task %s is already claimed by %q (use --force to overwrite)", id, currentAssignee)
+	}
+
+	now := time.Now().UTC()
+	newStatus := currentStatus
+	if currentStatus == string(domain.StatusOpen) {
+		newStatus = string(domain.StatusInProgress)
+	}
+
+	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, updated_at = ? WHERE id = ?"
+	if _, err := tx.Exec(updateSQL, assignee, newStatus, now, id); err != nil {
+		return nil, fmt.Errorf("failed to claim task: %w", err)
+	}
+
+	noteID := uuid.New().String()
+	noteContent := fmt.Sprintf("Claimed task as %q", assignee)
+	noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
+	if _, err := tx.Exec(noteSQL, noteID, id, assignee, noteContent, now); err != nil {
+		return nil, fmt.Errorf("failed to insert claim note: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit claim: %w", err)
 	}
 
 	return d.GetTask(id)

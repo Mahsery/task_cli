@@ -69,7 +69,7 @@ func TestUpdateTaskAndNotes(t *testing.T) {
 	newTitle := "Updated Title"
 	newStatus := domain.StatusInProgress
 	note := "Working on this now"
-	updated, err := db.UpdateTask(task.ID, &newTitle, nil, &newStatus, nil, nil, nil, &note, "Bob")
+	updated, err := db.UpdateTask(task.ID, &newTitle, nil, &newStatus, nil, nil, nil, nil, nil, &note, "Bob")
 	if err != nil {
 		t.Fatalf("update failed: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestListTasksFiltersAndNotes(t *testing.T) {
 		t.Fatalf("create t1 failed: %v", err)
 	}
 	note := "First note on Task One"
-	_, err = db.UpdateTask(t1.ID, nil, nil, nil, nil, nil, nil, &note, "Dev")
+	_, err = db.UpdateTask(t1.ID, nil, nil, nil, nil, nil, nil, nil, nil, &note, "Dev")
 	if err != nil {
 		t.Fatalf("update t1 failed: %v", err)
 	}
@@ -385,6 +385,163 @@ func TestSearchTagsAndDSL(t *testing.T) {
 		t.Fatalf("expected 1 task matching 'odin NOT compiler', got %d", len(notTasks))
 	}
 }
+
+func TestMonotonicSequencesAfterDelete(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	t1, err := db.CreateTask("local", "/repo/test", "Task 1", "", domain.StatusOpen, domain.PriorityNormal, nil, "Dev", "")
+	if err != nil {
+		t.Fatalf("create t1 failed: %v", err)
+	}
+	if t1.ID != "T-1" {
+		t.Fatalf("expected T-1, got %s", t1.ID)
+	}
+
+	t2, err := db.CreateTask("local", "/repo/test", "Task 2", "", domain.StatusOpen, domain.PriorityNormal, nil, "Dev", "")
+	if err != nil {
+		t.Fatalf("create t2 failed: %v", err)
+	}
+	if t2.ID != "T-2" {
+		t.Fatalf("expected T-2, got %s", t2.ID)
+	}
+
+	// Delete T-2 (the latest sequence)
+	if err := db.DeleteTask(t2.ID); err != nil {
+		t.Fatalf("delete t2 failed: %v", err)
+	}
+
+	// Next task created MUST be T-3, NOT reissuing T-2
+	t3, err := db.CreateTask("local", "/repo/test", "Task 3", "", domain.StatusOpen, domain.PriorityNormal, nil, "Dev", "")
+	if err != nil {
+		t.Fatalf("create t3 failed: %v", err)
+	}
+	if t3.ID != "T-3" {
+		t.Fatalf("expected monotonic ID T-3 after deleting T-2, but got %s (ID was reused!)", t3.ID)
+	}
+
+	// Delete all remaining tasks
+	if err := db.DeleteTask(t1.ID); err != nil {
+		t.Fatalf("delete t1 failed: %v", err)
+	}
+	if err := db.DeleteTask(t3.ID); err != nil {
+		t.Fatalf("delete t3 failed: %v", err)
+	}
+
+	// With empty table, next task must still be T-4
+	t4, err := db.CreateTask("local", "/repo/test", "Task 4", "", domain.StatusOpen, domain.PriorityNormal, nil, "Dev", "")
+	if err != nil {
+		t.Fatalf("create t4 failed: %v", err)
+	}
+	if t4.ID != "T-4" {
+		t.Fatalf("expected monotonic ID T-4 on empty table, but got %s", t4.ID)
+	}
+}
+
+func TestAtomicCompetingClaims(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	task, err := db.CreateTask("local", "/repo/test", "Claim Test Task", "", domain.StatusOpen, domain.PriorityNormal, nil, "Creator", "")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if task.Status != domain.StatusOpen || task.Assignee != "" {
+		t.Fatalf("expected open unassigned task, got status=%s assignee=%s", task.Status, task.Assignee)
+	}
+
+	// Worker 1 claims task
+	claimed1, err := db.ClaimTask(task.ID, "worker-1", false)
+	if err != nil {
+		t.Fatalf("worker-1 claim failed: %v", err)
+	}
+	if claimed1.Assignee != "worker-1" || claimed1.Status != domain.StatusInProgress {
+		t.Fatalf("expected worker-1 and in_progress, got assignee=%s status=%s", claimed1.Assignee, claimed1.Status)
+	}
+	if len(claimed1.Notes) != 1 {
+		t.Fatalf("expected 1 claim attribution note, got %d", len(claimed1.Notes))
+	}
+
+	// Worker 2 attempts competing claim without force -> MUST FAIL
+	_, err = db.ClaimTask(task.ID, "worker-2", false)
+	if err == nil {
+		t.Fatalf("competing claim without force should have failed, but succeeded")
+	}
+
+	// Worker 1 re-claims task (same assignee, idempotent) -> MUST SUCCEED
+	_, err = db.ClaimTask(task.ID, "worker-1", false)
+	if err != nil {
+		t.Fatalf("worker-1 re-claiming own task should succeed, got: %v", err)
+	}
+
+	// Worker 2 forces claim with force=true -> MUST SUCCEED
+	forced, err := db.ClaimTask(task.ID, "worker-2", true)
+	if err != nil {
+		t.Fatalf("worker-2 force claim failed: %v", err)
+	}
+	if forced.Assignee != "worker-2" {
+		t.Fatalf("expected assignee worker-2 after forced claim, got %s", forced.Assignee)
+	}
+}
+
+func TestConcurrentTagAdditions(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	task, err := db.CreateTask("local", "/repo/test", "Tag Test Task", "", domain.StatusOpen, domain.PriorityNormal, []string{"base"}, "Dev", "")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	const numWorkers = 20
+	var wg sync.WaitGroup
+	errCh := make(chan error, numWorkers)
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			tag := fmt.Sprintf("tag-%02d", idx)
+			_, err := db.UpdateTask(task.ID, nil, nil, nil, nil, nil, []string{tag}, nil, nil, nil, "Dev")
+			if err != nil {
+				errCh <- err
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		t.Fatalf("concurrent tag addition failed: %v", err)
+	}
+
+	finalTask, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("get task failed: %v", err)
+	}
+
+	// Must have 1 base tag + 20 concurrent tags = 21 tags
+	if len(finalTask.Tags) != numWorkers+1 {
+		t.Fatalf("expected %d tags, but got %d: %v", numWorkers+1, len(finalTask.Tags), finalTask.Tags)
+	}
+
+	// Test atomic removal
+	removeTag := "tag-00"
+	removed, err := db.UpdateTask(task.ID, nil, nil, nil, nil, nil, nil, []string{removeTag}, nil, nil, "Dev")
+	if err != nil {
+		t.Fatalf("remove tag failed: %v", err)
+	}
+	if len(removed.Tags) != numWorkers {
+		t.Fatalf("expected %d tags after removing %s, got %d", numWorkers, removeTag, len(removed.Tags))
+	}
+	for _, tg := range removed.Tags {
+		if tg == removeTag {
+			t.Fatalf("tag %s was not removed", removeTag)
+		}
+	}
+}
+
 
 
 

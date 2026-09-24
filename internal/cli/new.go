@@ -115,7 +115,10 @@ and subsequent lines form the description.`,
 			desc = parsed.Description
 		}
 
-		author := git.GetAuthor()
+		author := cfg.Actor
+		if author == "" {
+			author = git.GetAuthor()
+		}
 		task, err := taskClient.CreateTask(protocol.CreateTaskPayload{
 			Title:       title,
 			Description: desc,

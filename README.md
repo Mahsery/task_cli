@@ -89,7 +89,8 @@ tk
 | `tk list` | `ls` | `[-s status] [-p prio] [-l tag] [-a assignee] [-q search] [--short] [--limit N]` | Query tasks with formatted table, one-liners, or JSON | `tk list -s open -p high`<br>`tk ls -l auth --short` |
 | `tk search` | `find` | `<query...> [-s status] [-p prio] [-l tag] [-a assignee] [--short] [--limit N]` | Search tasks with boolean DSL (`AND`, `OR`, `NOT`, `tag:`, `s:`, `p:`, `a:`, `"exact"`) | `tk search bug AND odin`<br>`tk search tag:security priority:high`<br>`tk search "memory leak" NOT closed` |
 | `tk show` | — | `<id>` | Display task metadata, notes, commit SHA, and diff content | `tk show T-1`<br>`tk show G-2 --json` |
-| `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [-l tags] [--add-tag tag] [-a assignee] [-m note] [-d desc]` | Modify task fields via CLI flags or open interactive `$EDITOR` buffer | `tk edit T-1 -s in_progress`<br>`tk edit T-1 -m "Patch reviewed"` |
+| `tk claim` | — | `<id> [--actor actor] [--force]` | Atomically claim a task for the current actor; prevents race conditions | `tk claim T-1`<br>`tk claim T-1 --actor bot-1` |
+| `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [-l tags] [--add-tag tag] [--remove-tag tag] [--claim] [-a assignee] [-m note] [-d desc]` | Modify task fields via CLI flags, atomically add/remove tags, or open `$EDITOR` | `tk edit T-1 -s in_progress`<br>`tk edit T-1 --add-tag review`<br>`tk edit T-1 --claim` |
 | `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit]` | Mark task done; auto-attaches latest commit & diff by default | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 --no-commit` |
 | `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
 | `tk delete` | `rm` | `<id>` | Permanently remove a task and associated notes/diffs | `tk delete T-1`<br>`tk rm G-4` |
@@ -101,6 +102,7 @@ tk
 ### Global Flags
 
 - `-g, --global`: Operate on the global task database (`~/.local/share/task_cli/global.db`) instead of the current git repository.
+- `--actor <name>`: Explicit actor identity for task attribution (overrides `TK_ACTOR`, `TK_AUTHOR`, and git author).
 - `--json`: Output machine-readable JSON for scripting, CI/CD, or LLM agent pipelines.
 
 ---
@@ -133,6 +135,8 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 
 | Variable | Default Value | Purpose |
 |----------|---------------|---------|
+| `TK_ACTOR` | *(unset)* | Primary actor identity for task author, claim, and note attribution |
+| `TK_AUTHOR` | *(unset)* | Secondary actor identity fallback before git author |
 | `TK_SOCKET` | `/run/user/<uid>/tk.sock`<br>*(fallback: `~/.local/share/task_cli/tk.sock`)* | Unix Domain Socket path used for client-daemon IPC communication |
 | `TK_ADDR` | *(unset)* | Optional TCP address (`host:port`) to bind or connect to (e.g. `127.0.0.1:4567` for SSH tunneling or containers) |
 | `EDITOR` | `$VISUAL` -> `nvim` | Text editor invoked when creating or editing tasks interactively |

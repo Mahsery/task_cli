@@ -80,6 +80,18 @@ func (d *DB) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_notes_task ON task_notes(task_id, created_at ASC);
+
+	CREATE TABLE IF NOT EXISTS task_sequences (
+		scope TEXT NOT NULL,
+		repo_path TEXT NOT NULL DEFAULT '',
+		last_seq INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (scope, repo_path)
+	);
+
+	INSERT OR IGNORE INTO task_sequences (scope, repo_path, last_seq)
+	SELECT scope, repo_path, COALESCE(MAX(seq_num), 0)
+	FROM tasks
+	GROUP BY scope, repo_path;
 	`
 
 	_, err := d.conn.Exec(schema)

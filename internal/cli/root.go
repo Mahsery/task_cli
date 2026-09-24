@@ -19,6 +19,7 @@ var (
 	jsonFlag    bool
 	flagSocket  string
 	flagTCP     string
+	flagActor   string
 	cfg         *config.Config
 	taskClient  *client.Client
 	scope       string
@@ -46,6 +47,9 @@ Running 'tk' without arguments in an interactive terminal launches the TUI.`,
 		}
 		if flagTCP != "" {
 			cfg.TCPAddr = flagTCP
+		}
+		if flagActor != "" {
+			cfg.Actor = flagActor
 		}
 
 		scope = "local"
@@ -88,8 +92,10 @@ func init() {
 	RootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output machine-readable JSON for LLM / script automation")
 	RootCmd.PersistentFlags().StringVar(&flagSocket, "socket", "", "Custom unix socket path for daemon IPC")
 	RootCmd.PersistentFlags().StringVar(&flagTCP, "tcp", "", "Optional TCP address to connect to (e.g. 127.0.0.1:4567)")
+	RootCmd.PersistentFlags().StringVar(&flagActor, "actor", "", "Explicit actor identity for task attribution (overrides TK_ACTOR/TK_AUTHOR/git)")
 
 	RootCmd.AddCommand(newCmd)
+	RootCmd.AddCommand(claimCmd)
 	RootCmd.AddCommand(editCmd)
 	RootCmd.AddCommand(listCmd)
 	RootCmd.AddCommand(searchCmd)

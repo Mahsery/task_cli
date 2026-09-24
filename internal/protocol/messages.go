@@ -13,6 +13,7 @@ const (
 	ActionPing         Action = "ping"
 	ActionCreateTask   Action = "create_task"
 	ActionUpdateTask   Action = "update_task"
+	ActionClaimTask    Action = "claim_task"
 	ActionGetTask      Action = "get_task"
 	ActionListTasks    Action = "list_tasks"
 	ActionDeleteTask   Action = "delete_task"
@@ -53,9 +54,17 @@ type UpdateTaskPayload struct {
 	Status      *domain.Status   `json:"status,omitempty"`
 	Priority    *domain.Priority `json:"priority,omitempty"`
 	Tags        *[]string        `json:"tags,omitempty"`
+	AddTags     []string         `json:"add_tags,omitempty"`
+	RemoveTags  []string         `json:"remove_tags,omitempty"`
 	Assignee    *string          `json:"assignee,omitempty"`
 	AddNote     *string          `json:"add_note,omitempty"`
 	Author      string           `json:"author,omitempty"`
+}
+
+type ClaimTaskPayload struct {
+	ID       string `json:"id"`
+	Assignee string `json:"assignee"`
+	Force    bool   `json:"force,omitempty"`
 }
 
 type GetTaskPayload struct {
