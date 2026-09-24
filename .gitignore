@@ -1,3 +1,4 @@
 /tk
 .tasks/
 *.test
+!AGENTS.md
