@@ -2,11 +2,13 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -247,7 +249,7 @@ func (c *Client) StreamEvents(handler func(protocol.Event)) error {
 	for {
 		var resp protocol.Response
 		if err := c.dec.Decode(&resp); err != nil {
-			if err == io.EOF {
+			if err == io.EOF || errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") {
 				return nil
 			}
 			return err

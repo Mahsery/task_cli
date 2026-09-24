@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"task_cli/internal/protocol"
@@ -25,12 +29,11 @@ var watchCmd = &cobra.Command{
 		go func() {
 			<-sigCh
 			taskClient.Close()
-			os.Exit(0)
 		}()
 
 		fmt.Println("Streaming live task events from daemon... (Ctrl+C to quit)")
 
-		return taskClient.StreamEvents(func(ev protocol.Event) {
+		err := taskClient.StreamEvents(func(ev protocol.Event) {
 			if jsonFlag {
 				_ = outputJSON(ev)
 				return
@@ -38,5 +41,13 @@ var watchCmd = &cobra.Command{
 			ts := ev.Timestamp.Format("15:04:05")
 			fmt.Printf("[%s] %s\n", ts, ev.Message)
 		})
+
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) || strings.Contains(err.Error(), "use of closed network connection") || errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		return nil
 	},
 }

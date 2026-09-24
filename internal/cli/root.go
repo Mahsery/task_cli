@@ -67,6 +67,7 @@ operates over a background daemon socket, and supports dumb terminals and SSH.`,
 }
 
 func init() {
+	RootCmd.SilenceUsage = true
 	RootCmd.PersistentFlags().BoolVarP(&globalFlag, "global", "g", false, "Operate on global tasks instead of current git repo")
 	RootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output machine-readable JSON for LLM / script automation")
 
