@@ -129,7 +129,18 @@ type andNode struct {
 }
 
 func (n *andNode) Eval(task *domain.Task) bool {
-	return n.left.Eval(task) && n.right.Eval(task)
+	if n == nil {
+		return true
+	}
+	left := true
+	if n.left != nil {
+		left = n.left.Eval(task)
+	}
+	right := true
+	if n.right != nil {
+		right = n.right.Eval(task)
+	}
+	return left && right
 }
 
 type orNode struct {
@@ -138,7 +149,18 @@ type orNode struct {
 }
 
 func (n *orNode) Eval(task *domain.Task) bool {
-	return n.left.Eval(task) || n.right.Eval(task)
+	if n == nil {
+		return false
+	}
+	left := false
+	if n.left != nil {
+		left = n.left.Eval(task)
+	}
+	right := false
+	if n.right != nil {
+		right = n.right.Eval(task)
+	}
+	return left || right
 }
 
 type notNode struct {
@@ -146,6 +168,9 @@ type notNode struct {
 }
 
 func (n *notNode) Eval(task *domain.Task) bool {
+	if n == nil || n.child == nil {
+		return true
+	}
 	return !n.child.Eval(task)
 }
 

@@ -115,6 +115,11 @@ and subsequent lines form the description.`,
 			desc = parsed.Description
 		}
 
+		title = strings.TrimSpace(title)
+		if title == "" {
+			return fmt.Errorf("task title cannot be empty (use -t or provide in template)")
+		}
+
 		author := cfg.Actor
 		if author == "" {
 			author = git.GetAuthor()

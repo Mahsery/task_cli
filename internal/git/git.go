@@ -58,7 +58,18 @@ const MaxDiffContentBytes = 256 * 1024
 
 func sanitizeDiffContent(diff []byte) string {
 	if len(diff) > MaxDiffContentBytes {
-		return string(diff[:MaxDiffContentBytes]) + "\n\n... [diff truncated by tk at 256KB to preserve storage efficiency; full patch in git]"
+		cut := MaxDiffContentBytes
+		// Rewind to the nearest newline in the last 2KB if possible
+		lastNL := bytes.LastIndexByte(diff[:cut], '\n')
+		if lastNL > cut-2048 {
+			cut = lastNL
+		} else {
+			// Guarantee we do not slice in the middle of a multi-byte UTF-8 rune
+			for cut > 0 && (diff[cut]&0xC0) == 0x80 {
+				cut--
+			}
+		}
+		return strings.TrimSpace(string(diff[:cut])) + "\n\n... [diff truncated by tk at 256KB to preserve storage efficiency; full patch in git]"
 	}
 	return strings.TrimSpace(string(diff))
 }

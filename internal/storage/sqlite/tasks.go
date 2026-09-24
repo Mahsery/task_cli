@@ -17,6 +17,11 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, fmt.Errorf("task title cannot be empty")
+	}
+
 	if tags == nil {
 		tags = []string{}
 	}
@@ -176,8 +181,12 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 	args := []any{now}
 
 	if title != nil {
+		trimmed := strings.TrimSpace(*title)
+		if trimmed == "" {
+			return nil, fmt.Errorf("task title cannot be empty")
+		}
 		updates = append(updates, "title = ?")
-		args = append(args, *title)
+		args = append(args, trimmed)
 	}
 	if description != nil {
 		updates = append(updates, "description = ?")
@@ -451,6 +460,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to iterate tasks: %w", err)
 	}
+	_ = rows.Close() // Explicitly release cursor back to single connection pool before secondary query
 
 	// Batch load notes for listed tasks
 	if len(tasks) > 0 {

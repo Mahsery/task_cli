@@ -150,3 +150,32 @@ func BenchmarkSearchMatch_Scale1000(b *testing.B) {
 		}
 	}
 }
+
+func TestSearchDSLNilGuards(t *testing.T) {
+	task := &domain.Task{ID: "T-1", Title: "Test"}
+
+	var nilAnd *andNode
+	if !nilAnd.Eval(task) {
+		t.Error("nil andNode should evaluate to true safely")
+	}
+
+	partialAnd := &andNode{left: nil, right: &termNode{val: "Test"}}
+	if !partialAnd.Eval(task) {
+		t.Error("partial andNode with nil left should evaluate safely")
+	}
+
+	var nilOr *orNode
+	if nilOr.Eval(task) {
+		t.Error("nil orNode should evaluate to false safely")
+	}
+
+	partialOr := &orNode{left: nil, right: &termNode{val: "Test"}}
+	if !partialOr.Eval(task) {
+		t.Error("partial orNode with nil left should evaluate safely")
+	}
+
+	var nilNot *notNode
+	if !nilNot.Eval(task) {
+		t.Error("nil notNode should evaluate to true safely")
+	}
+}

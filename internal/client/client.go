@@ -67,7 +67,11 @@ func (c *Client) Connect() error {
 
 func (c *Client) Close() error {
 	if c.conn != nil {
-		return c.conn.Close()
+		err := c.conn.Close()
+		c.conn = nil
+		c.enc = nil
+		c.dec = nil
+		return err
 	}
 	return nil
 }

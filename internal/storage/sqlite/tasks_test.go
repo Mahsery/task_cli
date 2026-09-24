@@ -607,6 +607,40 @@ func TestListTasksDefaultOrdering(t *testing.T) {
 	}
 }
 
+func TestEmptyTitleValidation(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// 1. Create with empty or whitespace title should fail
+	_, err := db.CreateTask("local", "/repo", "", "Desc", domain.StatusOpen, domain.PriorityNormal, nil, "Author", "")
+	if err == nil {
+		t.Fatal("expected CreateTask with empty title to fail, but it succeeded")
+	}
+
+	_, err = db.CreateTask("local", "/repo", "   ", "Desc", domain.StatusOpen, domain.PriorityNormal, nil, "Author", "")
+	if err == nil {
+		t.Fatal("expected CreateTask with whitespace title to fail, but it succeeded")
+	}
+
+	// 2. Create valid task, then try to update with blank title
+	task, err := db.CreateTask("local", "/repo", "Valid Title", "Desc", domain.StatusOpen, domain.PriorityNormal, nil, "Author", "")
+	if err != nil {
+		t.Fatalf("unexpected error creating task: %v", err)
+	}
+
+	blank := ""
+	_, err = db.UpdateTask(task.ID, &blank, nil, nil, nil, nil, nil, nil, nil, nil, "Tester")
+	if err == nil {
+		t.Fatal("expected UpdateTask with blank title to fail, but it succeeded")
+	}
+
+	spaces := "   "
+	_, err = db.UpdateTask(task.ID, &spaces, nil, nil, nil, nil, nil, nil, nil, nil, "Tester")
+	if err == nil {
+		t.Fatal("expected UpdateTask with whitespace title to fail, but it succeeded")
+	}
+}
+
 
 
 

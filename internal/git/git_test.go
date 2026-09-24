@@ -73,3 +73,17 @@ func TestSanitizeDiffContent(t *testing.T) {
 	}
 }
 
+func TestSanitizeDiffContentMultiByteUTF8(t *testing.T) {
+	// Pad with 'x' until 1 byte before MaxDiffContentBytes, then append a 4-byte rune (e.g. rocket emoji 🚀: 0xF0 0x9F 0x9A 0x80)
+	pad := strings.Repeat("x", MaxDiffContentBytes-1)
+	diff := []byte(pad + "🚀 extra content")
+	sanitized := sanitizeDiffContent(diff)
+
+	// Verify that sanitized is valid UTF-8
+	for i, r := range sanitized {
+		if r == '\uFFFD' {
+			t.Fatalf("sanitized diff contains replacement character at index %d, indicating split UTF-8 rune", i)
+		}
+	}
+}
+

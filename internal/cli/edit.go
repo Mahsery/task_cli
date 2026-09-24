@@ -90,7 +90,11 @@ opens an interactive buffer with existing values pre-populated.`,
 
 		if hasFlags {
 			if cmd.Flags().Changed("title") {
-				payload.Title = &editTitle
+				trimmed := strings.TrimSpace(editTitle)
+				if trimmed == "" {
+					return fmt.Errorf("task title cannot be empty")
+				}
+				payload.Title = &trimmed
 			}
 			if cmd.Flags().Changed("status") {
 				s, err := domain.ParseStatus(editStatus)
@@ -139,7 +143,11 @@ opens an interactive buffer with existing values pre-populated.`,
 			if err != nil {
 				return err
 			}
-			payload.Title = &parsed.Title
+			trimmedTitle := strings.TrimSpace(parsed.Title)
+			if trimmedTitle == "" {
+				return fmt.Errorf("task title cannot be empty")
+			}
+			payload.Title = &trimmedTitle
 			payload.Status = &parsed.Status
 			payload.Priority = &parsed.Priority
 			payload.Tags = &parsed.Tags
