@@ -21,6 +21,7 @@ var (
 	editRemoveTag   string
 	editAssignee    string
 	editNote        string
+	editNoteAlias   string
 	editDescription string
 	editClaim       bool
 )
@@ -35,7 +36,7 @@ opens an interactive buffer with existing values pre-populated.`,
   tk edit T-1 --add-tag review
   tk edit T-1 --remove-tag bug
   tk edit T-1 --claim
-  tk edit T-1 -n "Patch sent to mailing list"
+  tk edit T-1 -m "Patch sent to mailing list"
   tk edit T-1          # Opens full task buffer in $EDITOR`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -68,6 +69,7 @@ opens an interactive buffer with existing values pre-populated.`,
 			cmd.Flags().Changed("remove-tag") ||
 			(cmd.Flags().Changed("assignee") && !editClaim) ||
 			cmd.Flags().Changed("note") ||
+			cmd.Flags().Changed("comment") ||
 			cmd.Flags().Changed("desc")
 
 		if editClaim && !hasFlags {
@@ -125,6 +127,8 @@ opens an interactive buffer with existing values pre-populated.`,
 			}
 			if cmd.Flags().Changed("note") {
 				payload.AddNote = &editNote
+			} else if cmd.Flags().Changed("comment") {
+				payload.AddNote = &editNoteAlias
 			}
 			if cmd.Flags().Changed("desc") {
 				payload.Description = &editDescription
@@ -170,5 +174,6 @@ func init() {
 	editCmd.Flags().BoolVar(&editClaim, "claim", false, "Claim the task for the current actor")
 	editCmd.Flags().StringVarP(&editAssignee, "assignee", "a", "", "Update assignee")
 	editCmd.Flags().StringVarP(&editNote, "note", "m", "", "Append a note/comment")
+	editCmd.Flags().StringVarP(&editNoteAlias, "comment", "n", "", "Append a note/comment (alias for -m, --note)")
 	editCmd.Flags().StringVarP(&editDescription, "desc", "d", "", "Update description")
 }

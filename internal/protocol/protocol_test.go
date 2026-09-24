@@ -100,3 +100,68 @@ func TestListTasksPayloadAssignee(t *testing.T) {
 		t.Errorf("expected assignee john, got %s", decoded.Assignee)
 	}
 }
+
+func BenchmarkProtocol_RequestEncodeDecode(b *testing.B) {
+	createPayload := CreateTaskPayload{
+		Title:       "Test Protocol",
+		Description: "Protocol testing",
+		Status:      domain.StatusOpen,
+		Priority:    domain.PriorityHigh,
+		Tags:        []string{"net", "ipc"},
+		Author:      "Tester",
+		Assignee:    "Developer",
+	}
+	rawPayload, _ := json.Marshal(createPayload)
+	req := Request{
+		ID:       "req-1",
+		Action:   ActionCreateTask,
+		Payload:  rawPayload,
+		Scope:    "local",
+		RepoPath: "/test/repo",
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		data, _ := json.Marshal(req)
+		var decoded Request
+		_ = json.Unmarshal(data, &decoded)
+		var p CreateTaskPayload
+		_ = json.Unmarshal(decoded.Payload, &p)
+	}
+}
+
+func BenchmarkProtocol_RoundTrip500Tasks(b *testing.B) {
+	tasks := make([]*domain.Task, 500)
+	for i := 0; i < 500; i++ {
+		tasks[i] = &domain.Task{
+			ID:          "T-1",
+			Scope:       "local",
+			RepoPath:    "/repo/test",
+			Title:       "Task Title",
+			Description: "Task Description for benchmarking JSON",
+			Status:      domain.StatusOpen,
+			Priority:    domain.PriorityNormal,
+			Tags:        []string{"bench", "json"},
+			Author:      "Dev",
+			Assignee:    "Worker",
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Server side: Marshal tasks -> wrap in Response -> Marshal Response
+		taskData, _ := json.Marshal(tasks)
+		resp := Response{
+			ID:      "req-1",
+			Success: true,
+			Data:    taskData,
+		}
+		respBytes, _ := json.Marshal(resp)
+
+		// Client side: Unmarshal Response -> Unmarshal tasks
+		var clientResp Response
+		_ = json.Unmarshal(respBytes, &clientResp)
+		var clientTasks []*domain.Task
+		_ = json.Unmarshal(clientResp.Data, &clientTasks)
+	}
+}

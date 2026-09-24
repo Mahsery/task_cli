@@ -86,14 +86,14 @@ tk
 |---------|:-------:|-------------------|-------------|---------|
 | `tk` | — | — | Launch interactive TUI in terminal; prints help if non-TTY | `tk` |
 | `tk new` | — | `[-t title] [-p prio] [-l tags] [-a assignee] [-m desc]` | Create task via flags, piped stdin, or `$EDITOR` template | `tk new -t "Fix bug" -p high -l ui`<br>`echo "Piped Task" \| tk new` |
-| `tk list` | `ls` | `[-s status] [-p prio] [-l tag] [-a assignee] [-q search] [--short] [--limit N]` | Query tasks with formatted table, one-liners, or JSON | `tk list -s open -p high`<br>`tk ls -l auth --short` |
+| `tk list` | `ls` | `[-s status] [-p prio] [-t/-l tag] [-a assignee] [-q search] [--short] [--limit N]` | Query tasks with formatted table, one-liners, or JSON | `tk list -s open -p high`<br>`tk ls -l auth --short` |
 | `tk search` | `find` | `<query...> [-s status] [-p prio] [-l tag] [-a assignee] [--short] [--limit N]` | Search tasks with boolean DSL (`AND`, `OR`, `NOT`, `tag:`, `s:`, `p:`, `a:`, `"exact"`) | `tk search bug AND odin`<br>`tk search tag:security priority:high`<br>`tk search "memory leak" NOT closed` |
 | `tk show` | — | `<id>` | Display task metadata, notes, commit SHA, and diff content | `tk show T-1`<br>`tk show G-2 --json` |
 | `tk claim` | — | `<id> [--actor actor] [--force]` | Atomically claim a task for the current actor; prevents race conditions | `tk claim T-1`<br>`tk claim T-1 --actor bot-1` |
-| `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [-l tags] [--add-tag tag] [--remove-tag tag] [--claim] [-a assignee] [-m note] [-d desc]` | Modify task fields via CLI flags, atomically add/remove tags, or open `$EDITOR` | `tk edit T-1 -s in_progress`<br>`tk edit T-1 --add-tag review`<br>`tk edit T-1 --claim` |
+| `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [-l tags] [--add-tag tag] [--remove-tag tag] [--claim] [-a assignee] [-m/-n note] [-d desc]` | Modify task fields via CLI flags, atomically add/remove tags, or open `$EDITOR` | `tk edit T-1 -s in_progress`<br>`tk edit T-1 --add-tag review`<br>`tk edit T-1 --claim`<br>`tk edit T-1 -n "New note"` |
 | `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit]` | Mark task done; auto-attaches latest commit & diff by default | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 --no-commit` |
 | `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
-| `tk delete` | `rm` | `<id>` | Permanently remove a task and associated notes/diffs | `tk delete T-1`<br>`tk rm G-4` |
+| `tk delete` | `rm` | `<id> [-y/--yes] [--force]` | Permanently remove a task and associated notes/diffs (prompts unless `-y` or `--force`) | `tk delete T-1`<br>`tk delete -y T-1`<br>`tk rm --force G-4` |
 | `tk watch` | — | `[--json]` | Stream real-time task lifecycle events from socket daemon | `tk watch`<br>`tk watch --json \| jq .` |
 | `tk daemon run` | — | `[--socket path] [--tcp addr]` | Run daemon process in foreground (debugging / headless / remote) | `tk daemon run --tcp 127.0.0.1:4567` |
 | `tk daemon status` | — | — | Ping daemon health and report active socket path | `tk daemon status` |
@@ -117,9 +117,10 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `k` / `↑` | Move Up | Select previous task in the list |
 | `n` | New Task | Launch `$EDITOR` with a new task template |
 | `e` | Edit Task | Launch `$EDITOR` with selected task pre-populated |
+| `a` | Claim Task | Claim selected task for current actor (`open` -> `in_progress`) |
 | `d` | Reversible Done | Mark selected task done (or **reopen** if already done) |
 | `s` | Toggle Status | Cycle status between `open` and `in_progress` |
-| `x` | Delete Task | Delete selected task with immediate list refresh |
+| `x` | Delete Task | Prompt for confirmation (`[y/N]`) and permanently delete |
 | `Enter` | Toggle Diff | Expand or collapse unified patch diff view |
 | `/` | Search Filter | Enter live search query (`Enter` applies, `Esc` cancels) |
 | `Esc` / `c` | Reset Filter | Clear active search filter and restore full task list |

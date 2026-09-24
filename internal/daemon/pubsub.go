@@ -31,8 +31,10 @@ func (ps *PubSub) Unsubscribe(ch chan protocol.Event) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
-	delete(ps.subscribers, ch)
-	close(ch)
+	if _, exists := ps.subscribers[ch]; exists {
+		delete(ps.subscribers, ch)
+		close(ch)
+	}
 }
 
 func (ps *PubSub) Publish(event protocol.Event) {

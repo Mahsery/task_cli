@@ -25,7 +25,7 @@ const (
 	DragonGray  = "#9e9b93" // secondary text
 	DragonGray2 = "#a6a69c"
 	DragonGray3 = "#7a8382" // table headers & meta labels
-	FujiGray    = "#727169" // timestamps & subtle elements
+	FujiGray    = "#8c8a80" // timestamps & subtle elements (WCAG AA compliant)
 
 	// Accents & semantics
 	WaveAqua2     = "#7AA89F" // open status, keybindings, links

@@ -29,7 +29,7 @@ In an interactive terminal, prompts for confirmation unless --yes or -y is speci
 			resp = strings.ToLower(strings.TrimSpace(resp))
 			if resp != "y" && resp != "yes" {
 				fmt.Println("Aborted.")
-				return nil
+				return fmt.Errorf("deletion cancelled")
 			}
 		}
 

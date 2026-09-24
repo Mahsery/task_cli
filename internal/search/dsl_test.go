@@ -65,6 +65,11 @@ func TestSearchMatch(t *testing.T) {
 		{"parenthesized expression", `(bug OR feature) AND p:high`, task1, true},
 		{"id match", "T-1", task1, true},
 		{"id qualifier match", "id:T-1", task1, true},
+		{"leading binary AND does not panic", "AND bug", task1, true},
+		{"leading binary OR does not panic", "OR odin", task1, true},
+		{"colon double-quoted tag qualifier", `tag:"compiler"`, task1, true},
+		{"colon single-quoted tag qualifier", `tag:'odin'`, task1, true},
+		{"colon quoted mismatch", `tag:"rust lang"`, task1, false},
 	}
 
 	for _, tt := range tests {
@@ -74,5 +79,74 @@ func TestSearchMatch(t *testing.T) {
 				t.Errorf("Match(%q, task) = %v; want %v", tt.query, got, tt.expected)
 			}
 		})
+	}
+}
+
+func BenchmarkSearchMatch_Simple(b *testing.B) {
+	task := &domain.Task{
+		ID:          "T-1",
+		Title:       "Fix Odin compiler issue",
+		Description: "Memory leak in lexer when parsing imports",
+		Status:      domain.StatusOpen,
+		Priority:    domain.PriorityHigh,
+		Tags:        []string{"bug", "odin", "compiler"},
+		Assignee:    "mehmet",
+		Author:      "alice",
+		Notes: []domain.TaskNote{
+			{Content: "Heap dump analyzed, issue is in token pool"},
+		},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Match("odin", task)
+	}
+}
+
+func BenchmarkSearchMatch_ComplexDSL(b *testing.B) {
+	task := &domain.Task{
+		ID:          "T-1",
+		Title:       "Fix Odin compiler issue",
+		Description: "Memory leak in lexer when parsing imports",
+		Status:      domain.StatusOpen,
+		Priority:    domain.PriorityHigh,
+		Tags:        []string{"bug", "odin", "compiler"},
+		Assignee:    "mehmet",
+		Author:      "alice",
+		Notes: []domain.TaskNote{
+			{Content: "Heap dump analyzed, issue is in token pool"},
+		},
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Match("(bug OR feature) AND p:high AND t:odin", task)
+	}
+}
+
+func BenchmarkSearchMatch_Scale1000(b *testing.B) {
+	tasks := make([]*domain.Task, 1000)
+	for i := 0; i < 1000; i++ {
+		tasks[i] = &domain.Task{
+			ID:          "T-1",
+			Title:       "Fix Odin compiler issue",
+			Description: "Memory leak in lexer when parsing imports",
+			Status:      domain.StatusOpen,
+			Priority:    domain.PriorityHigh,
+			Tags:        []string{"bug", "odin", "compiler"},
+			Assignee:    "mehmet",
+			Author:      "alice",
+		}
+	}
+
+	query := "bug AND odin"
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		matched := 0
+		for _, t := range tasks {
+			if Match(query, t) {
+				matched++
+			}
+		}
 	}
 }

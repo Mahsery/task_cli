@@ -232,10 +232,25 @@ func (c *Client) ClaimTask(id, assignee string, force bool) (*domain.Task, error
 }
 
 
+func (c *Client) Actor() string {
+	if c.cfg != nil && c.cfg.Actor != "" {
+		return c.cfg.Actor
+	}
+	return ""
+}
+
 func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
+	scope := filter.Scope
+	if scope == "" {
+		scope = c.Scope
+	}
+	repoPath := filter.RepoPath
+	if repoPath == "" {
+		repoPath = c.RepoPath
+	}
 	p := protocol.ListTasksPayload{
-		Scope:    c.Scope,
-		RepoPath: c.RepoPath,
+		Scope:    scope,
+		RepoPath: repoPath,
 		Status:   filter.Status,
 		Priority: filter.Priority,
 		Tag:      filter.Tag,

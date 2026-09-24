@@ -17,22 +17,24 @@ import (
 )
 
 type Model struct {
-	client       *client.Client
-	editorCmd    string
-	theme        Theme
-	tasks        []*domain.Task
-	cursor       int
-	scrollOffset int
-	width        int
-	height       int
-	scope        string
-	repoPath     string
-	filterText   string
-	prevFilter   string
-	isSearch     bool
-	statusMsg    string
-	err          error
-	showDiff     bool
+	client        *client.Client
+	editorCmd     string
+	theme         Theme
+	tasks         []*domain.Task
+	cursor        int
+	scrollOffset  int
+	width         int
+	height        int
+	scope         string
+	repoPath      string
+	filterText    string
+	prevFilter    string
+	isSearch      bool
+	statusMsg     string
+	err           error
+	showDiff      bool
+	confirmDelete bool
+	deleteTaskID  string
 }
 
 func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
@@ -74,10 +76,13 @@ func (m Model) getMaxRows() int {
 	if m.height <= 0 {
 		return 8
 	}
-	// Reserve 14 lines for headers, detail pane, borders, and footer
-	rows := m.height - 14
-	if rows < 5 {
-		return 5
+	detailReserved := 10
+	if m.showDiff {
+		detailReserved = 16
+	}
+	rows := m.height - 6 - detailReserved
+	if rows < 4 {
+		return 4
 	}
 	if rows > 25 {
 		return 25
@@ -121,6 +126,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.confirmDelete {
+			m.confirmDelete = false
+			taskID := m.deleteTaskID
+			m.deleteTaskID = ""
+			if msg.String() == "y" || msg.String() == "Y" {
+				m.statusMsg = fmt.Sprintf("Deleting %s...", taskID)
+				return m, m.deleteTaskCmd(taskID)
+			}
+			m.statusMsg = "Deletion cancelled"
+			return m, nil
+		}
+
 		if m.isSearch {
 			switch msg.String() {
 			case "enter":
@@ -197,10 +214,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showDiff = !m.showDiff
 
 		case "x":
-			// Delete task
+			// Prompt confirmation before deleting
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
-				return m, m.deleteTaskCmd(t.ID)
+				m.confirmDelete = true
+				m.deleteTaskID = t.ID
+				return m, nil
+			}
+
+		case "a":
+			// Claim task for current actor
+			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
+				t := m.tasks[m.cursor]
+				return m, m.claimTaskCmd(t.ID)
 			}
 
 		case "d":
@@ -379,10 +405,73 @@ func (m Model) markDoneCmd(taskID string) tea.Cmd {
 	}
 }
 
+func (m Model) claimTaskCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		actor := m.client.Actor()
+		if actor == "" {
+			actor = git.GetAuthor()
+		}
+		_, err := m.client.ClaimTask(taskID, actor, false)
+		if err != nil {
+			return errMsg(err)
+		}
+		filter := domain.TaskFilter{
+			Scope:    m.scope,
+			RepoPath: m.repoPath,
+			Search:   m.filterText,
+		}
+		tasks, _ := m.client.ListTasks(filter)
+		return reloadMsg(tasks)
+	}
+}
+
+func wrapText(text string, width int, indent string) []string {
+	var result []string
+	paragraphs := strings.Split(text, "\n")
+	for _, p := range paragraphs {
+		p = strings.TrimRight(p, " \t\r")
+		if p == "" {
+			result = append(result, "")
+			continue
+		}
+		words := strings.Fields(p)
+		if len(words) == 0 {
+			result = append(result, "")
+			continue
+		}
+		var curLine strings.Builder
+		curLine.WriteString(indent)
+		curLen := len(indent)
+
+		for _, w := range words {
+			if curLen > len(indent) && curLen+1+len(w) > width {
+				result = append(result, curLine.String())
+				curLine.Reset()
+				curLine.WriteString(indent)
+				curLen = len(indent)
+			}
+			if curLen > len(indent) {
+				curLine.WriteString(" ")
+				curLen++
+			}
+			curLine.WriteString(w)
+			curLen += len(w)
+		}
+		if curLine.Len() > len(indent) {
+			result = append(result, curLine.String())
+		}
+	}
+	return result
+}
+
 func (m Model) View() string {
 	width := m.width
 	if width <= 0 {
 		width = 80
+	}
+	height := m.height
+	if height <= 0 {
+		height = 24
 	}
 
 	theme := m.theme
@@ -423,8 +512,59 @@ func (m Model) View() string {
 	sb.WriteString(theme.Header.Width(width).Render(headerText))
 	sb.WriteString("\n")
 
+	// Dynamic column widths calculation:
+	idWidth := 6
+	statusWidth := 11
+	priWidth := 7
+	ageWidth := 14
+	var tagsWidth int
+	var titleWidth int
+
+	if width >= 120 {
+		tagsWidth = 16
+		titleWidth = width - 45 - tagsWidth
+	} else if width >= 90 {
+		tagsWidth = 12
+		titleWidth = width - 45 - tagsWidth
+	} else if width >= 72 {
+		tagsWidth = 10
+		titleWidth = width - 45 - tagsWidth
+	} else if width >= 60 {
+		tagsWidth = 0
+		titleWidth = width - 44
+	} else {
+		// Ultra-narrow terminal (< 60 cols)
+		tagsWidth = 0
+		statusWidth = 10
+		priWidth = 6
+		ageWidth = 8
+		titleWidth = width - 36
+	}
+
+	if titleWidth < 12 {
+		titleWidth = 12
+	}
+
 	// Table columns header
-	colHeader := fmt.Sprintf("  %-6s %-12s %-8s %-32s %-14s %s", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
+	var colHeader string
+	if tagsWidth > 0 {
+		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s %-*s",
+			idWidth, "ID",
+			statusWidth, "STATUS",
+			priWidth, "PRI",
+			titleWidth, "TITLE",
+			tagsWidth, "TAGS",
+			ageWidth, "AGE",
+		)
+	} else {
+		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s",
+			idWidth, "ID",
+			statusWidth, "STATUS",
+			priWidth, "PRI",
+			titleWidth, "TITLE",
+			ageWidth, "AGE",
+		)
+	}
 	sb.WriteString(theme.ColHeader.Render(colHeader))
 	sb.WriteString("\n")
 	sb.WriteString(theme.Border.Render(strings.Repeat("─", width)))
@@ -443,19 +583,18 @@ func (m Model) View() string {
 		for i := m.scrollOffset; i < endIdx; i++ {
 			t := m.tasks[i]
 			isCursor := (i == m.cursor)
-			cursor := " "
+			prefix := "  "
 			if isCursor {
-				cursor = theme.Cursor.Render("►")
+				prefix = theme.Cursor.Render("► ")
 			}
 
 			title := t.Title
-			if len(title) > 30 {
-				title = title[:28] + ".."
-			}
-
-			tagsStr := strings.Join(t.Tags, ",")
-			if len(tagsStr) > 12 {
-				tagsStr = tagsStr[:10] + ".."
+			if len(title) > titleWidth {
+				if titleWidth > 3 {
+					title = title[:titleWidth-2] + ".."
+				} else {
+					title = title[:titleWidth]
+				}
 			}
 
 			age := timeAgo(t.CreatedAt)
@@ -466,17 +605,44 @@ func (m Model) View() string {
 				}
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
+			if len(age) > ageWidth {
+				age = age[:ageWidth]
+			}
 
-			idStr := theme.TaskID.Render(fmt.Sprintf("%-6s", t.ID))
-			statusStr := StatusStyle(t.Status).Render(fmt.Sprintf("%-12s", string(t.Status)))
-			priStr := PriorityStyle(t.Priority).Render(fmt.Sprintf("%-8s", string(t.Priority)))
-			titleStr := theme.TaskTitle.Render(fmt.Sprintf("%-32s", title))
-			tagsDisplay := theme.Tag.Render(fmt.Sprintf("%-14s", tagsStr))
-			ageDisplay := theme.Age.Render(age)
+			status := string(t.Status)
+			if len(status) > statusWidth {
+				status = status[:statusWidth]
+			}
+			prio := string(t.Priority)
+			if len(prio) > priWidth {
+				prio = prio[:priWidth]
+			}
 
-			line := fmt.Sprintf("%s %s %s %s %s %s %s",
-				cursor, idStr, statusStr, priStr, titleStr, tagsDisplay, ageDisplay,
-			)
+			idStr := theme.TaskID.Render(fmt.Sprintf("%-*s", idWidth, t.ID))
+			statusStr := StatusStyle(t.Status).Render(fmt.Sprintf("%-*s", statusWidth, status))
+			priStr := PriorityStyle(t.Priority).Render(fmt.Sprintf("%-*s", priWidth, prio))
+			titleStr := theme.TaskTitle.Render(fmt.Sprintf("%-*s", titleWidth, title))
+			ageDisplay := theme.Age.Render(fmt.Sprintf("%-*s", ageWidth, age))
+
+			var line string
+			if tagsWidth > 0 {
+				tagsStr := strings.Join(t.Tags, ",")
+				if len(tagsStr) > tagsWidth {
+					if tagsWidth > 3 {
+						tagsStr = tagsStr[:tagsWidth-2] + ".."
+					} else {
+						tagsStr = tagsStr[:tagsWidth]
+					}
+				}
+				tagsDisplay := theme.Tag.Render(fmt.Sprintf("%-*s", tagsWidth, tagsStr))
+				line = fmt.Sprintf("%s%s %s %s %s %s %s",
+					prefix, idStr, statusStr, priStr, titleStr, tagsDisplay, ageDisplay,
+				)
+			} else {
+				line = fmt.Sprintf("%s%s %s %s %s %s",
+					prefix, idStr, statusStr, priStr, titleStr, ageDisplay,
+				)
+			}
 
 			if isCursor {
 				sb.WriteString(theme.RowSelected.Width(width).Render(line))
@@ -499,13 +665,27 @@ func (m Model) View() string {
 	// 3. Detail Pane
 	if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 		t := m.tasks[m.cursor]
-		sb.WriteString(fmt.Sprintf("  %s %s\n",
-			theme.DetailID.Render(t.ID+":"),
-			theme.DetailTitle.Render(t.Title),
-		))
 
-		// Metadata line
-		metaLine := fmt.Sprintf("  %s %s   %s %s   %s %s",
+		// Title with clean wrapping if title is long
+		rawTitle := t.Title
+		wrappedTitle := wrapText(rawTitle, width-len(t.ID)-6, "    ")
+		if len(wrappedTitle) > 0 {
+			sb.WriteString(fmt.Sprintf("  %s %s\n",
+				theme.DetailID.Render(t.ID+":"),
+				theme.DetailTitle.Render(strings.TrimPrefix(wrappedTitle[0], "    ")),
+			))
+			for _, tl := range wrappedTitle[1:] {
+				sb.WriteString(theme.DetailTitle.Render(tl) + "\n")
+			}
+		} else {
+			sb.WriteString(fmt.Sprintf("  %s %s\n",
+				theme.DetailID.Render(t.ID+":"),
+				theme.DetailTitle.Render(rawTitle),
+			))
+		}
+
+		// Metadata line(s) - responsive to avoid ugly mid-tag wrapping
+		metaLine1 := fmt.Sprintf("  %s %s   %s %s   %s %s",
 			theme.DetailLabel.Render("Status:"),
 			StatusStyle(t.Status).Render(string(t.Status)),
 			theme.DetailLabel.Render("Priority:"),
@@ -513,41 +693,79 @@ func (m Model) View() string {
 			theme.DetailLabel.Render("Scope:"),
 			theme.TaskID.Render(t.Scope),
 		)
+
+		var metaParts []string
 		if t.Assignee != "" {
-			metaLine += fmt.Sprintf("   %s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(t.Assignee))
+			metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(t.Assignee)))
 		}
 		if len(t.Tags) > 0 {
-			metaLine += fmt.Sprintf("   %s %s", theme.DetailLabel.Render("Tags:"), theme.Tag.Render(strings.Join(t.Tags, ", ")))
+			metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Tags:"), theme.Tag.Render(strings.Join(t.Tags, ", "))))
 		}
-		sb.WriteString(metaLine + "\n\n")
 
+		fullMeta := metaLine1
+		if len(metaParts) > 0 {
+			fullMeta += "   " + strings.Join(metaParts, "   ")
+		}
+
+		if lipgloss.Width(fullMeta) <= width {
+			sb.WriteString(fullMeta + "\n\n")
+		} else {
+			sb.WriteString(metaLine1 + "\n")
+			if len(metaParts) > 0 {
+				line2 := "  " + strings.Join(metaParts, "   ")
+				if lipgloss.Width(line2) <= width {
+					sb.WriteString(line2 + "\n\n")
+				} else {
+					for _, part := range metaParts {
+						for _, pw := range wrapText(part, width-4, "  ") {
+							sb.WriteString(pw + "\n")
+						}
+					}
+					sb.WriteString("\n")
+				}
+			} else {
+				sb.WriteString("\n")
+			}
+		}
+
+		// Description with clean indented word wrapping
 		if t.Description != "" {
-			descLines := strings.Split(t.Description, "\n")
+			descLines := wrapText(t.Description, width-6, "    ")
+			maxDesc := 3
 			for i, line := range descLines {
-				if i >= 4 {
-					sb.WriteString(theme.Age.Render("    ...\n"))
+				if i >= maxDesc {
+					sb.WriteString(theme.Age.Render("    ... (press 'e' to view full)") + "\n")
 					break
 				}
-				sb.WriteString("    " + theme.DetailDesc.Render(line) + "\n")
+				sb.WriteString(theme.DetailDesc.Render(line) + "\n")
 			}
 		}
 
 		if t.CommitSHA != "" {
-			sb.WriteString(theme.DetailResolved.Render(
-				fmt.Sprintf("  ✓ Resolved by commit %s: %s\n", t.CommitSHA, t.CommitMsg),
-			))
+			resText := fmt.Sprintf("✓ Resolved by commit %s: %s", t.CommitSHA, t.CommitMsg)
+			resLines := wrapText(resText, width-4, "  ")
+			for _, rl := range resLines {
+				sb.WriteString(theme.DetailResolved.Render(rl) + "\n")
+			}
 			if t.DiffStat != "" {
-				statLines := strings.Split(t.DiffStat, "\n")
-				for _, sl := range statLines {
-					sb.WriteString("    " + theme.DiffStat.Render(sl) + "\n")
+				statLines := strings.Split(strings.TrimSpace(t.DiffStat), "\n")
+				for i, sl := range statLines {
+					if i >= 3 {
+						break
+					}
+					sb.WriteString("    " + theme.DiffStat.Render(strings.TrimSpace(sl)) + "\n")
 				}
 			}
 			if m.showDiff && t.DiffContent != "" {
 				sb.WriteString("\n  " + theme.Border.Render("── Diff Content ──") + "\n")
 				diffLines := strings.Split(t.DiffContent, "\n")
+				maxDiff := 8
+				if height <= 26 {
+					maxDiff = 5
+				}
 				for i, dl := range diffLines {
-					if i >= 10 {
-						sb.WriteString(theme.Age.Render("    [diff truncated, press enter to collapse]\n"))
+					if i >= maxDiff {
+						sb.WriteString(theme.Age.Render("    [diff truncated, press enter to collapse]") + "\n")
 						break
 					}
 					if strings.HasPrefix(dl, "+") {
@@ -565,22 +783,32 @@ func (m Model) View() string {
 
 		if len(t.Notes) > 0 {
 			sb.WriteString(theme.NoteHeader.Render(
-				fmt.Sprintf("  • %d note(s):\n", len(t.Notes)),
-			))
+				fmt.Sprintf("  • %d note(s):", len(t.Notes)),
+			) + "\n")
+			maxNotes := 3
+			if height <= 26 {
+				maxNotes = 2
+			}
 			for i, n := range t.Notes {
-				if i >= 3 {
-					sb.WriteString(theme.Age.Render(fmt.Sprintf("    ... and %d more note(s)\n", len(t.Notes)-3)))
+				if i >= maxNotes {
+					sb.WriteString(theme.Age.Render(fmt.Sprintf("    ... and %d more note(s)", len(t.Notes)-maxNotes)) + "\n")
 					break
 				}
+				timeStr := theme.NoteTime.Render(timeAgo(n.CreatedAt))
 				authorStr := ""
 				if n.Author != "" {
-					authorStr = " by " + theme.NoteAuthor.Render(n.Author)
+					availAuthor := width - 18
+					author := n.Author
+					if availAuthor > 6 && len(author) > availAuthor {
+						author = author[:availAuthor-2] + ".."
+					}
+					authorStr = " by " + theme.NoteAuthor.Render(author)
 				}
-				sb.WriteString(fmt.Sprintf("    [%s%s] %s\n",
-					theme.NoteTime.Render(timeAgo(n.CreatedAt)),
-					authorStr,
-					theme.NoteContent.Render(n.Content),
-				))
+				sb.WriteString(fmt.Sprintf("    • %s%s:\n", timeStr, authorStr))
+				wrappedNotes := wrapText(n.Content, width-8, "      ")
+				for _, line := range wrappedNotes {
+					sb.WriteString(theme.NoteContent.Render(line) + "\n")
+				}
 			}
 		}
 	}
@@ -589,6 +817,15 @@ func (m Model) View() string {
 	sb.WriteString("\n")
 
 	// 4. Status Bar / Hotkey footer
+	if m.confirmDelete {
+		warnText := fmt.Sprintf(" ⚠️  Delete task %s permanently? Press [y] to confirm, [n/Esc] to cancel ", m.deleteTaskID)
+		if width < len(warnText) {
+			warnText = fmt.Sprintf(" Delete %s? [y/N] ", m.deleteTaskID)
+		}
+		sb.WriteString(theme.FooterBg.Width(width).Render(theme.DiffSub.Render(warnText)))
+		return sb.String()
+	}
+
 	doneLabel := theme.CountProg.Render("[d] Done")
 	statusLabel := theme.CountOpen.Render("[s] In Prog")
 	if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
@@ -609,19 +846,57 @@ func (m Model) View() string {
 		return theme.FooterKey.Render("["+k+"]") + " " + theme.FooterDesc.Render(action)
 	}
 
-	keys := []string{
-		key("j/k", "Move"),
-		key("n", "New"),
-		key("e", "Edit"),
-		doneLabel,
-		statusLabel,
-		theme.DiffSub.Render("[x]") + " " + theme.FooterDesc.Render("Del"),
-		key("Enter", "Diff"),
-		key("/", "Search"),
-		theme.FilterIndicator.Render("[Esc]") + " " + theme.FooterDesc.Render("Clear"),
-		key("g", "Scope"),
-		key("r", "Refresh"),
-		theme.Age.Render("[q] Quit"),
+	var keys []string
+	if width >= 120 {
+		keys = []string{
+			key("j/k", "Move"),
+			key("n", "New"),
+			key("e", "Edit"),
+			key("a", "Claim"),
+			doneLabel,
+			statusLabel,
+			theme.DiffSub.Render("[x]") + " " + theme.FooterDesc.Render("Del"),
+			key("Enter", "Diff"),
+			key("/", "Search"),
+			theme.FilterIndicator.Render("[Esc]") + " " + theme.FooterDesc.Render("Clear"),
+			key("g", "Scope"),
+			key("r", "Refresh"),
+			theme.Age.Render("[q] Quit"),
+		}
+	} else if width >= 90 {
+		keys = []string{
+			key("j/k", "Move"),
+			key("n", "New"),
+			key("e", "Edit"),
+			key("a", "Claim"),
+			doneLabel,
+			statusLabel,
+			theme.DiffSub.Render("[x] Del"),
+			key("Enter", "Diff"),
+			key("/", "Search"),
+			theme.Age.Render("[q] Quit"),
+		}
+	} else if width >= 70 {
+		keys = []string{
+			key("j/k", "Nav"),
+			key("n", "New"),
+			key("e", "Edit"),
+			key("a", "Claim"),
+			doneLabel,
+			key("x", "Del"),
+			key("/", "Find"),
+			theme.Age.Render("[q] Quit"),
+		}
+	} else {
+		// Ultra-compact footer for narrow/split terminal panes (< 70 cols)
+		keys = []string{
+			key("j/k", "Nav"),
+			key("a", "Claim"),
+			doneLabel,
+			key("x", "Del"),
+			key("/", "Find"),
+			theme.Age.Render("[q]"),
+		}
 	}
 
 	footerText := strings.Join(keys, "  ")

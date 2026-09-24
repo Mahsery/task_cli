@@ -396,13 +396,28 @@ func (s *Server) handleStreamEvents(conn net.Conn, enc *json.Encoder, req protoc
 		Success: true,
 		Data:    json.RawMessage(`{"streaming":true}`),
 	}
-	_ = enc.Encode(ack)
+	if err := enc.Encode(ack); err != nil {
+		return
+	}
 
 	eventCh := s.pubsub.Subscribe()
 	defer s.pubsub.Unsubscribe(eventCh)
 
+	done := make(chan struct{})
+	go func() {
+		buf := make([]byte, 1)
+		for {
+			if _, err := conn.Read(buf); err != nil {
+				close(done)
+				return
+			}
+		}
+	}()
+
 	for {
 		select {
+		case <-done:
+			return
 		case <-s.stopCh:
 			return
 		case event, ok := <-eventCh:

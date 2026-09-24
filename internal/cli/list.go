@@ -14,6 +14,7 @@ var (
 	listStatus   string
 	listPriority string
 	listTag      string
+	listTagLabel string
 	listAssignee string
 	listSearch   string
 	listShort    bool
@@ -29,14 +30,20 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 	Example: `  tk list
   tk ls -s open -p high
   tk list -t backend -q "jwt"
+  tk ls -l backend --short
   tk list -a alice
   tk ls --short --limit 10
   tk -g list --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		tagFilter := listTag
+		if tagFilter == "" && listTagLabel != "" {
+			tagFilter = listTagLabel
+		}
+
 		filter := domain.TaskFilter{
 			Scope:    scope,
 			RepoPath: repoRoot,
-			Tag:      listTag,
+			Tag:      tagFilter,
 			Assignee: listAssignee,
 			Search:   listSearch,
 			Limit:    listLimit,
@@ -124,6 +131,7 @@ func init() {
 	listCmd.Flags().StringVarP(&listStatus, "status", "s", "", "Filter by status (open, in_progress, done, closed)")
 	listCmd.Flags().StringVarP(&listPriority, "priority", "p", "", "Filter by priority (low, normal, high, urgent)")
 	listCmd.Flags().StringVarP(&listTag, "tag", "t", "", "Filter by tag")
+	listCmd.Flags().StringVarP(&listTagLabel, "label", "l", "", "Filter by tag (alias for -t, --tag)")
 	listCmd.Flags().StringVarP(&listAssignee, "assignee", "a", "", "Filter by assignee")
 	listCmd.Flags().StringVarP(&listSearch, "search", "q", "", "Search query DSL (supports AND, OR, NOT, tags, qualifiers)")
 	listCmd.Flags().BoolVar(&listShort, "short", false, "Output simple one-line list")

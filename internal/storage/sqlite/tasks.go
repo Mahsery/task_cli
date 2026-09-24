@@ -235,6 +235,9 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 			}
 			currentTags = filtered
 		}
+		if currentTags == nil {
+			currentTags = []string{}
+		}
 		newTagsBytes, err := json.Marshal(currentTags)
 		if err != nil {
 			return nil, err
@@ -274,6 +277,11 @@ func (d *DB) ClaimTask(id string, assignee string, force bool) (*domain.Task, er
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	assignee = strings.TrimSpace(assignee)
+	if assignee == "" {
+		return nil, fmt.Errorf("claim assignee cannot be empty")
+	}
+
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -305,11 +313,13 @@ func (d *DB) ClaimTask(id string, assignee string, force bool) (*domain.Task, er
 		return nil, fmt.Errorf("failed to claim task: %w", err)
 	}
 
-	noteID := uuid.New().String()
-	noteContent := fmt.Sprintf("Claimed task as %q", assignee)
-	noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
-	if _, err := tx.Exec(noteSQL, noteID, id, assignee, noteContent, now); err != nil {
-		return nil, fmt.Errorf("failed to insert claim note: %w", err)
+	if currentAssignee != assignee {
+		noteID := uuid.New().String()
+		noteContent := fmt.Sprintf("Claimed task as %q", assignee)
+		noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
+		if _, err := tx.Exec(noteSQL, noteID, id, assignee, noteContent, now); err != nil {
+			return nil, fmt.Errorf("failed to insert claim note: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -434,9 +444,10 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 
 	// Evaluate search DSL filter across all fields including tags and notes
 	if filter.Search != "" {
+		compiled := search.Compile(filter.Search)
 		var matched []*domain.Task
 		for _, task := range tasks {
-			if search.Match(filter.Search, task) {
+			if compiled.Match(task) {
 				matched = append(matched, task)
 			}
 		}

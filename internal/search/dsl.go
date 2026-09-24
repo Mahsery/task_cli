@@ -63,8 +63,34 @@ func Tokenize(query string) []token {
 			continue
 		}
 
-		// Regular word or operator
+		// Check for field:"quoted value" or field:'quoted value' e.g. tag:"bug fix"
+		colonQuote := false
 		start := i
+		for j := i; j < n && runes[j] != ' ' && runes[j] != '\t' && runes[j] != '\n' && runes[j] != '\r' && runes[j] != '(' && runes[j] != ')'; j++ {
+			if runes[j] == ':' && j+1 < n && (runes[j+1] == '"' || runes[j+1] == '\'') {
+				quote := runes[j+1]
+				field := string(runes[start : j+1])
+				j += 2
+				valStart := j
+				for j < n && runes[j] != quote {
+					j++
+				}
+				val := string(runes[valStart:j])
+				if j < n && runes[j] == quote {
+					j++
+				}
+				tokens = append(tokens, token{typ: tokWord, value: field + val})
+				i = j
+				colonQuote = true
+				break
+			}
+		}
+		if colonQuote {
+			continue
+		}
+
+		// Regular word or operator
+		start = i
 		for i < n && runes[i] != ' ' && runes[i] != '\t' && runes[i] != '\n' && runes[i] != '\r' && runes[i] != '(' && runes[i] != ')' {
 			i++
 		}
@@ -216,7 +242,11 @@ func (p *parser) parseExpr() Node {
 			p.next()
 			right := p.parseAnd()
 			if right != nil {
-				left = &orNode{left: left, right: right}
+				if left == nil {
+					left = right
+				} else {
+					left = &orNode{left: left, right: right}
+				}
 			}
 		} else {
 			break
@@ -238,13 +268,21 @@ func (p *parser) parseAnd() Node {
 			p.next()
 			right := p.parseNot()
 			if right != nil {
-				left = &andNode{left: left, right: right}
+				if left == nil {
+					left = right
+				} else {
+					left = &andNode{left: left, right: right}
+				}
 			}
 		} else {
 			// Implicit AND
 			right := p.parseNot()
 			if right != nil {
-				left = &andNode{left: left, right: right}
+				if left == nil {
+					left = right
+				} else {
+					left = &andNode{left: left, right: right}
+				}
 			} else {
 				break
 			}
@@ -302,25 +340,46 @@ func (p *parser) parsePrimary() Node {
 	return nil
 }
 
-// Match evaluates whether a task matches the search DSL query.
-// If query is empty, it returns true.
-func Match(query string, task *domain.Task) bool {
+// Query represents a pre-compiled search expression for efficient repeated evaluation.
+type Query struct {
+	ast Node
+	raw string
+}
+
+// Compile parses and prepares a search DSL query once for reuse across multiple tasks.
+func Compile(query string) *Query {
 	q := strings.TrimSpace(query)
 	if q == "" {
-		return true
+		return &Query{raw: ""}
 	}
 
 	tokens := Tokenize(q)
 	if len(tokens) == 0 {
-		return true
+		return &Query{raw: q}
 	}
 
 	p := &parser{tokens: tokens}
 	ast := p.parseExpr()
 	if ast == nil {
-		// Fall back to simple substring match
-		return (&termNode{val: q}).Eval(task)
+		ast = &termNode{val: q}
 	}
 
-	return ast.Eval(task)
+	return &Query{ast: ast, raw: q}
+}
+
+// Match evaluates whether a task satisfies the compiled search query.
+func (q *Query) Match(task *domain.Task) bool {
+	if q == nil || q.ast == nil {
+		if q != nil && q.raw != "" {
+			return (&termNode{val: q.raw}).Eval(task)
+		}
+		return true
+	}
+	return q.ast.Eval(task)
+}
+
+// Match evaluates whether a task matches the search DSL query.
+// If query is empty, it returns true.
+func Match(query string, task *domain.Task) bool {
+	return Compile(query).Match(task)
 }
