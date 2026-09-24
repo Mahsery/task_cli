@@ -125,7 +125,7 @@ func init() {
 	listCmd.Flags().StringVarP(&listPriority, "priority", "p", "", "Filter by priority (low, normal, high, urgent)")
 	listCmd.Flags().StringVarP(&listTag, "tag", "t", "", "Filter by tag")
 	listCmd.Flags().StringVarP(&listAssignee, "assignee", "a", "", "Filter by assignee")
-	listCmd.Flags().StringVarP(&listSearch, "search", "q", "", "Search query in title or description")
+	listCmd.Flags().StringVarP(&listSearch, "search", "q", "", "Search query DSL (supports AND, OR, NOT, tags, qualifiers)")
 	listCmd.Flags().BoolVar(&listShort, "short", false, "Output simple one-line list")
 	listCmd.Flags().IntVar(&listLimit, "limit", 0, "Limit number of results")
 }

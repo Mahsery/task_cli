@@ -33,10 +33,11 @@ It unifies task management with Linux kernel-style git diffs and commits,
 operates over a background daemon socket, and supports dumb terminals and SSH.
 
 Running 'tk' without arguments in an interactive terminal launches the TUI.`,
-	Example: `  tk                  # Launch interactive TUI
-  tk list             # List tasks in current git repository
-  tk -g list          # List global tasks across all projects
-  tk list --json      # Output tasks in JSON format for automation`,
+	Example: `  tk                     # Launch interactive TUI
+  tk list                # List tasks in current git repository
+  tk search bug AND odin # Search tasks using boolean query DSL
+  tk -g list             # List global tasks across all projects
+  tk list --json         # Output tasks in JSON format for automation`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		cfg = config.Load()
 
