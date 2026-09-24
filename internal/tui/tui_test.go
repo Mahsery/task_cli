@@ -121,3 +121,60 @@ func TestTUIConfirmationView(t *testing.T) {
 		t.Errorf("Expected compact confirmation prompt in narrow View(), got:\n%s", outNarrow)
 	}
 }
+
+func TestTUISplitView(t *testing.T) {
+	task := &domain.Task{
+		ID:        "T-1",
+		Title:     "Feature split view",
+		Status:    domain.StatusInProgress,
+		Priority:  domain.PriorityHigh,
+		Assignee:  "mahsery",
+		CreatedAt: time.Now().Add(-10 * time.Minute),
+		UpdatedAt: time.Now().Add(-2 * time.Minute),
+		Notes: []domain.TaskNote{
+			{Author: "mahsery", Content: "Working on dual-pane layout", CreatedAt: time.Now().Add(-2 * time.Minute)},
+		},
+	}
+
+	// 1. Wide terminal (>= 110): split view with vertical divider and details pane
+	mWide := Model{
+		tasks:    []*domain.Task{task},
+		cursor:   0,
+		width:    120,
+		height:   30,
+		theme:    NewKanagawaTheme(),
+		scope:    "local",
+		repoPath: "/test/repo",
+	}
+	if !mWide.isSplitView() {
+		t.Errorf("Expected isSplitView() to be true for width 120")
+	}
+	outWide := mWide.View()
+	if !strings.Contains(outWide, "Task Details & Latest Activity") {
+		t.Errorf("Expected split view header in wide view")
+	}
+	if !strings.Contains(outWide, "│") {
+		t.Errorf("Expected vertical divider '│' in split view")
+	}
+	if !strings.Contains(outWide, "Working on dual-pane layout") {
+		t.Errorf("Expected note content in split view right pane")
+	}
+
+	// 2. Narrow terminal (< 110): stacked view
+	mNarrow := Model{
+		tasks:    []*domain.Task{task},
+		cursor:   0,
+		width:    80,
+		height:   24,
+		theme:    NewKanagawaTheme(),
+		scope:    "local",
+		repoPath: "/test/repo",
+	}
+	if mNarrow.isSplitView() {
+		t.Errorf("Expected isSplitView() to be false for width 80")
+	}
+	outNarrow := mNarrow.View()
+	if strings.Contains(outNarrow, "Task Details & Latest Activity") {
+		t.Errorf("Expected stacked view without split view header in width 80")
+	}
+}
