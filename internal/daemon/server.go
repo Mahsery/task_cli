@@ -345,6 +345,7 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			Tag:      p.Tag,
 			Assignee: p.Assignee,
 			Search:   p.Search,
+			Sort:     p.Sort,
 			Limit:    p.Limit,
 		}
 		tasks, err := db.ListTasks(filter)

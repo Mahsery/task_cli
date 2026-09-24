@@ -14,6 +14,7 @@ var (
 	searchPriority string
 	searchTag      string
 	searchAssignee string
+	searchSort     string
 	searchShort    bool
 	searchLimit    int
 )
@@ -46,6 +47,7 @@ Supports:
 			Tag:      searchTag,
 			Assignee: searchAssignee,
 			Search:   query,
+			Sort:     searchSort,
 			Limit:    searchLimit,
 		}
 
@@ -87,14 +89,14 @@ Supports:
 
 		if searchShort {
 			for _, t := range tasks {
-				fmt.Printf("%-6s [%-8s] %s\n", t.ID, t.Status, t.Title)
+				fmt.Printf("%-6s [%-11s] %s\n", t.ID, t.Status, t.Title)
 			}
 			return nil
 		}
 
 		// Aligned tabular display
-		fmt.Printf("%-6s %-10s %-8s %-34s %-16s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
-		fmt.Println(strings.Repeat("─", 84))
+		fmt.Printf("%-6s %-12s %-8s %-34s %-16s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
+		fmt.Println(strings.Repeat("─", 88))
 		for _, t := range tasks {
 			title := t.Title
 			if len(title) > 32 {
@@ -112,8 +114,8 @@ Supports:
 				}
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
-			fmt.Printf("%-6s %-10s %-8s %-34s %-16s %s\n",
-				t.ID, t.Status, t.Priority, title, tags, age,
+			fmt.Printf("%-6s %-12s %-8s %-34s %-16s %s\n",
+				t.ID, string(t.Status), string(t.Priority), title, tags, age,
 			)
 		}
 
@@ -126,6 +128,7 @@ func init() {
 	searchCmd.Flags().StringVarP(&searchPriority, "priority", "p", "", "Filter by priority: low, normal, high, urgent")
 	searchCmd.Flags().StringVarP(&searchTag, "tag", "l", "", "Filter by exact tag")
 	searchCmd.Flags().StringVarP(&searchAssignee, "assignee", "a", "", "Filter by assignee")
+	searchCmd.Flags().StringVar(&searchSort, "sort", "", "Sort order: 'status,priority,id' (default), 'id', 'recent', 'created', 'updated'")
 	searchCmd.Flags().BoolVar(&searchShort, "short", false, "Print compact one-line output")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 0, "Limit number of results")
 }

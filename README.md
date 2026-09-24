@@ -86,7 +86,7 @@ tk
 |---------|:-------:|-------------------|-------------|---------|
 | `tk` | — | — | Launch interactive TUI in terminal; prints help if non-TTY | `tk` |
 | `tk new` | — | `[-t title] [-p prio] [-l tags] [-a assignee] [-m desc]` | Create task via flags, piped stdin, or `$EDITOR` template | `tk new -t "Fix bug" -p high -l ui`<br>`echo "Piped Task" \| tk new` |
-| `tk list` | `ls` | `[-s status] [-p prio] [-t/-l tag] [-a assignee] [-q search] [--short] [--limit N]` | Query tasks with formatted table, one-liners, or JSON | `tk list -s open -p high`<br>`tk ls -l auth --short` |
+| `tk list` | `ls` | `[-s status] [-p prio] [-t/-l tag] [-a assignee] [-q search] [--sort order] [--short] [--limit N]` | Query tasks (ordered by status, priority, ID by default) | `tk list -s open -p high`<br>`tk ls --sort recent` |
 | `tk search` | `find` | `<query...> [-s status] [-p prio] [-l tag] [-a assignee] [--short] [--limit N]` | Search tasks with boolean DSL (`AND`, `OR`, `NOT`, `tag:`, `s:`, `p:`, `a:`, `"exact"`) | `tk search bug AND odin`<br>`tk search tag:security priority:high`<br>`tk search "memory leak" NOT closed` |
 | `tk show` | — | `<id>` | Display task metadata, notes, commit SHA, and diff content | `tk show T-1`<br>`tk show G-2 --json` |
 | `tk claim` | — | `<id> [--actor actor] [--force]` | Atomically claim a task for the current actor; prevents race conditions | `tk claim T-1`<br>`tk claim T-1 --actor bot-1` |

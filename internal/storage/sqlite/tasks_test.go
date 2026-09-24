@@ -542,6 +542,71 @@ func TestConcurrentTagAdditions(t *testing.T) {
 	}
 }
 
+func TestListTasksDefaultOrdering(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create tasks in disordered sequence:
+	// T-1: done, normal
+	// T-2: open, low
+	// T-3: in_progress, high
+	// T-4: in_progress, urgent
+	// T-5: open, high
+	// T-6: in_progress, high (created after T-3)
+	// T-7: closed, urgent
+	_, _ = db.CreateTask("local", "/repo", "T1", "", domain.StatusDone, domain.PriorityNormal, nil, "author", "")
+	_, _ = db.CreateTask("local", "/repo", "T2", "", domain.StatusOpen, domain.PriorityLow, nil, "author", "")
+	_, _ = db.CreateTask("local", "/repo", "T3", "", domain.StatusInProgress, domain.PriorityHigh, nil, "author", "")
+	_, _ = db.CreateTask("local", "/repo", "T4", "", domain.StatusInProgress, domain.PriorityUrgent, nil, "author", "")
+	_, _ = db.CreateTask("local", "/repo", "T5", "", domain.StatusOpen, domain.PriorityHigh, nil, "author", "")
+	_, _ = db.CreateTask("local", "/repo", "T6", "", domain.StatusInProgress, domain.PriorityHigh, nil, "author", "")
+	_, _ = db.CreateTask("local", "/repo", "T7", "", domain.StatusClosed, domain.PriorityUrgent, nil, "author", "")
+
+	// 1. Default ordering: status (in_progress, open, done, closed) -> priority (urgent, high, normal, low) -> id (seq_num ASC)
+	tasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo"})
+	if err != nil {
+		t.Fatalf("ListTasks failed: %v", err)
+	}
+
+	expectedOrder := []string{"T-4", "T-3", "T-6", "T-5", "T-2", "T-1", "T-7"}
+	// T-4: in_progress, urgent
+	// T-3: in_progress, high (id 3)
+	// T-6: in_progress, high (id 6)
+	// T-5: open, high
+	// T-2: open, low
+	// T-1: done, normal
+	// T-7: closed, urgent
+
+	if len(tasks) != len(expectedOrder) {
+		t.Fatalf("expected %d tasks, got %d", len(expectedOrder), len(tasks))
+	}
+
+	for i, expectedID := range expectedOrder {
+		if tasks[i].ID != expectedID {
+			t.Errorf("at index %d: expected task %s (%s, %s), got %s (%s, %s)",
+				i, expectedID, expectedOrder, tasks[i].Status, tasks[i].ID, tasks[i].Status, tasks[i].Priority)
+		}
+	}
+
+	// 2. Custom sort: "recent" (seq_num DESC)
+	tasksRecent, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo", Sort: "recent"})
+	if err != nil {
+		t.Fatalf("ListTasks recent failed: %v", err)
+	}
+	if tasksRecent[0].ID != "T-7" || tasksRecent[len(tasksRecent)-1].ID != "T-1" {
+		t.Errorf("expected recent sort from T-7 to T-1, got first=%s, last=%s", tasksRecent[0].ID, tasksRecent[len(tasksRecent)-1].ID)
+	}
+
+	// 3. Custom sort: "id" (seq_num ASC)
+	tasksID, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo", Sort: "id"})
+	if err != nil {
+		t.Fatalf("ListTasks id failed: %v", err)
+	}
+	if tasksID[0].ID != "T-1" || tasksID[len(tasksID)-1].ID != "T-7" {
+		t.Errorf("expected id sort from T-1 to T-7, got first=%s, last=%s", tasksID[0].ID, tasksID[len(tasksID)-1].ID)
+	}
+}
+
 
 
 

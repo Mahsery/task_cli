@@ -79,6 +79,7 @@ type ListTasksPayload struct {
 	Tag      string           `json:"tag,omitempty"`
 	Assignee string           `json:"assignee,omitempty"`
 	Search   string           `json:"search,omitempty"`
+	Sort     string           `json:"sort,omitempty"`
 	Limit    int              `json:"limit,omitempty"`
 }
 

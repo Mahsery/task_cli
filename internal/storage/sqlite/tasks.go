@@ -368,12 +368,49 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		limitClause = fmt.Sprintf("LIMIT %d", filter.Limit)
 	}
 
+	orderClause := `ORDER BY 
+		CASE status
+			WHEN 'in_progress' THEN 1
+			WHEN 'open' THEN 2
+			WHEN 'done' THEN 3
+			WHEN 'closed' THEN 4
+			ELSE 5
+		END ASC,
+		CASE priority
+			WHEN 'urgent' THEN 1
+			WHEN 'high' THEN 2
+			WHEN 'normal' THEN 3
+			WHEN 'low' THEN 4
+			ELSE 5
+		END ASC,
+		seq_num ASC`
+
+	switch strings.ToLower(strings.TrimSpace(filter.Sort)) {
+	case "id", "id_asc":
+		orderClause = "ORDER BY seq_num ASC"
+	case "id_desc", "recent", "seq_num":
+		orderClause = "ORDER BY seq_num DESC"
+	case "priority":
+		orderClause = `ORDER BY 
+			CASE priority
+				WHEN 'urgent' THEN 1
+				WHEN 'high' THEN 2
+				WHEN 'normal' THEN 3
+				WHEN 'low' THEN 4
+				ELSE 5
+			END ASC, seq_num ASC`
+	case "created", "created_at":
+		orderClause = "ORDER BY created_at DESC"
+	case "updated", "updated_at":
+		orderClause = "ORDER BY updated_at DESC"
+	}
+
 	query := fmt.Sprintf(`
 	SELECT id, scope, repo_path, title, description, status, priority, tags, author, assignee,
 	       created_at, updated_at, closed_at, commit_sha, commit_msg, diff_stat, diff_content
 	FROM tasks %s
-	ORDER BY seq_num DESC %s
-	`, whereClause, limitClause)
+	%s %s
+	`, whereClause, orderClause, limitClause)
 
 	rows, err := d.conn.Query(query, args...)
 	if err != nil {

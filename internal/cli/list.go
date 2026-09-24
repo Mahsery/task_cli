@@ -46,6 +46,7 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 			Tag:      tagFilter,
 			Assignee: listAssignee,
 			Search:   listSearch,
+			Sort:     listSort,
 			Limit:    listLimit,
 		}
 
@@ -93,14 +94,14 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 
 		if listShort {
 			for _, t := range tasks {
-				fmt.Printf("%-6s [%-8s] %s\n", t.ID, t.Status, t.Title)
+				fmt.Printf("%-6s [%-11s] %s\n", t.ID, t.Status, t.Title)
 			}
 			return nil
 		}
 
-		// Clean formatted table
-		fmt.Printf("%-6s %-10s %-8s %-34s %-16s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
-		fmt.Println(strings.Repeat("─", 84))
+		// Clean formatted table with exact column alignment
+		fmt.Printf("%-6s %-12s %-8s %-34s %-16s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
+		fmt.Println(strings.Repeat("─", 88))
 		for _, t := range tasks {
 			title := t.Title
 			if len(title) > 32 {
@@ -118,7 +119,7 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 				}
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
-			fmt.Printf("%-6s %-10s %-8s %-34s %-16s %s\n",
+			fmt.Printf("%-6s %-12s %-8s %-34s %-16s %s\n",
 				t.ID, string(t.Status), string(t.Priority), title, tags, age,
 			)
 		}
@@ -127,6 +128,8 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 	},
 }
 
+var listSort string
+
 func init() {
 	listCmd.Flags().StringVarP(&listStatus, "status", "s", "", "Filter by status (open, in_progress, done, closed)")
 	listCmd.Flags().StringVarP(&listPriority, "priority", "p", "", "Filter by priority (low, normal, high, urgent)")
@@ -134,6 +137,7 @@ func init() {
 	listCmd.Flags().StringVarP(&listTagLabel, "label", "l", "", "Filter by tag (alias for -t, --tag)")
 	listCmd.Flags().StringVarP(&listAssignee, "assignee", "a", "", "Filter by assignee")
 	listCmd.Flags().StringVarP(&listSearch, "search", "q", "", "Search query DSL (supports AND, OR, NOT, tags, qualifiers)")
+	listCmd.Flags().StringVar(&listSort, "sort", "", "Sort order: 'status,priority,id' (default), 'id', 'recent', 'created', 'updated'")
 	listCmd.Flags().BoolVar(&listShort, "short", false, "Output simple one-line list")
 	listCmd.Flags().IntVar(&listLimit, "limit", 0, "Limit number of results")
 }

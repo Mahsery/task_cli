@@ -560,10 +560,10 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 	} else {
 		// Ultra-narrow terminal (< 60 cols)
 		tagsWidth = 0
-		statusWidth = 10
+		statusWidth = 11
 		priWidth = 6
 		ageWidth = 8
-		titleWidth = width - 36
+		titleWidth = width - 37
 	}
 
 	if titleWidth < 12 {

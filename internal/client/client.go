@@ -256,6 +256,7 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		Tag:      filter.Tag,
 		Assignee: filter.Assignee,
 		Search:   filter.Search,
+		Sort:     filter.Sort,
 		Limit:    filter.Limit,
 	}
 	resp, err := c.call(protocol.ActionListTasks, p)

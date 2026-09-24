@@ -93,5 +93,6 @@ type TaskFilter struct {
 	Tag      string
 	Assignee string
 	Search   string
+	Sort     string
 	Limit    int
 }
