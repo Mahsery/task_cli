@@ -88,10 +88,11 @@ Supports:
 		}
 
 		if searchShort {
+			var sb strings.Builder
 			for _, t := range tasks {
-				fmt.Printf("%-6s [%-11s] %s\n", t.ID, t.Status, t.Title)
+				sb.WriteString(fmt.Sprintf("%-6s [%-11s] %s\n", t.ID, t.Status, t.Title))
 			}
-			return nil
+			return PrintWithPager(sb.String())
 		}
 
 		renderTaskTable(tasks)

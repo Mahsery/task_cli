@@ -28,52 +28,51 @@ commit message, diffstat, and unified patch diff.`,
 			return outputJSON(task)
 		}
 
-		fmt.Println(strings.Repeat("─", 80))
-		fmt.Printf("%s: %s\n", task.ID, task.Title)
-		fmt.Printf("Status:   %-18s Priority: %-18s Scope: %s\n", strings.ToUpper(string(task.Status)), strings.ToUpper(string(task.Priority)), task.Scope)
+		var sb strings.Builder
+		sb.WriteString(strings.Repeat("─", 80) + "\n")
+		sb.WriteString(fmt.Sprintf("%s: %s\n", task.ID, task.Title))
+		sb.WriteString(fmt.Sprintf("Status:   %-18s Priority: %-18s Scope: %s\n", strings.ToUpper(string(task.Status)), strings.ToUpper(string(task.Priority)), task.Scope))
 		if len(task.Tags) > 0 {
-			fmt.Printf("Tags:     [%s]\n", strings.Join(task.Tags, ", "))
+			sb.WriteString(fmt.Sprintf("Tags:     [%s]\n", strings.Join(task.Tags, ", ")))
 		}
 		if task.Author != "" {
-			fmt.Printf("Author:   %s\n", task.Author)
+			sb.WriteString(fmt.Sprintf("Author:   %s\n", task.Author))
 		}
 		if task.Assignee != "" {
-			fmt.Printf("Assignee: %s\n", task.Assignee)
+			sb.WriteString(fmt.Sprintf("Assignee: %s\n", task.Assignee))
 		}
-		fmt.Printf("Created:  %s", task.CreatedAt.Format("2006-01-02 15:04:05"))
+		sb.WriteString(fmt.Sprintf("Created:  %s", task.CreatedAt.Format("2006-01-02 15:04:05")))
 		if task.ClosedAt != nil {
-			fmt.Printf("   Closed: %s", task.ClosedAt.Format("2006-01-02 15:04:05"))
+			sb.WriteString(fmt.Sprintf("   Closed: %s", task.ClosedAt.Format("2006-01-02 15:04:05")))
 		}
-		fmt.Println()
-		fmt.Println(strings.Repeat("─", 80))
+		sb.WriteString("\n")
+		sb.WriteString(strings.Repeat("─", 80) + "\n")
 
 		if task.Description != "" {
-			fmt.Println(task.Description)
-			fmt.Println()
+			sb.WriteString(task.Description + "\n\n")
 		}
 
 		if len(task.Notes) > 0 {
-			fmt.Println("── Activity & Notes " + strings.Repeat("─", 60))
+			sb.WriteString("── Activity & Notes " + strings.Repeat("─", 60) + "\n")
 			for _, note := range task.Notes {
-				fmt.Printf("[%s] %s:\n%s\n\n", note.CreatedAt.Format("2006-01-02 15:04"), note.Author, note.Content)
+				sb.WriteString(fmt.Sprintf("[%s] %s:\n%s\n\n", note.CreatedAt.Format("2006-01-02 15:04"), note.Author, note.Content))
 			}
 		}
 
 		if task.CommitSHA != "" {
-			fmt.Println("── Commits & Changes " + strings.Repeat("─", 59))
-			fmt.Printf("commit %s\n", task.CommitSHA)
+			sb.WriteString("── Commits & Changes " + strings.Repeat("─", 59) + "\n")
+			sb.WriteString(fmt.Sprintf("commit %s\n", task.CommitSHA))
 			if task.CommitMsg != "" {
-				fmt.Printf("Subject: %s\n\n", task.CommitMsg)
+				sb.WriteString(fmt.Sprintf("Subject: %s\n\n", task.CommitMsg))
 			}
 			if task.DiffStat != "" {
-				fmt.Println(task.DiffStat)
-				fmt.Println()
+				sb.WriteString(task.DiffStat + "\n\n")
 			}
 			if task.DiffContent != "" {
-				fmt.Println(task.DiffContent)
+				sb.WriteString(task.DiffContent + "\n")
 			}
 		}
 
-		return nil
+		return PrintWithPager(sb.String())
 	},
 }

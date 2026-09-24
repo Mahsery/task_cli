@@ -103,6 +103,7 @@ tk
 
 - `-g, --global`: Operate on the global task database (`~/.local/share/task_cli/global.db`) instead of the current git repository.
 - `--actor <name>`: Explicit actor identity for task attribution (overrides `TK_ACTOR`, `TK_AUTHOR`, and git author).
+- `--no-pager`: Disable automatic conditional pager (`less -RFX`) for long outputs.
 - `--json`: Output machine-readable JSON for scripting, CI/CD, or LLM agent pipelines.
 
 ---
@@ -113,18 +114,22 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 
 | Keybinding | Action | Description |
 |:----------:|--------|-------------|
-| `j` / `↓` | Move Down | Select next task in the list (with viewport windowing) |
-| `k` / `↑` | Move Up | Select previous task in the list |
+| `j` / `k` / `↓` / `↑` | Move Cursor | Navigate tasks in the table (with responsive viewport windowing) |
+| `g` / `G` | Top / Bottom | Jump immediately to first or last task |
+| `Space` | Multi-Select Toggle | Toggle task selection (`●`/`○` marker) and advance cursor down |
+| `v` | Select / Deselect | Toggle task selection for current row without advancing cursor |
+| `V` | Select All / Deselect | Toggle selection across all currently visible tasks |
+| `J` / `K` / `Ctrl+D` / `Ctrl+U` | Scroll Details | Scroll detail & diff pane in split view (on terminals ≥ 110 cols) |
+| `d` | Reversible / Batch Done | Mark task(s) done (or **reopen** if already done); auto-attaches git diff |
+| `s` | Status / Batch Toggle | Cycle status between `open` and `in_progress` for selected tasks |
+| `a` | Claim / Batch Claim | Atomically claim selected task(s) for current actor |
+| `x` | Delete / Batch Delete | Prompt for confirmation (`[y/N]`) and permanently remove selected tasks |
 | `n` | New Task | Launch `$EDITOR` with a new task template |
 | `e` | Edit Task | Launch `$EDITOR` with selected task pre-populated |
-| `a` | Claim Task | Claim selected task for current actor (`open` -> `in_progress`) |
-| `d` | Reversible Done | Mark selected task done (or **reopen** if already done) |
-| `s` | Toggle Status | Cycle status between `open` and `in_progress` |
-| `x` | Delete Task | Prompt for confirmation (`[y/N]`) and permanently delete |
 | `Enter` | Toggle Diff | Expand or collapse unified patch diff view |
 | `/` | Search Filter | Enter live search query (`Enter` applies, `Esc` cancels) |
-| `Esc` / `c` | Reset Filter | Clear active search filter and restore full task list |
-| `g` | Toggle Scope | Switch view between `local` (git repository) and `global` scopes |
+| `Esc` / `c` | Reset Filter / Deselect | Clear multi-selection first, or clear active search filter |
+| `S` | Toggle Scope | Switch view between `local` (git repository) and `global` scopes |
 | `r` | Refresh | Re-query tasks from daemon |
 | `q` / `Ctrl+C` | Quit | Exit the TUI |
 
@@ -138,6 +143,8 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 |----------|---------------|---------|
 | `TK_ACTOR` | *(unset)* | Primary actor identity for task author, claim, and note attribution |
 | `TK_AUTHOR` | *(unset)* | Secondary actor identity fallback before git author |
+| `TK_PAGER` | `less -RFX` | Pager command for `tk list`, `tk search`, and `tk show` when output exceeds screen (falls back to `BAT_PAGER` -> `PAGER`) |
+| `TK_NO_PAGER` | *(unset)* | Set to `1` or `true` to disable automatic paging completely |
 | `TK_SOCKET` | `/run/user/<uid>/tk.sock`<br>*(fallback: `~/.local/share/task_cli/tk.sock`)* | Unix Domain Socket path used for client-daemon IPC communication |
 | `TK_ADDR` | *(unset)* | Optional TCP address (`host:port`) to bind or connect to (e.g. `127.0.0.1:4567` for SSH tunneling or containers) |
 | `EDITOR` | `$VISUAL` -> `nvim` | Text editor invoked when creating or editing tasks interactively |

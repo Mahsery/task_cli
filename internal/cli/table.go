@@ -19,10 +19,11 @@ func renderTaskTable(tasks []*domain.Task) {
 		}
 	}
 
+	var sb strings.Builder
 	if width < 88 {
 		// Responsive layout for 80-column screens (74 cols total)
-		fmt.Printf("%-6s %-11s %-6s %-26s %-10s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
-		fmt.Println(strings.Repeat("─", 74))
+		sb.WriteString(fmt.Sprintf("%-6s %-11s %-6s %-26s %-10s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE"))
+		sb.WriteString(strings.Repeat("─", 74) + "\n")
 		for _, t := range tasks {
 			title := t.Title
 			if len(title) > 24 {
@@ -40,16 +41,17 @@ func renderTaskTable(tasks []*domain.Task) {
 				}
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
-			fmt.Printf("%-6s %-11s %-6s %-26s %-10s %s\n",
+			sb.WriteString(fmt.Sprintf("%-6s %-11s %-6s %-26s %-10s %s\n",
 				t.ID, string(t.Status), string(t.Priority), title, tags, age,
-			)
+			))
 		}
+		_ = PrintWithPager(sb.String())
 		return
 	}
 
 	// Standard wide layout (88 cols total)
-	fmt.Printf("%-6s %-12s %-8s %-34s %-16s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
-	fmt.Println(strings.Repeat("─", 88))
+	sb.WriteString(fmt.Sprintf("%-6s %-12s %-8s %-34s %-16s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE"))
+	sb.WriteString(strings.Repeat("─", 88) + "\n")
 	for _, t := range tasks {
 		title := t.Title
 		if len(title) > 32 {
@@ -67,8 +69,9 @@ func renderTaskTable(tasks []*domain.Task) {
 			}
 			age = fmt.Sprintf("%s (%s)", age, sha)
 		}
-		fmt.Printf("%-6s %-12s %-8s %-34s %-16s %s\n",
+		sb.WriteString(fmt.Sprintf("%-6s %-12s %-8s %-34s %-16s %s\n",
 			t.ID, string(t.Status), string(t.Priority), title, tags, age,
-		)
+		))
 	}
+	_ = PrintWithPager(sb.String())
 }

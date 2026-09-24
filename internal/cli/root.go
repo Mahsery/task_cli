@@ -93,6 +93,7 @@ func init() {
 	RootCmd.PersistentFlags().StringVar(&flagSocket, "socket", "", "Custom unix socket path for daemon IPC")
 	RootCmd.PersistentFlags().StringVar(&flagTCP, "tcp", "", "Optional TCP address to connect to (e.g. 127.0.0.1:4567)")
 	RootCmd.PersistentFlags().StringVar(&flagActor, "actor", "", "Explicit actor identity for task attribution (overrides TK_ACTOR/TK_AUTHOR/git)")
+	RootCmd.PersistentFlags().BoolVar(&noPagerFlag, "no-pager", false, "Disable interactive pager for long output")
 
 	RootCmd.AddCommand(newCmd)
 	RootCmd.AddCommand(claimCmd)
