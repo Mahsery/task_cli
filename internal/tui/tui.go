@@ -130,6 +130,179 @@ func (m Model) getMaxRows() int {
 	return rows
 }
 
+func (m Model) getDetailDimensions() (detailWidth, visibleBody int) {
+	width := m.width
+	if width <= 0 {
+		width = 120
+	}
+	height := m.height
+	if height <= 0 {
+		height = 24
+	}
+
+	dividerWidth := 1
+	tableWidth := width * 48 / 100
+	if tableWidth < 52 {
+		tableWidth = 52
+	}
+	if tableWidth > 75 {
+		tableWidth = 75
+	}
+	detailWidth = width - tableWidth - dividerWidth
+	if detailWidth < 20 {
+		detailWidth = 20
+	}
+
+	bodyHeight := height - 4
+	if bodyHeight < 10 {
+		bodyHeight = 10
+	}
+	visibleBody = bodyHeight - 1 // 1 line reserved for pinned header
+	if visibleBody < 1 {
+		visibleBody = 1
+	}
+	return detailWidth, visibleBody
+}
+
+func (m Model) getDetailContentLines(detailWidth int) []string {
+	if len(m.tasks) == 0 || m.cursor >= len(m.tasks) {
+		return nil
+	}
+	t := m.tasks[m.cursor]
+	theme := m.theme
+	var contentLines []string
+
+	// Latest update badge
+	var latestBadge string
+	if len(t.Notes) > 0 {
+		lastNote := t.Notes[len(t.Notes)-1]
+		author := lastNote.Author
+		if author == "" {
+			author = "actor"
+		}
+		latestBadge = fmt.Sprintf(" Latest Note: %s by %s", timeAgo(lastNote.CreatedAt), author)
+	} else if t.CommitSHA != "" {
+		latestBadge = fmt.Sprintf(" Resolved by %s (%s)", t.CommitSHA, timeAgo(t.UpdatedAt))
+	} else if !t.UpdatedAt.IsZero() && t.UpdatedAt != t.CreatedAt {
+		latestBadge = fmt.Sprintf(" Updated: %s", timeAgo(t.UpdatedAt))
+	} else {
+		latestBadge = fmt.Sprintf(" Created: %s", timeAgo(t.CreatedAt))
+	}
+	if lipgloss.Width(latestBadge) > detailWidth {
+		latestBadge = latestBadge[:detailWidth]
+	}
+	contentLines = append(contentLines, theme.NoteTime.Width(detailWidth).Render(latestBadge))
+	contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
+
+	// Task Title
+	for _, tl := range wrapText(t.ID+": "+t.Title, detailWidth-4, "  ") {
+		contentLines = append(contentLines, theme.DetailTitle.Width(detailWidth).Render(tl))
+	}
+
+	// Metadata badges
+	meta1 := fmt.Sprintf("  %s %s   %s %s   %s %s",
+		theme.DetailLabel.Render("Status:"), StatusStyle(t.Status).Render(string(t.Status)),
+		theme.DetailLabel.Render("Pri:"), PriorityStyle(t.Priority).Render(string(t.Priority)),
+		theme.DetailLabel.Render("Scope:"), theme.TaskID.Render(t.Scope),
+	)
+	var metaParts []string
+	if t.Assignee != "" {
+		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(t.Assignee)))
+	}
+	if len(t.Tags) > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Tags:"), theme.Tag.Render(strings.Join(t.Tags, ", "))))
+	}
+	fullMeta := meta1
+	if len(metaParts) > 0 {
+		fullMeta += "   " + strings.Join(metaParts, "   ")
+	}
+	if lipgloss.Width(fullMeta) <= detailWidth {
+		contentLines = append(contentLines, fullMeta)
+	} else {
+		contentLines = append(contentLines, meta1)
+		if len(metaParts) > 0 {
+			for _, mp := range wrapText(strings.Join(metaParts, "   "), detailWidth-4, "  ") {
+				contentLines = append(contentLines, mp)
+			}
+		}
+	}
+	contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
+
+	// Description
+	if t.Description != "" {
+		descLines := wrapText(t.Description, detailWidth-4, "  ")
+		for _, dl := range descLines {
+			contentLines = append(contentLines, theme.DetailDesc.Width(detailWidth).Render(dl))
+		}
+	}
+
+	// Commit resolution & diff
+	if t.CommitSHA != "" {
+		contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
+		resText := fmt.Sprintf("✓ Resolved by commit %s: %s", t.CommitSHA, t.CommitMsg)
+		for _, rl := range wrapText(resText, detailWidth-4, "  ") {
+			contentLines = append(contentLines, theme.DetailResolved.Width(detailWidth).Render(rl))
+		}
+		if t.DiffStat != "" {
+			for _, sl := range strings.Split(strings.TrimSpace(t.DiffStat), "\n") {
+				contentLines = append(contentLines, theme.DiffStat.Width(detailWidth).Render("    "+strings.TrimSpace(sl)))
+			}
+		}
+		if m.showDiff && t.DiffContent != "" {
+			contentLines = append(contentLines, theme.Border.Width(detailWidth).Render("  ── Diff Content ──"))
+			diffLines := strings.Split(t.DiffContent, "\n")
+			for _, dl := range diffLines {
+				if strings.HasPrefix(dl, "+") {
+					contentLines = append(contentLines, theme.DiffAdd.Width(detailWidth).Render("    "+dl))
+				} else if strings.HasPrefix(dl, "-") {
+					contentLines = append(contentLines, theme.DiffSub.Width(detailWidth).Render("    "+dl))
+				} else if strings.HasPrefix(dl, "@@") {
+					contentLines = append(contentLines, theme.DiffHunk.Width(detailWidth).Render("    "+dl))
+				} else {
+					contentLines = append(contentLines, theme.DetailDesc.Width(detailWidth).Render("    "+dl))
+				}
+			}
+		}
+	}
+
+	// Activity Notes
+	if len(t.Notes) > 0 {
+		contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
+		contentLines = append(contentLines, theme.NoteHeader.Width(detailWidth).Render(fmt.Sprintf("  • Notes & Messages (%d):", len(t.Notes))))
+		for _, n := range t.Notes {
+			timeStr := theme.NoteTime.Render(timeAgo(n.CreatedAt))
+			authorStr := ""
+			if n.Author != "" {
+				availAuthor := detailWidth - 18
+				author := n.Author
+				if availAuthor > 6 && len(author) > availAuthor {
+					author = author[:availAuthor-2] + ".."
+				}
+				authorStr = " by " + theme.NoteAuthor.Render(author)
+			}
+			contentLines = append(contentLines, fmt.Sprintf("    • %s%s:", timeStr, authorStr))
+			for _, line := range wrapText(n.Content, detailWidth-6, "      ") {
+				contentLines = append(contentLines, theme.NoteContent.Width(detailWidth).Render(line))
+			}
+		}
+	}
+
+	return contentLines
+}
+
+func (m Model) maxDetailScrollOffset() int {
+	if len(m.tasks) == 0 || m.cursor >= len(m.tasks) {
+		return 0
+	}
+	detailWidth, visibleBody := m.getDetailDimensions()
+	contentLines := m.getDetailContentLines(detailWidth)
+	maxOffset := len(contentLines) - visibleBody
+	if maxOffset < 0 {
+		return 0
+	}
+	return maxOffset
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	maxRows := m.getMaxRows()
 
@@ -137,6 +310,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		maxOffset := m.maxDetailScrollOffset()
+		if m.detailScrollOffset > maxOffset {
+			m.detailScrollOffset = maxOffset
+		}
+		maxScrollOffset := len(m.tasks) - maxRows
+		if maxScrollOffset < 0 {
+			maxScrollOffset = 0
+		}
+		if m.scrollOffset > maxScrollOffset {
+			m.scrollOffset = maxScrollOffset
+		}
 		return m, nil
 
 	case reloadMsg:
@@ -151,8 +335,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor < m.scrollOffset {
 			m.scrollOffset = m.cursor
 		}
+		maxScrollOffset := len(m.tasks) - maxRows
+		if maxScrollOffset < 0 {
+			maxScrollOffset = 0
+		}
+		if m.scrollOffset > maxScrollOffset {
+			m.scrollOffset = maxScrollOffset
+		}
 		if m.scrollOffset < 0 {
 			m.scrollOffset = 0
+		}
+		maxDetailOffset := m.maxDetailScrollOffset()
+		if m.detailScrollOffset > maxDetailOffset {
+			m.detailScrollOffset = maxDetailOffset
 		}
 		// Prune stale selected IDs that no longer exist
 		if len(m.selected) > 0 {
@@ -177,6 +372,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					t.Notes = msg.Notes
 					break
 				}
+			}
+			maxOffset := m.maxDetailScrollOffset()
+			if m.detailScrollOffset > maxOffset {
+				m.detailScrollOffset = maxOffset
 			}
 		}
 		return m, nil
@@ -242,6 +441,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			if m.activePane == PaneList {
 				m.activePane = PaneDetail
+				maxOffset := m.maxDetailScrollOffset()
+				if m.detailScrollOffset > maxOffset {
+					m.detailScrollOffset = maxOffset
+				}
 				m.statusMsg = "Focused Details pane (j/k to scroll content)"
 			} else {
 				m.activePane = PaneList
@@ -255,6 +458,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMsg = "Focused Tasks list (j/k to select task)"
 			} else {
 				m.activePane = PaneDetail
+				maxOffset := m.maxDetailScrollOffset()
+				if m.detailScrollOffset > maxOffset {
+					m.detailScrollOffset = maxOffset
+				}
 				m.statusMsg = "Focused Details pane (j/k to scroll content)"
 			}
 			return m, nil
@@ -262,6 +469,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "l", "right":
 			if m.activePane == PaneList && len(m.tasks) > 0 {
 				m.activePane = PaneDetail
+				maxOffset := m.maxDetailScrollOffset()
+				if m.detailScrollOffset > maxOffset {
+					m.detailScrollOffset = maxOffset
+				}
 				m.statusMsg = "Focused Details pane (j/k to scroll content)"
 				return m, nil
 			}
@@ -275,6 +486,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "up", "k":
 			if m.activePane == PaneDetail {
+				maxOffset := m.maxDetailScrollOffset()
+				if m.detailScrollOffset > maxOffset {
+					m.detailScrollOffset = maxOffset
+				}
 				if m.detailScrollOffset > 0 {
 					m.detailScrollOffset--
 				}
@@ -290,7 +505,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "down", "j":
 			if m.activePane == PaneDetail {
-				m.detailScrollOffset++
+				maxOffset := m.maxDetailScrollOffset()
+				if m.detailScrollOffset < maxOffset {
+					m.detailScrollOffset++
+				}
 				return m, nil
 			}
 			if m.cursor < len(m.tasks)-1 {
@@ -312,7 +530,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "G", "end":
 			if m.activePane == PaneDetail {
-				m.detailScrollOffset = 9999
+				m.detailScrollOffset = m.maxDetailScrollOffset()
 				return m, nil
 			}
 			if len(m.tasks) > 0 {
@@ -324,12 +542,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "J", "ctrl+d", "]", "pgdown":
-			m.detailScrollOffset += 6
+			if m.activePane == PaneDetail {
+				maxOffset := m.maxDetailScrollOffset()
+				m.detailScrollOffset += 6
+				if m.detailScrollOffset > maxOffset {
+					m.detailScrollOffset = maxOffset
+				}
+				return m, nil
+			}
+			if len(m.tasks) > 0 {
+				step := maxRows / 2
+				if step < 1 {
+					step = 1
+				}
+				m.cursor += step
+				if m.cursor >= len(m.tasks) {
+					m.cursor = len(m.tasks) - 1
+				}
+				if m.cursor >= m.scrollOffset+maxRows {
+					m.scrollOffset = m.cursor - maxRows + 1
+				}
+				m.detailScrollOffset = 0
+			}
 
 		case "K", "ctrl+u", "[", "pgup":
-			if m.detailScrollOffset > 6 {
-				m.detailScrollOffset -= 6
-			} else {
+			if m.activePane == PaneDetail {
+				if m.detailScrollOffset > 6 {
+					m.detailScrollOffset -= 6
+				} else {
+					m.detailScrollOffset = 0
+				}
+				maxOffset := m.maxDetailScrollOffset()
+				if m.detailScrollOffset > maxOffset {
+					m.detailScrollOffset = maxOffset
+				}
+				return m, nil
+			}
+			if len(m.tasks) > 0 {
+				step := maxRows / 2
+				if step < 1 {
+					step = 1
+				}
+				m.cursor -= step
+				if m.cursor < 0 {
+					m.cursor = 0
+				}
+				if m.cursor < m.scrollOffset {
+					m.scrollOffset = m.cursor
+				}
 				m.detailScrollOffset = 0
 			}
 
@@ -423,12 +683,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter":
 			m.showDiff = !m.showDiff
+			maxOffset := m.maxDetailScrollOffset()
+			if m.detailScrollOffset > maxOffset {
+				m.detailScrollOffset = maxOffset
+			}
 			if m.showDiff && len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
 				if t.DiffContent == "" && t.CommitSHA != "" {
 					return m, m.fetchTaskDetailCmd(t.ID)
 				}
 			}
+			return m, nil
 
 		case "x":
 			// Batch delete prompt if tasks selected, otherwise single-task
@@ -1205,19 +1470,9 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 	sb.WriteString("\n")
 
 	// Split proportions
-	dividerWidth := 1
-	tableWidth := width * 48 / 100
-	if tableWidth < 52 {
-		tableWidth = 52
-	}
-	if tableWidth > 75 {
-		tableWidth = 75
-	}
-	detailWidth := width - tableWidth - dividerWidth
-	bodyHeight := height - 4
-	if bodyHeight < 10 {
-		bodyHeight = 10
-	}
+	detailWidth, visibleBody := m.getDetailDimensions()
+	bodyHeight := visibleBody + 1
+	tableWidth := width - detailWidth - 1
 
 	// ─── LEFT PANE: Tasks Table ───
 	var leftLines []string
@@ -1377,131 +1632,10 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 	// ─── RIGHT PANE: Live Detail & Latest Activity ───
 	var rightLines []string
 	if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-		t := m.tasks[m.cursor]
-		var contentLines []string
-
-		// Latest update badge
-		var latestBadge string
-		if len(t.Notes) > 0 {
-			lastNote := t.Notes[len(t.Notes)-1]
-			author := lastNote.Author
-			if author == "" {
-				author = "actor"
-			}
-			latestBadge = fmt.Sprintf(" Latest Note: %s by %s", timeAgo(lastNote.CreatedAt), author)
-		} else if t.CommitSHA != "" {
-			latestBadge = fmt.Sprintf(" Resolved by %s (%s)", t.CommitSHA, timeAgo(t.UpdatedAt))
-		} else if !t.UpdatedAt.IsZero() && t.UpdatedAt != t.CreatedAt {
-			latestBadge = fmt.Sprintf(" Updated: %s", timeAgo(t.UpdatedAt))
-		} else {
-			latestBadge = fmt.Sprintf(" Created: %s", timeAgo(t.CreatedAt))
-		}
-		if lipgloss.Width(latestBadge) > detailWidth {
-			latestBadge = latestBadge[:detailWidth]
-		}
-		contentLines = append(contentLines, theme.NoteTime.Width(detailWidth).Render(latestBadge))
-		contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
-
-		// Task Title
-		for _, tl := range wrapText(t.ID+": "+t.Title, detailWidth-4, "  ") {
-			contentLines = append(contentLines, theme.DetailTitle.Width(detailWidth).Render(tl))
-		}
-
-		// Metadata badges
-		meta1 := fmt.Sprintf("  %s %s   %s %s   %s %s",
-			theme.DetailLabel.Render("Status:"), StatusStyle(t.Status).Render(string(t.Status)),
-			theme.DetailLabel.Render("Pri:"), PriorityStyle(t.Priority).Render(string(t.Priority)),
-			theme.DetailLabel.Render("Scope:"), theme.TaskID.Render(t.Scope),
-		)
-		var metaParts []string
-		if t.Assignee != "" {
-			metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(t.Assignee)))
-		}
-		if len(t.Tags) > 0 {
-			metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Tags:"), theme.Tag.Render(strings.Join(t.Tags, ", "))))
-		}
-		fullMeta := meta1
-		if len(metaParts) > 0 {
-			fullMeta += "   " + strings.Join(metaParts, "   ")
-		}
-		if lipgloss.Width(fullMeta) <= detailWidth {
-			contentLines = append(contentLines, fullMeta)
-		} else {
-			contentLines = append(contentLines, meta1)
-			if len(metaParts) > 0 {
-				for _, mp := range wrapText(strings.Join(metaParts, "   "), detailWidth-4, "  ") {
-					contentLines = append(contentLines, mp)
-				}
-			}
-		}
-		contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
-
-		// Description
-		if t.Description != "" {
-			descLines := wrapText(t.Description, detailWidth-4, "  ")
-			for _, dl := range descLines {
-				contentLines = append(contentLines, theme.DetailDesc.Width(detailWidth).Render(dl))
-			}
-		}
-
-		// Commit resolution & diff
-		if t.CommitSHA != "" {
-			contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
-			resText := fmt.Sprintf("✓ Resolved by commit %s: %s", t.CommitSHA, t.CommitMsg)
-			for _, rl := range wrapText(resText, detailWidth-4, "  ") {
-				contentLines = append(contentLines, theme.DetailResolved.Width(detailWidth).Render(rl))
-			}
-			if t.DiffStat != "" {
-				for _, sl := range strings.Split(strings.TrimSpace(t.DiffStat), "\n") {
-					contentLines = append(contentLines, theme.DiffStat.Width(detailWidth).Render("    "+strings.TrimSpace(sl)))
-				}
-			}
-			if m.showDiff && t.DiffContent != "" {
-				contentLines = append(contentLines, theme.Border.Width(detailWidth).Render("  ── Diff Content ──"))
-				diffLines := strings.Split(t.DiffContent, "\n")
-				for _, dl := range diffLines {
-					if strings.HasPrefix(dl, "+") {
-						contentLines = append(contentLines, theme.DiffAdd.Width(detailWidth).Render("    "+dl))
-					} else if strings.HasPrefix(dl, "-") {
-						contentLines = append(contentLines, theme.DiffSub.Width(detailWidth).Render("    "+dl))
-					} else if strings.HasPrefix(dl, "@@") {
-						contentLines = append(contentLines, theme.DiffHunk.Width(detailWidth).Render("    "+dl))
-					} else {
-						contentLines = append(contentLines, theme.DetailDesc.Width(detailWidth).Render("    "+dl))
-					}
-				}
-			}
-		}
-
-		// Activity Notes
-		if len(t.Notes) > 0 {
-			contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
-			contentLines = append(contentLines, theme.NoteHeader.Width(detailWidth).Render(fmt.Sprintf("  • Notes & Messages (%d):", len(t.Notes))))
-			for _, n := range t.Notes {
-				timeStr := theme.NoteTime.Render(timeAgo(n.CreatedAt))
-				authorStr := ""
-				if n.Author != "" {
-					availAuthor := detailWidth - 18
-					author := n.Author
-					if availAuthor > 6 && len(author) > availAuthor {
-						author = author[:availAuthor-2] + ".."
-					}
-					authorStr = " by " + theme.NoteAuthor.Render(author)
-				}
-				contentLines = append(contentLines, fmt.Sprintf("    • %s%s:", timeStr, authorStr))
-				for _, line := range wrapText(n.Content, detailWidth-6, "      ") {
-					contentLines = append(contentLines, theme.NoteContent.Width(detailWidth).Render(line))
-				}
-			}
-		}
+		contentLines := m.getDetailContentLines(detailWidth)
 
 		// Pinned Header and viewport calculation
 		totalContent := len(contentLines)
-		visibleBody := bodyHeight - 1 // 1 line reserved for pinned header
-		if visibleBody < 1 {
-			visibleBody = 1
-		}
-
 		maxOffset := totalContent - visibleBody
 		if maxOffset < 0 {
 			maxOffset = 0

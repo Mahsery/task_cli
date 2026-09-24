@@ -501,3 +501,96 @@ func TestTUIIndependentContentScrolling(t *testing.T) {
 		t.Errorf("Expected pinned header line to remain visible when scrolled, got:\n%s", viewScrolled)
 	}
 }
+
+func TestTUIScrollBoundsInBothPanes(t *testing.T) {
+	// Create tasks
+	notes := make([]domain.TaskNote, 30)
+	for i := range notes {
+		notes[i] = domain.TaskNote{
+			Author:    "tester",
+			Content:   fmt.Sprintf("Note %d with verbose text to guarantee scrolling", i+1),
+			CreatedAt: time.Now().Add(time.Duration(-i) * time.Hour),
+		}
+	}
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task 1", Notes: notes},
+		{ID: "T-2", Title: "Task 2"},
+		{ID: "T-3", Title: "Task 3"},
+	}
+
+	m := Model{
+		tasks:              tasks,
+		activePane:         PaneDetail,
+		cursor:             0,
+		detailScrollOffset: 0,
+		width:              120,
+		height:             20,
+		theme:              NewKanagawaTheme(),
+	}
+
+	maxDetailOffset := m.maxDetailScrollOffset()
+	if maxDetailOffset <= 0 {
+		t.Fatalf("Expected maxDetailOffset > 0, got %d", maxDetailOffset)
+	}
+
+	// 1. Jump to bottom of right pane with 'G'
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = updated.(Model)
+	if m.detailScrollOffset != maxDetailOffset {
+		t.Errorf("Expected detailScrollOffset to equal maxDetailOffset (%d) after 'G', got %d", maxDetailOffset, m.detailScrollOffset)
+	}
+
+	// 2. Press 'j' (down) 20 times past bottom: must NOT accumulate!
+	for i := 0; i < 20; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(Model)
+	}
+	if m.detailScrollOffset != maxDetailOffset {
+		t.Errorf("Expected detailScrollOffset to remain clamped at %d after mashing 'j', got %d", maxDetailOffset, m.detailScrollOffset)
+	}
+
+	// 3. Press 'k' (up) ONCE: must scroll up immediately by 1 line!
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(Model)
+	if m.detailScrollOffset != maxDetailOffset-1 {
+		t.Errorf("Expected detailScrollOffset to decrement immediately to %d on single 'k', got %d", maxDetailOffset-1, m.detailScrollOffset)
+	}
+
+	// 4. Press 'k' (up) past top: must clamp to 0 and not become negative
+	for i := 0; i < maxDetailOffset+10; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+		m = updated.(Model)
+	}
+	if m.detailScrollOffset != 0 {
+		t.Errorf("Expected detailScrollOffset to clamp at 0, got %d", m.detailScrollOffset)
+	}
+
+	// 5. Test left pane (Tasks List)
+	m.activePane = PaneList
+	m.cursor = 0
+
+	// Mash 'k' 10 times past top
+	for i := 0; i < 10; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+		m = updated.(Model)
+	}
+	if m.cursor != 0 {
+		t.Errorf("Expected cursor to remain at 0, got %d", m.cursor)
+	}
+
+	// Mash 'j' 20 times past bottom (tasks length is 3, max cursor is 2)
+	for i := 0; i < 20; i++ {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = updated.(Model)
+	}
+	if m.cursor != 2 {
+		t.Errorf("Expected cursor to clamp at last task index 2, got %d", m.cursor)
+	}
+
+	// Single 'k' from bottom must move to index 1 immediately
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(Model)
+	if m.cursor != 1 {
+		t.Errorf("Expected cursor to move immediately to 1 on single 'k', got %d", m.cursor)
+	}
+}
