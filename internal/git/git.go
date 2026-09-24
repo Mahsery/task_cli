@@ -52,6 +52,17 @@ func GetAuthor() string {
 	return "anonymous"
 }
 
+// MaxDiffContentBytes caps stored inline diffs at 256KB to prevent database row bloat
+// and excessive disk I/O when commits touch large generated assets or lockfiles.
+const MaxDiffContentBytes = 256 * 1024
+
+func sanitizeDiffContent(diff []byte) string {
+	if len(diff) > MaxDiffContentBytes {
+		return string(diff[:MaxDiffContentBytes]) + "\n\n... [diff truncated by tk at 256KB to preserve storage efficiency; full patch in git]"
+	}
+	return strings.TrimSpace(string(diff))
+}
+
 func GetLatestCommit(repoDir string) (*CommitInfo, error) {
 	return GetCommit(repoDir, "HEAD")
 }
@@ -99,7 +110,7 @@ func GetCommit(repoDir, ref string) (*CommitInfo, error) {
 	cmdDiff := exec.Command("git", "-C", repoDir, "show", "--patch", "--format=", ref)
 	diffOut, err := cmdDiff.Output()
 	if err == nil {
-		info.DiffContent = strings.TrimSpace(string(diffOut))
+		info.DiffContent = sanitizeDiffContent(diffOut)
 	}
 
 	return info, nil
@@ -125,7 +136,7 @@ func GetWorkingDiff(repoDir string) (*CommitInfo, error) {
 		return nil, fmt.Errorf("failed to get working diff: %w", err)
 	}
 
-	diffStr := strings.TrimSpace(string(diffOut))
+	diffStr := sanitizeDiffContent(diffOut)
 	if diffStr == "" {
 		return nil, fmt.Errorf("no uncommitted changes found in working tree")
 	}

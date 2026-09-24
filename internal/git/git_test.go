@@ -52,3 +52,24 @@ func TestFormatKernelPatch(t *testing.T) {
 		t.Errorf("expected diffstat in output, got: %s", formatted)
 	}
 }
+
+func TestSanitizeDiffContent(t *testing.T) {
+	smallDiff := []byte("diff --git a/test.txt b/test.txt\n+hello")
+	sanitized := sanitizeDiffContent(smallDiff)
+	if sanitized != string(smallDiff) {
+		t.Errorf("expected small diff to remain intact, got: %q", sanitized)
+	}
+
+	largeDiff := make([]byte, MaxDiffContentBytes+1000)
+	for i := range largeDiff {
+		largeDiff[i] = 'a'
+	}
+	sanitizedLarge := sanitizeDiffContent(largeDiff)
+	if !strings.Contains(sanitizedLarge, "diff truncated by tk at 256KB") {
+		t.Errorf("expected large diff to be truncated, got length: %d", len(sanitizedLarge))
+	}
+	if len(sanitizedLarge) > MaxDiffContentBytes+200 {
+		t.Errorf("truncated diff exceeded expected bounds: %d", len(sanitizedLarge))
+	}
+}
+

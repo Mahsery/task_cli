@@ -109,7 +109,33 @@ func (s *Server) Start() error {
 		s.Stop()
 	}()
 
+	// 4. Background maintenance (idle WAL checkpoints to minimize disk footprint and SSD churn)
+	go s.maintenanceLoop()
+
 	return s.acceptLoop(unixLn)
+}
+
+func (s *Server) maintenanceLoop() {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			dbs := make([]*sqlite.DB, 0, len(s.dbs))
+			for _, db := range s.dbs {
+				dbs = append(dbs, db)
+			}
+			s.mu.Unlock()
+
+			for _, db := range dbs {
+				_ = db.Checkpoint("PASSIVE")
+			}
+		}
+	}
 }
 
 func (s *Server) Stop() {

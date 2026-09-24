@@ -21,7 +21,7 @@ func Open(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to create db directory %q: %w", dir, err)
 	}
 
-	dsn := fmt.Sprintf("%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)", dbPath)
+	dsn := fmt.Sprintf("%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-16000)&_pragma=mmap_size(67108864)", dbPath)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite db: %w", err)
@@ -40,7 +40,24 @@ func Open(dbPath string) (*DB, error) {
 }
 
 func (d *DB) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// Flush any pending WAL frames and truncate WAL to zero out disk footprint
+	_, _ = d.conn.Exec("PRAGMA wal_checkpoint(TRUNCATE);")
 	return d.conn.Close()
+}
+
+// Checkpoint runs a WAL checkpoint (PASSIVE, RESTART, or TRUNCATE) to keep WAL lean.
+func (d *DB) Checkpoint(mode string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch mode {
+	case "PASSIVE", "RESTART", "TRUNCATE":
+	default:
+		mode = "PASSIVE"
+	}
+	_, err := d.conn.Exec(fmt.Sprintf("PRAGMA wal_checkpoint(%s);", mode))
+	return err
 }
 
 func (d *DB) migrate() error {
