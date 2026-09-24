@@ -53,6 +53,9 @@ type Theme struct {
 	ColHeader        lipgloss.Style
 	Border           lipgloss.Style
 	Cursor           lipgloss.Style
+	SelectedMark     lipgloss.Style
+	UnselectedMark   lipgloss.Style
+	BatchBadge       lipgloss.Style
 	RowSelected      lipgloss.Style
 	RowNormal        lipgloss.Style
 	TaskID           lipgloss.Style
@@ -124,6 +127,19 @@ func NewKanagawaTheme() Theme {
 		Cursor: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color(CarpYellow)),
+
+		SelectedMark: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(CarpYellow)),
+
+		UnselectedMark: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(DragonGray3)),
+
+		BatchBadge: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(DragonBlack0)).
+			Background(lipgloss.Color(CarpYellow)).
+			Padding(0, 1),
 
 		RowSelected: lipgloss.NewStyle().
 			Bold(true).

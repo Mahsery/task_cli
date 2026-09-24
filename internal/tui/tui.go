@@ -21,6 +21,7 @@ type Model struct {
 	editorCmd          string
 	theme              Theme
 	tasks              []*domain.Task
+	selected           map[string]bool
 	cursor             int
 	scrollOffset       int
 	detailScrollOffset int
@@ -45,6 +46,7 @@ func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
 		theme:              NewKanagawaTheme(),
 		scope:              scope,
 		repoPath:           repoPath,
+		selected:           make(map[string]bool),
 		cursor:             0,
 		scrollOffset:       0,
 		detailScrollOffset: 0,
@@ -143,6 +145,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.scrollOffset < 0 {
 			m.scrollOffset = 0
 		}
+		// Prune stale selected IDs that no longer exist
+		if len(m.selected) > 0 {
+			taskSet := make(map[string]bool, len(m.tasks))
+			for _, t := range m.tasks {
+				taskSet[t.ID] = true
+			}
+			for id := range m.selected {
+				if !taskSet[id] {
+					delete(m.selected, id)
+				}
+			}
+		}
 		return m, nil
 
 	case taskDetailMsg:
@@ -170,12 +184,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.confirmDelete {
 			m.confirmDelete = false
-			taskID := m.deleteTaskID
-			m.deleteTaskID = ""
 			if msg.String() == "y" || msg.String() == "Y" {
-				m.statusMsg = fmt.Sprintf("Deleting %s...", taskID)
-				return m, m.deleteTaskCmd(taskID)
+				if m.deleteTaskID != "" {
+					taskID := m.deleteTaskID
+					m.deleteTaskID = ""
+					m.statusMsg = fmt.Sprintf("Deleting %s...", taskID)
+					return m, m.deleteTaskCmd(taskID)
+				} else if len(m.selected) > 0 {
+					ids := m.getSelectedIDs()
+					m.selected = make(map[string]bool)
+					m.statusMsg = fmt.Sprintf("Deleting %d tasks...", len(ids))
+					return m, m.batchDeleteCmd(ids)
+				}
 			}
+			m.deleteTaskID = ""
 			m.statusMsg = "Deletion cancelled"
 			return m, nil
 		}
@@ -250,7 +272,62 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detailScrollOffset = 0
 			}
 
+		case " ", "space":
+			// Multi-select toggle: toggle selection for current task, then advance cursor down
+			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
+				t := m.tasks[m.cursor]
+				if m.selected == nil {
+					m.selected = make(map[string]bool)
+				}
+				if m.selected[t.ID] {
+					delete(m.selected, t.ID)
+				} else {
+					m.selected[t.ID] = true
+				}
+				if m.cursor < len(m.tasks)-1 {
+					m.cursor++
+					if m.cursor >= m.scrollOffset+maxRows {
+						m.scrollOffset = m.cursor - maxRows + 1
+					}
+				}
+				m.detailScrollOffset = 0
+			}
+
+		case "v":
+			// Toggle selection for current task without advancing cursor
+			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
+				t := m.tasks[m.cursor]
+				if m.selected == nil {
+					m.selected = make(map[string]bool)
+				}
+				if m.selected[t.ID] {
+					delete(m.selected, t.ID)
+				} else {
+					m.selected[t.ID] = true
+				}
+			}
+
+		case "V":
+			// Select all / Deselect all toggle
+			if len(m.tasks) > 0 {
+				if len(m.selected) == len(m.tasks) {
+					m.selected = make(map[string]bool)
+					m.statusMsg = "Deselected all"
+				} else {
+					m.selected = make(map[string]bool, len(m.tasks))
+					for _, t := range m.tasks {
+						m.selected[t.ID] = true
+					}
+					m.statusMsg = fmt.Sprintf("Selected all (%d tasks)", len(m.tasks))
+				}
+			}
+
 		case "esc", "c":
+			if len(m.selected) > 0 {
+				m.selected = make(map[string]bool)
+				m.statusMsg = "Selection cleared"
+				return m, nil
+			}
 			if m.filterText != "" {
 				m.filterText = ""
 				m.statusMsg = "Filter reset"
@@ -288,7 +365,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "x":
-			// Prompt confirmation before deleting
+			// Batch delete prompt if tasks selected, otherwise single-task
+			if len(m.selected) > 0 {
+				m.confirmDelete = true
+				m.deleteTaskID = ""
+				return m, nil
+			}
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
 				m.confirmDelete = true
@@ -297,14 +379,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "a":
-			// Claim task for current actor
+			// Batch claim if tasks selected, otherwise single-task claim
+			if len(m.selected) > 0 {
+				ids := m.getSelectedIDs()
+				m.selected = make(map[string]bool)
+				m.statusMsg = fmt.Sprintf("Claiming %d tasks...", len(ids))
+				return m, m.batchClaimCmd(ids)
+			}
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
 				return m, m.claimTaskCmd(t.ID)
 			}
 
 		case "d":
-			// Reversible Done: marks done or reopens if already done
+			// Batch Done if tasks selected, otherwise single-task reversible done
+			if len(m.selected) > 0 {
+				ids := m.getSelectedIDs()
+				m.selected = make(map[string]bool)
+				m.statusMsg = fmt.Sprintf("Marking %d tasks done...", len(ids))
+				return m, m.batchDoneCmd(ids)
+			}
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
 				if t.Status == domain.StatusDone || t.Status == domain.StatusClosed {
@@ -314,7 +408,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "s":
-			// Toggle status: open <-> in_progress
+			// Batch status toggle if tasks selected, otherwise single-task toggle
+			if len(m.selected) > 0 {
+				ids := m.getSelectedIDs()
+				m.selected = make(map[string]bool)
+				m.statusMsg = fmt.Sprintf("Updating %d tasks...", len(ids))
+				return m, m.batchStatusCmd(ids)
+			}
 			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 				t := m.tasks[m.cursor]
 				newStatus := domain.StatusInProgress
@@ -499,6 +599,119 @@ func (m Model) claimTaskCmd(taskID string) tea.Cmd {
 	}
 }
 
+func (m Model) getSelectedIDs() []string {
+	var ids []string
+	for _, t := range m.tasks {
+		if m.selected[t.ID] {
+			ids = append(ids, t.ID)
+		}
+	}
+	return ids
+}
+
+func (m Model) batchDoneCmd(ids []string) tea.Cmd {
+	return func() tea.Msg {
+		var sha, msg, stat, diff string
+		if m.scope == "local" && m.repoPath != "" {
+			if commit, err := git.GetLatestCommit(m.repoPath); err == nil {
+				sha = commit.ShortSHA
+				msg = commit.Subject
+				stat = commit.DiffStat
+				diff = commit.DiffContent
+			}
+		}
+		for _, id := range ids {
+			if sha != "" {
+				_, _ = m.client.AttachGit(id, sha, msg, stat, diff, true)
+			} else {
+				st := domain.StatusDone
+				note := "Completed task"
+				_, _ = m.client.UpdateTask(protocol.UpdateTaskPayload{
+					ID:      id,
+					Status:  &st,
+					AddNote: &note,
+				})
+			}
+		}
+		filter := domain.TaskFilter{
+			Scope:    m.scope,
+			RepoPath: m.repoPath,
+			Search:   m.filterText,
+		}
+		tasks, _ := m.client.ListTasks(filter)
+		return reloadMsg(tasks)
+	}
+}
+
+func (m Model) batchStatusCmd(ids []string) tea.Cmd {
+	return func() tea.Msg {
+		allInProg := true
+		for _, id := range ids {
+			for _, t := range m.tasks {
+				if t.ID == id && t.Status != domain.StatusInProgress {
+					allInProg = false
+					break
+				}
+			}
+			if !allInProg {
+				break
+			}
+		}
+		targetStatus := domain.StatusInProgress
+		if allInProg {
+			targetStatus = domain.StatusOpen
+		}
+		for _, id := range ids {
+			st := targetStatus
+			_, _ = m.client.UpdateTask(protocol.UpdateTaskPayload{
+				ID:     id,
+				Status: &st,
+			})
+		}
+		filter := domain.TaskFilter{
+			Scope:    m.scope,
+			RepoPath: m.repoPath,
+			Search:   m.filterText,
+		}
+		tasks, _ := m.client.ListTasks(filter)
+		return reloadMsg(tasks)
+	}
+}
+
+func (m Model) batchClaimCmd(ids []string) tea.Cmd {
+	return func() tea.Msg {
+		actor := m.client.Actor()
+		if actor == "" {
+			actor = git.GetAuthor()
+		}
+		for _, id := range ids {
+			_, _ = m.client.ClaimTask(id, actor, false)
+		}
+		filter := domain.TaskFilter{
+			Scope:    m.scope,
+			RepoPath: m.repoPath,
+			Search:   m.filterText,
+		}
+		tasks, _ := m.client.ListTasks(filter)
+		return reloadMsg(tasks)
+	}
+}
+
+func (m Model) batchDeleteCmd(ids []string) tea.Cmd {
+	return func() tea.Msg {
+		for _, id := range ids {
+			_ = m.client.DeleteTask(id)
+		}
+		filter := domain.TaskFilter{
+			Scope:    m.scope,
+			RepoPath: m.repoPath,
+			Search:   m.filterText,
+		}
+		tasks, _ := m.client.ListTasks(filter)
+		return reloadMsg(tasks)
+	}
+}
+
 func wrapText(text string, width int, indent string) []string {
 	var result []string
 	paragraphs := strings.Split(text, "\n")
@@ -667,8 +880,21 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 			t := m.tasks[i]
 			isCursor := (i == m.cursor)
 			prefix := "  "
-			if isCursor {
-				prefix = theme.Cursor.Render("► ")
+			if len(m.selected) > 0 {
+				isSel := m.selected[t.ID]
+				if isCursor && isSel {
+					prefix = theme.Cursor.Render("►") + theme.SelectedMark.Render("●")
+				} else if isCursor && !isSel {
+					prefix = theme.Cursor.Render("►") + theme.UnselectedMark.Render("○")
+				} else if !isCursor && isSel {
+					prefix = " " + theme.SelectedMark.Render("●")
+				} else {
+					prefix = " " + theme.UnselectedMark.Render("○")
+				}
+			} else {
+				if isCursor {
+					prefix = theme.Cursor.Render("► ")
+				}
 			}
 
 			title := t.Title
@@ -977,8 +1203,21 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 			t := m.tasks[i]
 			isCursor := (i == m.cursor)
 			prefix := "  "
-			if isCursor {
-				prefix = theme.Cursor.Render("► ")
+			if len(m.selected) > 0 {
+				isSel := m.selected[t.ID]
+				if isCursor && isSel {
+					prefix = theme.Cursor.Render("►") + theme.SelectedMark.Render("●")
+				} else if isCursor && !isSel {
+					prefix = theme.Cursor.Render("►") + theme.UnselectedMark.Render("○")
+				} else if !isCursor && isSel {
+					prefix = " " + theme.SelectedMark.Render("●")
+				} else {
+					prefix = " " + theme.UnselectedMark.Render("○")
+				}
+			} else {
+				if isCursor {
+					prefix = theme.Cursor.Render("► ")
+				}
 			}
 
 			title := t.Title
@@ -1230,11 +1469,65 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 func (m Model) renderFooter(width int) string {
 	theme := m.theme
 	if m.confirmDelete {
-		warnText := fmt.Sprintf(" ⚠️  Delete task %s permanently? Press [y] to confirm, [n/Esc] to cancel ", m.deleteTaskID)
-		if width < len(warnText) {
-			warnText = fmt.Sprintf(" Delete %s? [y/N] ", m.deleteTaskID)
+		var warnText string
+		if m.deleteTaskID != "" {
+			warnText = fmt.Sprintf(" ⚠️  Delete task %s permanently? Press [y] to confirm, [n/Esc] to cancel ", m.deleteTaskID)
+			if width < len(warnText) {
+				warnText = fmt.Sprintf(" Delete %s? [y/N] ", m.deleteTaskID)
+			}
+		} else {
+			warnText = fmt.Sprintf(" ⚠️  Delete %d selected tasks permanently? Press [y] to confirm, [n/Esc] to cancel ", len(m.selected))
+			if width < len(warnText) {
+				warnText = fmt.Sprintf(" Delete %d tasks? [y/N] ", len(m.selected))
+			}
 		}
 		return theme.FooterBg.Width(width).Render(theme.DiffSub.Render(warnText))
+	}
+
+	key := func(k, action string) string {
+		return theme.FooterKey.Render("["+k+"]") + " " + theme.FooterDesc.Render(action)
+	}
+
+	if len(m.selected) > 0 {
+		selCount := len(m.selected)
+		selBadge := theme.BatchBadge.Render(fmt.Sprintf("%d selected", selCount))
+		var keys []string
+		if width >= 115 {
+			keys = []string{
+				selBadge,
+				theme.CountDone.Render(fmt.Sprintf("[d] Done (%d)", selCount)),
+				theme.CountProg.Render(fmt.Sprintf("[s] Status (%d)", selCount)),
+				theme.CountOpen.Render(fmt.Sprintf("[a] Claim (%d)", selCount)),
+				theme.DiffSub.Render(fmt.Sprintf("[x] Del (%d)", selCount)),
+				key("Space", "Toggle"),
+				key("V", "All"),
+				theme.FilterIndicator.Render("[Esc] Clear"),
+				theme.Age.Render("[q] Quit"),
+			}
+		} else if width >= 80 {
+			keys = []string{
+				selBadge,
+				theme.CountDone.Render(fmt.Sprintf("[d] Done(%d)", selCount)),
+				theme.CountProg.Render(fmt.Sprintf("[s] Status(%d)", selCount)),
+				theme.DiffSub.Render(fmt.Sprintf("[x] Del(%d)", selCount)),
+				key("Space", "Tgl"),
+				theme.FilterIndicator.Render("[Esc]"),
+				theme.Age.Render("[q]"),
+			}
+		} else {
+			keys = []string{
+				selBadge,
+				theme.CountDone.Render(fmt.Sprintf("[d](%d)", selCount)),
+				theme.DiffSub.Render(fmt.Sprintf("[x](%d)", selCount)),
+				theme.FilterIndicator.Render("[Esc]"),
+				theme.Age.Render("[q]"),
+			}
+		}
+		footerText := strings.Join(keys, "  ")
+		if m.statusMsg != "" {
+			footerText = theme.FooterStatus.Render("["+m.statusMsg+"]") + "  " + footerText
+		}
+		return theme.FooterBg.Width(width).Render(footerText)
 	}
 
 	doneLabel := theme.CountProg.Render("[d] Done")
@@ -1253,14 +1546,11 @@ func (m Model) renderFooter(width int) string {
 		}
 	}
 
-	key := func(k, action string) string {
-		return theme.FooterKey.Render("["+k+"]") + " " + theme.FooterDesc.Render(action)
-	}
-
 	var keys []string
 	if width >= 120 {
 		keys = []string{
 			key("j/k", "Move"),
+			key("Space", "Sel"),
 			key("J/K", "Scroll"),
 			key("n", "New"),
 			key("e", "Edit"),

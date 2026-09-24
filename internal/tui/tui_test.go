@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"task_cli/internal/domain"
 )
@@ -176,5 +177,139 @@ func TestTUISplitView(t *testing.T) {
 	outNarrow := mNarrow.View()
 	if strings.Contains(outNarrow, "Task Details & Latest Activity") {
 		t.Errorf("Expected stacked view without split view header in width 80")
+	}
+}
+
+func TestTUIMultiSelectionToggle(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen},
+		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress},
+		{ID: "T-3", Title: "Task Three", Status: domain.StatusDone},
+	}
+
+	m := Model{
+		tasks:    tasks,
+		cursor:   0,
+		selected: make(map[string]bool),
+		width:    80,
+		height:   24,
+		theme:    NewKanagawaTheme(),
+	}
+
+	// 1. Space on T-1 toggles T-1 selected and moves cursor to index 1 (T-2)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = updated.(Model)
+	if !m.selected["T-1"] {
+		t.Errorf("Expected T-1 to be selected after space")
+	}
+	if m.cursor != 1 {
+		t.Errorf("Expected cursor to advance to 1, got %d", m.cursor)
+	}
+
+	// 2. 'v' on T-2 toggles T-2 selected without moving cursor
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	m = updated.(Model)
+	if !m.selected["T-2"] {
+		t.Errorf("Expected T-2 to be selected after 'v'")
+	}
+	if m.cursor != 1 {
+		t.Errorf("Expected cursor to remain at 1, got %d", m.cursor)
+	}
+
+	// 3. 'V' (Select all): since not all are selected, should select all 3
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
+	m = updated.(Model)
+	if len(m.selected) != 3 {
+		t.Errorf("Expected all 3 tasks to be selected after 'V', got %d", len(m.selected))
+	}
+
+	// 4. 'V' again: since all are selected, should deselect all
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
+	m = updated.(Model)
+	if len(m.selected) != 0 {
+		t.Errorf("Expected 0 tasks selected after second 'V', got %d", len(m.selected))
+	}
+
+	// 5. Select T-1, then press Esc to clear selection
+	m.selected["T-1"] = true
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if len(m.selected) != 0 {
+		t.Errorf("Expected selection to be cleared on Esc, got %d", len(m.selected))
+	}
+}
+
+func TestTUIMultiSelectionVisualMarkers(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal},
+		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress, Priority: domain.PriorityHigh},
+	}
+
+	// Stacked view
+	m := Model{
+		tasks:    tasks,
+		cursor:   0,
+		selected: map[string]bool{"T-1": true},
+		width:    80,
+		height:   24,
+		theme:    NewKanagawaTheme(),
+	}
+
+	out := m.View()
+	// T-1 is cursor and selected -> should contain "►" and "●"
+	if !strings.Contains(out, "►") || !strings.Contains(out, "●") {
+		t.Errorf("Expected selection marker ● and cursor ► in view, got:\n%s", out)
+	}
+	// T-2 is non-cursor and unselected -> should contain unselected marker "○"
+	if !strings.Contains(out, "○") {
+		t.Errorf("Expected unselected marker ○ in view when selection active, got:\n%s", out)
+	}
+
+	// Verify column alignment invariant: no lines exceed width
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		if lipgloss.Width(l) > 80 {
+			t.Errorf("Line %d exceeds width 80: %q", i, l)
+		}
+	}
+
+	// Split view
+	mSplit := Model{
+		tasks:    tasks,
+		cursor:   1, // T-2 is cursor (unselected), T-1 is non-cursor (selected)
+		selected: map[string]bool{"T-1": true},
+		width:    120,
+		height:   30,
+		theme:    NewKanagawaTheme(),
+	}
+	outSplit := mSplit.View()
+	if !strings.Contains(outSplit, "●") || !strings.Contains(outSplit, "○") {
+		t.Errorf("Expected ● and ○ in split view, got:\n%s", outSplit)
+	}
+	// Footer badge
+	if !strings.Contains(outSplit, "1 selected") {
+		t.Errorf("Expected '1 selected' badge in footer, got:\n%s", outSplit)
+	}
+}
+
+func TestTUIBatchConfirmationView(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task One"},
+		{ID: "T-2", Title: "Task Two"},
+	}
+
+	m := Model{
+		tasks:         tasks,
+		selected:      map[string]bool{"T-1": true, "T-2": true},
+		confirmDelete: true,
+		deleteTaskID:  "", // batch delete
+		width:         80,
+		height:        24,
+		theme:         NewKanagawaTheme(),
+	}
+
+	out := m.View()
+	if !strings.Contains(out, "Delete 2 selected tasks permanently?") && !strings.Contains(out, "Delete 2 tasks? [y/N]") {
+		t.Errorf("Expected batch deletion confirmation prompt, got:\n%s", out)
 	}
 }
