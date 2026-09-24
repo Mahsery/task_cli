@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -151,7 +152,7 @@ func TestTUISplitView(t *testing.T) {
 		t.Errorf("Expected isSplitView() to be true for width 120")
 	}
 	outWide := mWide.View()
-	if !strings.Contains(outWide, "Task Details & Latest Activity") {
+	if !strings.Contains(outWide, "Details & Messages") {
 		t.Errorf("Expected split view header in wide view")
 	}
 	if !strings.Contains(outWide, "│") {
@@ -311,5 +312,192 @@ func TestTUIBatchConfirmationView(t *testing.T) {
 	out := m.View()
 	if !strings.Contains(out, "Delete 2 selected tasks permanently?") && !strings.Contains(out, "Delete 2 tasks? [y/N]") {
 		t.Errorf("Expected batch deletion confirmation prompt, got:\n%s", out)
+	}
+}
+
+func TestTUIDualPaneNavigation(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task One", Description: "Description of Task One"},
+		{ID: "T-2", Title: "Task Two", Description: "Description of Task Two"},
+	}
+
+	m := Model{
+		tasks:      tasks,
+		activePane: PaneList,
+		cursor:     0,
+		width:      120,
+		height:     30,
+		theme:      NewKanagawaTheme(),
+	}
+
+	// 1. Initial state: PaneList
+	if m.activePane != PaneList {
+		t.Errorf("Expected initial activePane to be PaneList, got %v", m.activePane)
+	}
+
+	// 2. Tab toggles to PaneDetail
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
+	if m.activePane != PaneDetail {
+		t.Errorf("Expected activePane to be PaneDetail after Tab, got %v", m.activePane)
+	}
+	if !strings.Contains(m.statusMsg, "Details pane") {
+		t.Errorf("Expected statusMsg to mention Details pane, got %q", m.statusMsg)
+	}
+
+	// 3. Tab toggles back to PaneList
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(Model)
+	if m.activePane != PaneList {
+		t.Errorf("Expected activePane to be PaneList after second Tab, got %v", m.activePane)
+	}
+
+	// 4. 'l' switches to PaneDetail
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m = updated.(Model)
+	if m.activePane != PaneDetail {
+		t.Errorf("Expected activePane to be PaneDetail after 'l', got %v", m.activePane)
+	}
+
+	// 5. 'h' switches back to PaneList
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	m = updated.(Model)
+	if m.activePane != PaneList {
+		t.Errorf("Expected activePane to be PaneList after 'h', got %v", m.activePane)
+	}
+
+	// 6. Right arrow switches to PaneDetail, Left arrow switches to PaneList
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m = updated.(Model)
+	if m.activePane != PaneDetail {
+		t.Errorf("Expected activePane to be PaneDetail after Right arrow, got %v", m.activePane)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = updated.(Model)
+	if m.activePane != PaneList {
+		t.Errorf("Expected activePane to be PaneList after Left arrow, got %v", m.activePane)
+	}
+
+	// 7. Focus PaneDetail and hit Esc -> returns to PaneList
+	m.activePane = PaneDetail
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.activePane != PaneList {
+		t.Errorf("Expected Esc in PaneDetail to return focus to PaneList, got %v", m.activePane)
+	}
+}
+
+func TestTUIIndependentContentScrolling(t *testing.T) {
+	// Create a task with lots of notes to ensure scrolling has plenty of content lines
+	notes := make([]domain.TaskNote, 25)
+	for i := range notes {
+		notes[i] = domain.TaskNote{
+			Author:    "tester",
+			Content:   fmt.Sprintf("Progress update note line %d with extra descriptive text", i+1),
+			CreatedAt: time.Now().Add(time.Duration(-i) * time.Hour),
+		}
+	}
+
+	tasks := []*domain.Task{
+		{
+			ID:          "T-1",
+			Title:       "Task One",
+			Description: "First task description",
+			Notes:       notes,
+		},
+		{
+			ID:          "T-2",
+			Title:       "Task Two",
+			Description: "Second task description",
+		},
+	}
+
+	m := Model{
+		tasks:              tasks,
+		activePane:         PaneList,
+		cursor:             0,
+		detailScrollOffset: 0,
+		width:              120,
+		height:             20,
+		theme:              NewKanagawaTheme(),
+	}
+
+	// When activePane == PaneList:
+	// 'j' moves cursor to 1, detailScrollOffset stays 0
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.cursor != 1 {
+		t.Errorf("Expected cursor to advance to 1 in PaneList, got %d", m.cursor)
+	}
+	if m.detailScrollOffset != 0 {
+		t.Errorf("Expected detailScrollOffset to remain 0 in PaneList, got %d", m.detailScrollOffset)
+	}
+
+	// 'k' moves cursor back to 0
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(Model)
+	if m.cursor != 0 {
+		t.Errorf("Expected cursor to return to 0, got %d", m.cursor)
+	}
+
+	// Now switch to PaneDetail!
+	m.activePane = PaneDetail
+
+	// In PaneDetail, 'j' scrolls content (detailScrollOffset++), cursor stays 0!
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.cursor != 0 {
+		t.Errorf("Expected cursor to remain locked at 0 in PaneDetail, got %d", m.cursor)
+	}
+	if m.detailScrollOffset != 1 {
+		t.Errorf("Expected detailScrollOffset to increment to 1, got %d", m.detailScrollOffset)
+	}
+
+	// 'j' again
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.detailScrollOffset != 2 {
+		t.Errorf("Expected detailScrollOffset to be 2, got %d", m.detailScrollOffset)
+	}
+
+	// 'k' scrolls up
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(Model)
+	if m.detailScrollOffset != 1 {
+		t.Errorf("Expected detailScrollOffset to decrement to 1, got %d", m.detailScrollOffset)
+	}
+	if m.cursor != 0 {
+		t.Errorf("Expected cursor to remain locked at 0, got %d", m.cursor)
+	}
+
+	// Fast scrolling: J adds 6
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
+	m = updated.(Model)
+	if m.detailScrollOffset != 7 {
+		t.Errorf("Expected detailScrollOffset to be 7 after 'J', got %d", m.detailScrollOffset)
+	}
+
+	// 'g' jumps to top (0)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(Model)
+	if m.detailScrollOffset != 0 {
+		t.Errorf("Expected detailScrollOffset to reset to 0 after 'g', got %d", m.detailScrollOffset)
+	}
+
+	// Test rendered output in PaneDetail:
+	viewOut := m.View()
+	if !strings.Contains(viewOut, "DETAILS PANE") {
+		t.Errorf("Expected footer to display DETAILS PANE when activePane is PaneDetail, got:\n%s", viewOut)
+	}
+	if !strings.Contains(viewOut, "[Active • j/k scroll") {
+		t.Errorf("Expected panel header to show active scroll indicator, got:\n%s", viewOut)
+	}
+
+	// Verify header pinning: even when scrolled down, panel header is still rendered
+	m.detailScrollOffset = 5
+	viewScrolled := m.View()
+	if !strings.Contains(viewScrolled, "Details & Messages") {
+		t.Errorf("Expected pinned header line to remain visible when scrolled, got:\n%s", viewScrolled)
 	}
 }

@@ -52,6 +52,9 @@ type Theme struct {
 	FilterIndicator  lipgloss.Style
 	ColHeader        lipgloss.Style
 	Border           lipgloss.Style
+	ActiveBorder     lipgloss.Style
+	ActiveHeader     lipgloss.Style
+	InactiveHeader   lipgloss.Style
 	Cursor           lipgloss.Style
 	SelectedMark     lipgloss.Style
 	UnselectedMark   lipgloss.Style
@@ -123,6 +126,17 @@ func NewKanagawaTheme() Theme {
 
 		Border: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(DragonBlack5)),
+
+		ActiveBorder: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(CarpYellow)),
+
+		ActiveHeader: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(CarpYellow)),
+
+		InactiveHeader: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(DragonGray3)),
 
 		Cursor: lipgloss.NewStyle().
 			Bold(true).

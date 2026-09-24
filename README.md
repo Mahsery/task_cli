@@ -114,12 +114,15 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 
 | Keybinding | Action | Description |
 |:----------:|--------|-------------|
-| `j` / `k` / `↓` / `↑` | Move Cursor | Navigate tasks in the table (with responsive viewport windowing) |
-| `g` / `G` | Top / Bottom | Jump immediately to first or last task |
+| `Tab` / `Shift+Tab` | Toggle Active Pane | Switch focus between Tasks List (left) and Details & Messages (right) |
+| `l` / `→` | Focus Details Pane | Move focus from task list into details/messages pane |
+| `h` / `←` | Focus Tasks List | Return focus from details pane back to task list |
+| `j` / `k` / `↓` / `↑` | Move / Scroll | In **List**: navigate task selection; in **Details**: scroll message content line-by-line |
+| `g` / `G` | Top / Bottom | In **List**: jump to first/last task; in **Details**: jump to top/bottom of notes |
+| `Ctrl+D` / `Ctrl+U` / `J` / `K` | Fast Page Scroll | Page scroll details, notes, and patch diff content in split view |
 | `Space` | Multi-Select Toggle | Toggle task selection (`●`/`○` marker) and advance cursor down |
 | `v` | Select / Deselect | Toggle task selection for current row without advancing cursor |
 | `V` | Select All / Deselect | Toggle selection across all currently visible tasks |
-| `J` / `K` / `Ctrl+D` / `Ctrl+U` | Scroll Details | Scroll detail & diff pane in split view (on terminals ≥ 110 cols) |
 | `d` | Reversible / Batch Done | Mark task(s) done (or **reopen** if already done); auto-attaches git diff |
 | `s` | Status / Batch Toggle | Cycle status between `open` and `in_progress` for selected tasks |
 | `a` | Claim / Batch Claim | Atomically claim selected task(s) for current actor |
@@ -128,7 +131,7 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `e` | Edit Task | Launch `$EDITOR` with selected task pre-populated |
 | `Enter` | Toggle Diff | Expand or collapse unified patch diff view |
 | `/` | Search Filter | Enter live search query (`Enter` applies, `Esc` cancels) |
-| `Esc` / `c` | Reset Filter / Deselect | Clear multi-selection first, or clear active search filter |
+| `Esc` / `c` | Reset Filter / Deselect | In **Details**: return to list; in **List**: clear selection or search filter |
 | `S` | Toggle Scope | Switch view between `local` (git repository) and `global` scopes |
 | `r` | Refresh | Re-query tasks from daemon |
 | `q` / `Ctrl+C` | Quit | Exit the TUI |

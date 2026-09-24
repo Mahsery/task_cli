@@ -16,12 +16,20 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+type Pane int
+
+const (
+	PaneList Pane = iota
+	PaneDetail
+)
+
 type Model struct {
 	client             *client.Client
 	editorCmd          string
 	theme              Theme
 	tasks              []*domain.Task
 	selected           map[string]bool
+	activePane         Pane
 	cursor             int
 	scrollOffset       int
 	detailScrollOffset int
@@ -47,6 +55,7 @@ func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
 		scope:              scope,
 		repoPath:           repoPath,
 		selected:           make(map[string]bool),
+		activePane:         PaneList,
 		cursor:             0,
 		scrollOffset:       0,
 		detailScrollOffset: 0,
@@ -230,7 +239,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 
+		case "tab":
+			if m.activePane == PaneList {
+				m.activePane = PaneDetail
+				m.statusMsg = "Focused Details pane (j/k to scroll content)"
+			} else {
+				m.activePane = PaneList
+				m.statusMsg = "Focused Tasks list (j/k to select task)"
+			}
+			return m, nil
+
+		case "shift+tab":
+			if m.activePane == PaneDetail {
+				m.activePane = PaneList
+				m.statusMsg = "Focused Tasks list (j/k to select task)"
+			} else {
+				m.activePane = PaneDetail
+				m.statusMsg = "Focused Details pane (j/k to scroll content)"
+			}
+			return m, nil
+
+		case "l", "right":
+			if m.activePane == PaneList && len(m.tasks) > 0 {
+				m.activePane = PaneDetail
+				m.statusMsg = "Focused Details pane (j/k to scroll content)"
+				return m, nil
+			}
+
+		case "h", "left":
+			if m.activePane == PaneDetail {
+				m.activePane = PaneList
+				m.statusMsg = "Focused Tasks list (j/k to select task)"
+				return m, nil
+			}
+
 		case "up", "k":
+			if m.activePane == PaneDetail {
+				if m.detailScrollOffset > 0 {
+					m.detailScrollOffset--
+				}
+				return m, nil
+			}
 			if m.cursor > 0 {
 				m.cursor--
 				if m.cursor < m.scrollOffset {
@@ -240,6 +289,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "down", "j":
+			if m.activePane == PaneDetail {
+				m.detailScrollOffset++
+				return m, nil
+			}
 			if m.cursor < len(m.tasks)-1 {
 				m.cursor++
 				if m.cursor >= m.scrollOffset+maxRows {
@@ -249,11 +302,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "g", "home":
+			if m.activePane == PaneDetail {
+				m.detailScrollOffset = 0
+				return m, nil
+			}
 			m.cursor = 0
 			m.scrollOffset = 0
 			m.detailScrollOffset = 0
 
 		case "G", "end":
+			if m.activePane == PaneDetail {
+				m.detailScrollOffset = 9999
+				return m, nil
+			}
 			if len(m.tasks) > 0 {
 				m.cursor = len(m.tasks) - 1
 				if m.cursor >= m.scrollOffset+maxRows {
@@ -262,12 +323,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.detailScrollOffset = 0
 			}
 
-		case "J", "ctrl+d", "]":
-			m.detailScrollOffset += 4
+		case "J", "ctrl+d", "]", "pgdown":
+			m.detailScrollOffset += 6
 
-		case "K", "ctrl+u", "[":
-			if m.detailScrollOffset > 4 {
-				m.detailScrollOffset -= 4
+		case "K", "ctrl+u", "[", "pgup":
+			if m.detailScrollOffset > 6 {
+				m.detailScrollOffset -= 6
 			} else {
 				m.detailScrollOffset = 0
 			}
@@ -323,6 +384,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "esc", "c":
+			if m.activePane == PaneDetail {
+				m.activePane = PaneList
+				m.statusMsg = "Focused Tasks list"
+				return m, nil
+			}
 			if len(m.selected) > 0 {
 				m.selected = make(map[string]bool)
 				m.statusMsg = "Selection cleared"
@@ -1180,7 +1246,13 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s",
 			idWidth, "ID", statusWidth, "STATUS", priWidth, "PRI", titleWidth, "TITLE", ageWidth, "AGE")
 	}
-	leftLines = append(leftLines, theme.ColHeader.Width(tableWidth).Render(colHeader))
+	var tableHeaderStyled string
+	if m.activePane == PaneList {
+		tableHeaderStyled = theme.ActiveHeader.Width(tableWidth).Render(colHeader)
+	} else {
+		tableHeaderStyled = theme.ColHeader.Width(tableWidth).Render(colHeader)
+	}
+	leftLines = append(leftLines, tableHeaderStyled)
 	leftLines = append(leftLines, theme.Border.Render(strings.Repeat("─", tableWidth)))
 
 	maxRows := bodyHeight - 2
@@ -1294,18 +1366,19 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 
 	// ─── DIVIDER COLUMN ───
 	var divLines []string
+	divStyle := theme.Border
+	if m.activePane == PaneDetail {
+		divStyle = theme.ActiveBorder
+	}
 	for i := 0; i < bodyHeight; i++ {
-		divLines = append(divLines, theme.Border.Render("│"))
+		divLines = append(divLines, divStyle.Render("│"))
 	}
 
 	// ─── RIGHT PANE: Live Detail & Latest Activity ───
 	var rightLines []string
 	if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 		t := m.tasks[m.cursor]
-
-		// Header line with panel title
-		panelTitle := " ── Task Details & Latest Activity ──"
-		rightLines = append(rightLines, theme.ColHeader.Width(detailWidth).Render(panelTitle))
+		var contentLines []string
 
 		// Latest update badge
 		var latestBadge string
@@ -1326,12 +1399,12 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 		if lipgloss.Width(latestBadge) > detailWidth {
 			latestBadge = latestBadge[:detailWidth]
 		}
-		rightLines = append(rightLines, theme.NoteTime.Width(detailWidth).Render(latestBadge))
-		rightLines = append(rightLines, strings.Repeat(" ", detailWidth))
+		contentLines = append(contentLines, theme.NoteTime.Width(detailWidth).Render(latestBadge))
+		contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
 
 		// Task Title
 		for _, tl := range wrapText(t.ID+": "+t.Title, detailWidth-4, "  ") {
-			rightLines = append(rightLines, theme.DetailTitle.Width(detailWidth).Render(tl))
+			contentLines = append(contentLines, theme.DetailTitle.Width(detailWidth).Render(tl))
 		}
 
 		// Metadata badges
@@ -1352,49 +1425,49 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 			fullMeta += "   " + strings.Join(metaParts, "   ")
 		}
 		if lipgloss.Width(fullMeta) <= detailWidth {
-			rightLines = append(rightLines, fullMeta)
+			contentLines = append(contentLines, fullMeta)
 		} else {
-			rightLines = append(rightLines, meta1)
+			contentLines = append(contentLines, meta1)
 			if len(metaParts) > 0 {
 				for _, mp := range wrapText(strings.Join(metaParts, "   "), detailWidth-4, "  ") {
-					rightLines = append(rightLines, mp)
+					contentLines = append(contentLines, mp)
 				}
 			}
 		}
-		rightLines = append(rightLines, strings.Repeat(" ", detailWidth))
+		contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
 
 		// Description
 		if t.Description != "" {
 			descLines := wrapText(t.Description, detailWidth-4, "  ")
 			for _, dl := range descLines {
-				rightLines = append(rightLines, theme.DetailDesc.Width(detailWidth).Render(dl))
+				contentLines = append(contentLines, theme.DetailDesc.Width(detailWidth).Render(dl))
 			}
 		}
 
 		// Commit resolution & diff
 		if t.CommitSHA != "" {
-			rightLines = append(rightLines, strings.Repeat(" ", detailWidth))
+			contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
 			resText := fmt.Sprintf("✓ Resolved by commit %s: %s", t.CommitSHA, t.CommitMsg)
 			for _, rl := range wrapText(resText, detailWidth-4, "  ") {
-				rightLines = append(rightLines, theme.DetailResolved.Width(detailWidth).Render(rl))
+				contentLines = append(contentLines, theme.DetailResolved.Width(detailWidth).Render(rl))
 			}
 			if t.DiffStat != "" {
 				for _, sl := range strings.Split(strings.TrimSpace(t.DiffStat), "\n") {
-					rightLines = append(rightLines, theme.DiffStat.Width(detailWidth).Render("    "+strings.TrimSpace(sl)))
+					contentLines = append(contentLines, theme.DiffStat.Width(detailWidth).Render("    "+strings.TrimSpace(sl)))
 				}
 			}
 			if m.showDiff && t.DiffContent != "" {
-				rightLines = append(rightLines, theme.Border.Width(detailWidth).Render("  ── Diff Content ──"))
+				contentLines = append(contentLines, theme.Border.Width(detailWidth).Render("  ── Diff Content ──"))
 				diffLines := strings.Split(t.DiffContent, "\n")
 				for _, dl := range diffLines {
 					if strings.HasPrefix(dl, "+") {
-						rightLines = append(rightLines, theme.DiffAdd.Width(detailWidth).Render("    "+dl))
+						contentLines = append(contentLines, theme.DiffAdd.Width(detailWidth).Render("    "+dl))
 					} else if strings.HasPrefix(dl, "-") {
-						rightLines = append(rightLines, theme.DiffSub.Width(detailWidth).Render("    "+dl))
+						contentLines = append(contentLines, theme.DiffSub.Width(detailWidth).Render("    "+dl))
 					} else if strings.HasPrefix(dl, "@@") {
-						rightLines = append(rightLines, theme.DiffHunk.Width(detailWidth).Render("    "+dl))
+						contentLines = append(contentLines, theme.DiffHunk.Width(detailWidth).Render("    "+dl))
 					} else {
-						rightLines = append(rightLines, theme.DetailDesc.Width(detailWidth).Render("    "+dl))
+						contentLines = append(contentLines, theme.DetailDesc.Width(detailWidth).Render("    "+dl))
 					}
 				}
 			}
@@ -1402,8 +1475,8 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 
 		// Activity Notes
 		if len(t.Notes) > 0 {
-			rightLines = append(rightLines, strings.Repeat(" ", detailWidth))
-			rightLines = append(rightLines, theme.NoteHeader.Width(detailWidth).Render(fmt.Sprintf("  • Notes (%d):", len(t.Notes))))
+			contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
+			contentLines = append(contentLines, theme.NoteHeader.Width(detailWidth).Render(fmt.Sprintf("  • Notes & Messages (%d):", len(t.Notes))))
 			for _, n := range t.Notes {
 				timeStr := theme.NoteTime.Render(timeAgo(n.CreatedAt))
 				authorStr := ""
@@ -1415,33 +1488,64 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 					}
 					authorStr = " by " + theme.NoteAuthor.Render(author)
 				}
-				rightLines = append(rightLines, fmt.Sprintf("    • %s%s:", timeStr, authorStr))
+				contentLines = append(contentLines, fmt.Sprintf("    • %s%s:", timeStr, authorStr))
 				for _, line := range wrapText(n.Content, detailWidth-6, "      ") {
-					rightLines = append(rightLines, theme.NoteContent.Width(detailWidth).Render(line))
+					contentLines = append(contentLines, theme.NoteContent.Width(detailWidth).Render(line))
 				}
 			}
 		}
 
-		// Apply scrolling to detail pane if total lines exceed bodyHeight
-		totalDetail := len(rightLines)
-		if totalDetail > bodyHeight {
-			start := m.detailScrollOffset
-			if start > totalDetail-bodyHeight {
-				start = totalDetail - bodyHeight
+		// Pinned Header and viewport calculation
+		totalContent := len(contentLines)
+		visibleBody := bodyHeight - 1 // 1 line reserved for pinned header
+		if visibleBody < 1 {
+			visibleBody = 1
+		}
+
+		maxOffset := totalContent - visibleBody
+		if maxOffset < 0 {
+			maxOffset = 0
+		}
+		if m.detailScrollOffset > maxOffset {
+			m.detailScrollOffset = maxOffset
+		}
+		if m.detailScrollOffset < 0 {
+			m.detailScrollOffset = 0
+		}
+
+		start := m.detailScrollOffset
+		end := start + visibleBody
+		if end > totalContent {
+			end = totalContent
+		}
+
+		var panelTitle string
+		if m.activePane == PaneDetail {
+			if totalContent > visibleBody {
+				panelTitle = fmt.Sprintf(" ── Details & Messages (L%d-%d/%d) [Active • j/k scroll • Tab list] ──", start+1, end, totalContent)
+			} else {
+				panelTitle = " ── Details & Messages [Active • Tab to return to list] ──"
 			}
-			if start < 0 {
-				start = 0
+			rightLines = append(rightLines, theme.ActiveHeader.Width(detailWidth).Render(panelTitle))
+		} else {
+			if totalContent > visibleBody {
+				panelTitle = fmt.Sprintf(" ── Details & Messages (L%d-%d/%d) [Tab/l to focus & scroll] ──", start+1, end, totalContent)
+			} else {
+				panelTitle = " ── Details & Messages [Tab/l to focus] ──"
 			}
-			end := start + bodyHeight
-			if end > totalDetail {
-				end = totalDetail
-			}
-			panelTitle = fmt.Sprintf(" ── Details (L%d-%d/%d [J/K scroll]) ──", start+1, end, totalDetail)
-			rightLines[0] = theme.ColHeader.Width(detailWidth).Render(panelTitle)
-			rightLines = rightLines[start:end]
+			rightLines = append(rightLines, theme.InactiveHeader.Width(detailWidth).Render(panelTitle))
+		}
+
+		if totalContent > 0 {
+			rightLines = append(rightLines, contentLines[start:end]...)
 		}
 	} else {
-		rightLines = append(rightLines, theme.ColHeader.Width(detailWidth).Render("  ── Task Details & Latest Activity ──"))
+		panelTitle := "  ── Task Details & Messages ──"
+		if m.activePane == PaneDetail {
+			rightLines = append(rightLines, theme.ActiveHeader.Width(detailWidth).Render(panelTitle))
+		} else {
+			rightLines = append(rightLines, theme.InactiveHeader.Width(detailWidth).Render(panelTitle))
+		}
 		rightLines = append(rightLines, theme.RowNormal.Width(detailWidth).Render("  No task selected."))
 	}
 
@@ -1546,12 +1650,52 @@ func (m Model) renderFooter(width int) string {
 		}
 	}
 
+	if m.activePane == PaneDetail {
+		var keys []string
+		if width >= 115 {
+			keys = []string{
+				theme.BatchBadge.Render("DETAILS PANE"),
+				key("j/k", "Scroll"),
+				key("Ctrl+D/U", "Page"),
+				key("g/G", "Top/Bottom"),
+				key("Tab/h", "Tasks List"),
+				key("Enter", "Diff"),
+				doneLabel,
+				statusLabel,
+				theme.DiffSub.Render("[x] Del"),
+				theme.Age.Render("[q] Quit"),
+			}
+		} else if width >= 80 {
+			keys = []string{
+				theme.BatchBadge.Render("DETAILS"),
+				key("j/k", "Scroll"),
+				key("Tab", "Tasks"),
+				key("Enter", "Diff"),
+				doneLabel,
+				statusLabel,
+				theme.Age.Render("[q]"),
+			}
+		} else {
+			keys = []string{
+				theme.BatchBadge.Render("DET"),
+				key("j/k", "Scroll"),
+				key("Tab", "Back"),
+				theme.Age.Render("[q]"),
+			}
+		}
+		footerText := strings.Join(keys, "  ")
+		if m.statusMsg != "" {
+			footerText = theme.FooterStatus.Render("["+m.statusMsg+"]") + "  " + footerText
+		}
+		return theme.FooterBg.Width(width).Render(footerText)
+	}
+
 	var keys []string
 	if width >= 120 {
 		keys = []string{
 			key("j/k", "Move"),
+			key("Tab/l", "Details"),
 			key("Space", "Sel"),
-			key("J/K", "Scroll"),
 			key("n", "New"),
 			key("e", "Edit"),
 			key("a", "Claim"),
@@ -1568,6 +1712,8 @@ func (m Model) renderFooter(width int) string {
 	} else if width >= 90 {
 		keys = []string{
 			key("j/k", "Move"),
+			key("Tab/l", "Details"),
+			key("Space", "Sel"),
 			key("n", "New"),
 			key("e", "Edit"),
 			key("a", "Claim"),
