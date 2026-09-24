@@ -13,6 +13,9 @@ import (
 )
 
 func (d *DB) CreateTask(scope, repoPath, title, description string, status domain.Status, priority domain.Priority, tags []string, author, assignee string) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	if tags == nil {
 		tags = []string{}
 	}
@@ -134,6 +137,9 @@ func (d *DB) GetTask(id string) (*domain.Task, error) {
 }
 
 func (d *DB) UpdateTask(id string, title, description *string, status *domain.Status, priority *domain.Priority, tags *[]string, assignee *string, addNote *string, author string) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	task, err := d.GetTask(id)
 	if err != nil {
 		return nil, err
@@ -288,6 +294,9 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 }
 
 func (d *DB) DeleteTask(id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	res, err := d.conn.Exec("DELETE FROM tasks WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete task: %w", err)
@@ -300,6 +309,9 @@ func (d *DB) DeleteTask(id string) error {
 }
 
 func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, markDone bool) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	now := time.Now().UTC()
 	updates := []string{
 		"commit_sha = ?",

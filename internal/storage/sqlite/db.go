@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
 
 type DB struct {
 	conn *sql.DB
+	mu   sync.Mutex
 }
 
 func Open(dbPath string) (*DB, error) {
