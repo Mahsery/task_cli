@@ -105,6 +105,7 @@ func init() {
 	RootCmd.AddCommand(deleteCmd)
 	RootCmd.AddCommand(watchCmd)
 	RootCmd.AddCommand(daemonCmd)
+	RootCmd.AddCommand(backupCmd)
 }
 
 func Execute() {

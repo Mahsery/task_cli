@@ -351,3 +351,58 @@ func (c *Client) ShutdownDaemon() error {
 	_, err := c.call(protocol.ActionShutdown, nil)
 	return err
 }
+
+func (c *Client) CreateBackup(name string, maxSnapshots int) (string, error) {
+	resp, err := c.call(protocol.ActionBackupCreate, protocol.BackupCreatePayload{
+		Name:         name,
+		MaxSnapshots: maxSnapshots,
+	})
+	if err != nil {
+		return "", err
+	}
+	var res map[string]string
+	if err := json.Unmarshal(resp.Data, &res); err != nil {
+		return "", err
+	}
+	return res["path"], nil
+}
+
+func (c *Client) ListBackups() ([]protocol.BackupInfo, error) {
+	resp, err := c.call(protocol.ActionBackupList, nil)
+	if err != nil {
+		return nil, err
+	}
+	var backups []protocol.BackupInfo
+	if err := json.Unmarshal(resp.Data, &backups); err != nil {
+		return nil, err
+	}
+	return backups, nil
+}
+
+func (c *Client) VerifyBackup(target string) (string, error) {
+	resp, err := c.call(protocol.ActionBackupVerify, protocol.BackupVerifyPayload{
+		Target: target,
+	})
+	if err != nil {
+		return "", err
+	}
+	var res map[string]string
+	if err := json.Unmarshal(resp.Data, &res); err != nil {
+		return "", err
+	}
+	return res["message"], nil
+}
+
+func (c *Client) RestoreBackup(backupPath string) (string, error) {
+	resp, err := c.call(protocol.ActionBackupRestore, protocol.BackupRestorePayload{
+		BackupPath: backupPath,
+	})
+	if err != nil {
+		return "", err
+	}
+	var res map[string]string
+	if err := json.Unmarshal(resp.Data, &res); err != nil {
+		return "", err
+	}
+	return res["message"], nil
+}

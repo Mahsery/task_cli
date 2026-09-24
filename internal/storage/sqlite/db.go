@@ -6,13 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type DB struct {
-	conn *sql.DB
-	mu   sync.Mutex
+	conn   *sql.DB
+	dbPath string
+	mu     sync.Mutex
 }
 
 func Open(dbPath string) (*DB, error) {
@@ -30,7 +32,7 @@ func Open(dbPath string) (*DB, error) {
 	// Single writer connection pool for daemon guarantees 0 contention
 	conn.SetMaxOpenConns(1)
 
-	db := &DB{conn: conn}
+	db := &DB{conn: conn, dbPath: dbPath}
 	if err := db.migrate(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to migrate db: %w", err)
@@ -60,7 +62,34 @@ func (d *DB) Checkpoint(mode string) error {
 	return err
 }
 
+const CurrentSchemaVersion = 1
+
 func (d *DB) migrate() error {
+	var userVersion int
+	_ = d.conn.QueryRow("PRAGMA user_version;").Scan(&userVersion)
+
+	var tableCount int
+	_ = d.conn.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='tasks';").Scan(&tableCount)
+
+	if userVersion == 0 && tableCount > 0 {
+		userVersion = 1
+		_, _ = d.conn.Exec("PRAGMA user_version = 1;")
+	}
+
+	if userVersion < CurrentSchemaVersion && tableCount > 0 {
+		backupDir := filepath.Join(filepath.Dir(d.dbPath), "backups")
+		_ = os.MkdirAll(backupDir, 0755)
+		snapshotPath := filepath.Join(backupDir, fmt.Sprintf("pre-upgrade-v%d-%s.db", userVersion, time.Now().Format("20060102-150405")))
+
+		if err := d.IntegrityCheck(); err != nil {
+			return fmt.Errorf("cannot migrate corrupted database: %w", err)
+		}
+
+		if err := d.backupLocked(snapshotPath); err != nil {
+			return fmt.Errorf("failed to create pre-upgrade safety snapshot: %w", err)
+		}
+	}
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,
@@ -111,6 +140,13 @@ func (d *DB) migrate() error {
 	GROUP BY scope, repo_path;
 	`
 
-	_, err := d.conn.Exec(schema)
-	return err
+	if _, err := d.conn.Exec(schema); err != nil {
+		return err
+	}
+
+	if _, err := d.conn.Exec(fmt.Sprintf("PRAGMA user_version = %d;", CurrentSchemaVersion)); err != nil {
+		return err
+	}
+
+	return d.QuickCheck()
 }

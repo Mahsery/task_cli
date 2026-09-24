@@ -411,6 +411,18 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		resp.Data = json.RawMessage(`{"status":"shutting_down"}`)
 		return resp
 
+	case protocol.ActionBackupCreate:
+		return s.handleBackupCreate(req)
+
+	case protocol.ActionBackupList:
+		return s.handleBackupList(req)
+
+	case protocol.ActionBackupRestore:
+		return s.handleBackupRestore(req)
+
+	case protocol.ActionBackupVerify:
+		return s.handleBackupVerify(req)
+
 	default:
 		return errorResp(req.ID, fmt.Sprintf("unknown action %q", req.Action))
 	}
@@ -470,3 +482,167 @@ func errorResp(id, msg string) protocol.Response {
 		Error:   msg,
 	}
 }
+
+func (s *Server) handleBackupCreate(req protocol.Request) protocol.Response {
+	var p protocol.BackupCreatePayload
+	if len(req.Payload) > 0 {
+		_ = json.Unmarshal(req.Payload, &p)
+	}
+	db, err := s.getDB(req.Scope, req.RepoPath)
+	if err != nil {
+		return errorResp(req.ID, err.Error())
+	}
+	targetPath, err := db.CreateRollingBackup(p.Name, p.MaxSnapshots)
+	if err != nil {
+		return errorResp(req.ID, "failed to create backup: "+err.Error())
+	}
+
+	data, _ := json.Marshal(map[string]string{
+		"path":    targetPath,
+		"message": fmt.Sprintf("✓ Created backup snapshot: %s", targetPath),
+	})
+	return protocol.Response{
+		ID:      req.ID,
+		Success: true,
+		Data:    data,
+	}
+}
+
+func (s *Server) handleBackupList(req protocol.Request) protocol.Response {
+	db, err := s.getDB(req.Scope, req.RepoPath)
+	if err != nil {
+		return errorResp(req.ID, err.Error())
+	}
+	backups, err := db.ListBackups()
+	if err != nil {
+		return errorResp(req.ID, "failed to list backups: "+err.Error())
+	}
+	data, _ := json.Marshal(backups)
+	return protocol.Response{
+		ID:      req.ID,
+		Success: true,
+		Data:    data,
+	}
+}
+
+func (s *Server) handleBackupVerify(req protocol.Request) protocol.Response {
+	var p protocol.BackupVerifyPayload
+	if len(req.Payload) > 0 {
+		_ = json.Unmarshal(req.Payload, &p)
+	}
+
+	if p.Target != "" {
+		tempDB, err := sqlite.Open(p.Target)
+		if err != nil {
+			return errorResp(req.ID, "failed to open backup file: "+err.Error())
+		}
+		defer tempDB.Close()
+		if err := tempDB.IntegrityCheck(); err != nil {
+			return errorResp(req.ID, "integrity check failed for backup: "+err.Error())
+		}
+		data, _ := json.Marshal(map[string]string{
+			"status":  "ok",
+			"target":  p.Target,
+			"message": fmt.Sprintf("✓ Backup file %s passed SQLite integrity check", p.Target),
+		})
+		return protocol.Response{ID: req.ID, Success: true, Data: data}
+	}
+
+	db, err := s.getDB(req.Scope, req.RepoPath)
+	if err != nil {
+		return errorResp(req.ID, err.Error())
+	}
+	if err := db.IntegrityCheck(); err != nil {
+		return errorResp(req.ID, "integrity check failed: "+err.Error())
+	}
+	data, _ := json.Marshal(map[string]string{
+		"status":  "ok",
+		"target":  db.Path(),
+		"message": fmt.Sprintf("✓ Database %s passed SQLite integrity check", db.Path()),
+	})
+	return protocol.Response{ID: req.ID, Success: true, Data: data}
+}
+
+func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
+	var p protocol.BackupRestorePayload
+	if err := json.Unmarshal(req.Payload, &p); err != nil {
+		return errorResp(req.ID, "invalid payload: "+err.Error())
+	}
+	if p.BackupPath == "" {
+		return errorResp(req.ID, "backup_path is required")
+	}
+
+	// 1. Verify backup file exists and passes integrity check
+	testDB, err := sqlite.Open(p.BackupPath)
+	if err != nil {
+		return errorResp(req.ID, "backup file cannot be opened: "+err.Error())
+	}
+	if err := testDB.IntegrityCheck(); err != nil {
+		testDB.Close()
+		return errorResp(req.ID, "backup file failed integrity check: "+err.Error())
+	}
+	testDB.Close()
+
+	// 2. Lock server and close active database connection
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var dbPath string
+	if req.Scope == "global" || req.RepoPath == "" {
+		dbPath = s.cfg.GlobalDBPath()
+	} else {
+		dbPath = s.cfg.LocalDBPath(req.RepoPath)
+	}
+
+	if activeDB, exists := s.dbs[dbPath]; exists {
+		_ = activeDB.Close()
+		delete(s.dbs, dbPath)
+	}
+
+	// 3. Create pre-restore safety copy of current dbPath if it exists
+	if _, err := os.Stat(dbPath); err == nil {
+		preRestorePath := fmt.Sprintf("%s.pre-restore-%s.bak", dbPath, time.Now().Format("20060102-150405"))
+		_ = copyFile(dbPath, preRestorePath)
+	}
+
+	// 4. Remove current db and any WAL / SHM files
+	_ = os.Remove(dbPath)
+	_ = os.Remove(dbPath + "-wal")
+	_ = os.Remove(dbPath + "-shm")
+
+	// 5. Copy backup file to dbPath
+	if err := copyFile(p.BackupPath, dbPath); err != nil {
+		return errorResp(req.ID, "failed to copy backup to target db: "+err.Error())
+	}
+
+	// 6. Reopen DB to verify and cache
+	newDB, err := sqlite.Open(dbPath)
+	if err != nil {
+		return errorResp(req.ID, "restored database failed to open: "+err.Error())
+	}
+	s.dbs[dbPath] = newDB
+
+	data, _ := json.Marshal(map[string]string{
+		"status":  "ok",
+		"message": fmt.Sprintf("✓ Successfully restored database from %s", p.BackupPath),
+	})
+	return protocol.Response{ID: req.ID, Success: true, Data: data}
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
+}
+

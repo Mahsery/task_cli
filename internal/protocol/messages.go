@@ -20,6 +20,10 @@ const (
 	ActionAttachGit    Action = "attach_git"
 	ActionStreamEvents Action = "stream_events"
 	ActionShutdown     Action = "shutdown"
+	ActionBackupCreate  Action = "backup_create"
+	ActionBackupList    Action = "backup_list"
+	ActionBackupRestore Action = "backup_restore"
+	ActionBackupVerify  Action = "backup_verify"
 )
 
 type Request struct {
@@ -111,4 +115,24 @@ type Event struct {
 	Timestamp time.Time    `json:"timestamp"`
 	Task      *domain.Task `json:"task,omitempty"`
 	Message   string       `json:"message"`
+}
+
+type BackupCreatePayload struct {
+	Name         string `json:"name,omitempty"`
+	MaxSnapshots int    `json:"max_snapshots,omitempty"`
+}
+
+type BackupRestorePayload struct {
+	BackupPath string `json:"backup_path"`
+}
+
+type BackupVerifyPayload struct {
+	Target string `json:"target,omitempty"`
+}
+
+type BackupInfo struct {
+	Name    string    `json:"name"`
+	Path    string    `json:"path"`
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"mod_time"`
 }
