@@ -20,10 +20,15 @@ func renderTaskTable(tasks []*domain.Task) {
 	}
 
 	var sb strings.Builder
+	sepChar := "─"
+	if IsASCIIOnly() {
+		sepChar = "-"
+	}
+
 	if width < 88 {
 		// Responsive layout for 80-column screens (74 cols total)
 		sb.WriteString(fmt.Sprintf("%-6s %-11s %-6s %-26s %-10s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE"))
-		sb.WriteString(strings.Repeat("─", 74) + "\n")
+		sb.WriteString(strings.Repeat(sepChar, 74) + "\n")
 		for _, t := range tasks {
 			title := t.Title
 			if len(title) > 24 {
@@ -51,7 +56,7 @@ func renderTaskTable(tasks []*domain.Task) {
 
 	// Standard wide layout (88 cols total)
 	sb.WriteString(fmt.Sprintf("%-6s %-12s %-8s %-34s %-16s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE"))
-	sb.WriteString(strings.Repeat("─", 88) + "\n")
+	sb.WriteString(strings.Repeat(sepChar, 88) + "\n")
 	for _, t := range tasks {
 		title := t.Title
 		if len(title) > 32 {

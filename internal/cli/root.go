@@ -69,8 +69,8 @@ Running 'tk' without arguments in an interactive terminal launches the TUI.`,
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// If invoked with no args and connected to a terminal, launch TUI
-		if !isTerminal() || jsonFlag {
+		// If invoked with no args and connected to an interactive terminal, launch TUI
+		if !IsInteractiveTerminal() || jsonFlag {
 			return cmd.Help()
 		}
 
@@ -122,12 +122,4 @@ func outputJSON(v any) error {
 	}
 	fmt.Println(string(data))
 	return nil
-}
-
-func isTerminal() bool {
-	stat, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return (stat.Mode() & os.ModeCharDevice) != 0
 }

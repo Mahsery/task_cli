@@ -11,15 +11,67 @@ import (
 
 var noPagerFlag bool
 
+// IsInteractiveTerminal reports whether execution is attached to a real, interactive
+// terminal (both stdout and stdin are TTYs), is not a dumb terminal, and is not running
+// in an automated AI agent runner, CI workflow, or non-interactive batch environment.
+func IsInteractiveTerminal() bool {
+	// 1. Dumb or empty terminal capability checks
+	termEnv := strings.ToLower(os.Getenv("TERM"))
+	if termEnv == "dumb" || termEnv == "" {
+		return false
+	}
+
+	// 2. Automated AI agent, CI pipelines, and batch flags
+	if os.Getenv("CI") != "" ||
+		os.Getenv("CONTINUOUS_INTEGRATION") != "" ||
+		os.Getenv("DEBIAN_FRONTEND") == "noninteractive" ||
+		os.Getenv("NONINTERACTIVE") != "" ||
+		os.Getenv("TK_NONINTERACTIVE") != "" ||
+		os.Getenv("AGENT") != "" ||
+		os.Getenv("TK_AGENT") != "" {
+		return false
+	}
+
+	// 3. Both stdout and stdin must be interactive character devices
+	stdoutFd := os.Stdout.Fd()
+	stdinFd := os.Stdin.Fd()
+
+	if !term.IsTerminal(stdoutFd) || !term.IsTerminal(stdinFd) {
+		return false
+	}
+
+	stdoutStat, err := os.Stdout.Stat()
+	if err != nil || (stdoutStat.Mode()&os.ModeCharDevice) == 0 {
+		return false
+	}
+	stdinStat, err := os.Stdin.Stat()
+	if err != nil || (stdinStat.Mode()&os.ModeCharDevice) == 0 {
+		return false
+	}
+
+	return true
+}
+
+// IsASCIIOnly returns true if the current locale is strictly 7-bit ASCII (e.g. C or POSIX).
+func IsASCIIOnly() bool {
+	lc := os.Getenv("LC_ALL")
+	if lc == "" {
+		lc = os.Getenv("LANG")
+	}
+	return lc == "C" || lc == "POSIX"
+}
+
 // PrintWithPager outputs text to stdout, automatically invoking a pager
 // (TK_PAGER / BAT_PAGER / PAGER / less -RFX) when output exceeds terminal height.
+// Bypasses the pager completely in non-interactive terminals, dumb terminals,
+// automated agent harnesses, or when explicitly requested.
 func PrintWithPager(content string) error {
-	fd := os.Stdout.Fd()
-	if !term.IsTerminal(fd) || noPagerFlag || os.Getenv("TK_NO_PAGER") != "" || os.Getenv("PAGER") == "cat" {
+	if !IsInteractiveTerminal() || noPagerFlag || os.Getenv("TK_NO_PAGER") != "" || os.Getenv("PAGER") == "cat" {
 		_, err := fmt.Print(content)
 		return err
 	}
 
+	fd := os.Stdout.Fd()
 	termWidth, termHeight, err := term.GetSize(fd)
 	if err != nil || termHeight <= 0 {
 		_, err := fmt.Print(content)

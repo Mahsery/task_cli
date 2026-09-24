@@ -22,7 +22,7 @@ In an interactive terminal, prompts for confirmation unless --yes or -y is speci
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		if isTerminal() && !deleteForce && !jsonFlag {
+		if IsInteractiveTerminal() && !deleteForce && !jsonFlag {
 			fmt.Printf("Delete task %s permanently? [y/N]: ", taskID)
 			var resp string
 			_, _ = fmt.Scanln(&resp)
