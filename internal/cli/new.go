@@ -16,6 +16,7 @@ import (
 
 var (
 	newTitle       string
+	newStatus      string
 	newPriority    string
 	newTags        string
 	newAssignee    string
@@ -120,6 +121,15 @@ and subsequent lines form the description.`,
 			return fmt.Errorf("task title cannot be empty (use -t or provide in template)")
 		}
 
+		var status domain.Status = domain.StatusOpen
+		if cmd.Flags().Changed("status") {
+			s, err := domain.ParseStatus(newStatus)
+			if err != nil {
+				return err
+			}
+			status = s
+		}
+
 		author := cfg.Actor
 		if author == "" {
 			author = git.GetAuthor()
@@ -127,7 +137,7 @@ and subsequent lines form the description.`,
 		task, err := taskClient.CreateTask(protocol.CreateTaskPayload{
 			Title:       title,
 			Description: desc,
-			Status:      domain.StatusOpen,
+			Status:      status,
 			Priority:    prio,
 			Tags:        tags,
 			Author:      author,
@@ -148,6 +158,7 @@ and subsequent lines form the description.`,
 
 func init() {
 	newCmd.Flags().StringVarP(&newTitle, "title", "t", "", "Task title")
+	newCmd.Flags().StringVarP(&newStatus, "status", "s", "open", "Initial status (open, in_progress, done, closed)")
 	newCmd.Flags().StringVarP(&newPriority, "priority", "p", "normal", "Priority (low, normal, high, urgent)")
 	newCmd.Flags().StringVarP(&newTags, "tags", "l", "", "Comma-separated tags (e.g. bug,backend)")
 	newCmd.Flags().StringVarP(&newAssignee, "assignee", "a", "", "Task assignee")

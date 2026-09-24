@@ -94,31 +94,7 @@ Supports:
 			return nil
 		}
 
-		// Aligned tabular display
-		fmt.Printf("%-6s %-12s %-8s %-34s %-16s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
-		fmt.Println(strings.Repeat("─", 88))
-		for _, t := range tasks {
-			title := t.Title
-			if len(title) > 32 {
-				title = title[:30] + ".."
-			}
-			tags := strings.Join(t.Tags, ",")
-			if len(tags) > 14 {
-				tags = tags[:12] + ".."
-			}
-			age := formatAge(t.CreatedAt)
-			if t.CommitSHA != "" {
-				sha := t.CommitSHA
-				if len(sha) > 6 {
-					sha = sha[:6]
-				}
-				age = fmt.Sprintf("%s (%s)", age, sha)
-			}
-			fmt.Printf("%-6s %-12s %-8s %-34s %-16s %s\n",
-				t.ID, string(t.Status), string(t.Priority), title, tags, age,
-			)
-		}
-
+		renderTaskTable(tasks)
 		return nil
 	},
 }

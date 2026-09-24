@@ -416,7 +416,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 
 	query := fmt.Sprintf(`
 	SELECT id, scope, repo_path, title, description, status, priority, tags, author, assignee,
-	       created_at, updated_at, closed_at, commit_sha, commit_msg, diff_stat, diff_content
+	       created_at, updated_at, closed_at, commit_sha, commit_msg, diff_stat, '' as diff_content
 	FROM tasks %s
 	%s %s
 	`, whereClause, orderClause, limitClause)

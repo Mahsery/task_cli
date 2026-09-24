@@ -17,44 +17,57 @@ import (
 )
 
 type Model struct {
-	client        *client.Client
-	editorCmd     string
-	theme         Theme
-	tasks         []*domain.Task
-	cursor        int
-	scrollOffset  int
-	width         int
-	height        int
-	scope         string
-	repoPath      string
-	filterText    string
-	prevFilter    string
-	isSearch      bool
-	statusMsg     string
-	err           error
-	showDiff      bool
-	confirmDelete bool
-	deleteTaskID  string
+	client             *client.Client
+	editorCmd          string
+	theme              Theme
+	tasks              []*domain.Task
+	cursor             int
+	scrollOffset       int
+	detailScrollOffset int
+	width              int
+	height             int
+	scope              string
+	repoPath           string
+	filterText         string
+	prevFilter         string
+	isSearch           bool
+	statusMsg          string
+	err                error
+	showDiff           bool
+	confirmDelete      bool
+	deleteTaskID       string
 }
 
 func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
 	return Model{
-		client:       c,
-		editorCmd:    editorCmd,
-		theme:        NewKanagawaTheme(),
-		scope:        scope,
-		repoPath:     repoPath,
-		cursor:       0,
-		scrollOffset: 0,
+		client:             c,
+		editorCmd:          editorCmd,
+		theme:              NewKanagawaTheme(),
+		scope:              scope,
+		repoPath:           repoPath,
+		cursor:             0,
+		scrollOffset:       0,
+		detailScrollOffset: 0,
 	}
 }
 
 type reloadMsg []*domain.Task
+type taskDetailMsg *domain.Task
 type statusMsg string
 type errMsg error
 
 func (m Model) Init() tea.Cmd {
 	return m.fetchTasksCmd()
+}
+
+func (m Model) fetchTaskDetailCmd(id string) tea.Cmd {
+	return func() tea.Msg {
+		task, err := m.client.GetTask(id)
+		if err != nil {
+			return nil
+		}
+		return taskDetailMsg(task)
+	}
 }
 
 func (m Model) fetchTasksCmd() tea.Cmd {
@@ -132,6 +145,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case taskDetailMsg:
+		if msg != nil {
+			for _, t := range m.tasks {
+				if t.ID == msg.ID {
+					t.DiffContent = msg.DiffContent
+					t.Description = msg.Description
+					t.Notes = msg.Notes
+					break
+				}
+			}
+		}
+		return m, nil
+
 	case statusMsg:
 		m.statusMsg = string(msg)
 		return m, nil
@@ -188,6 +214,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.cursor < m.scrollOffset {
 					m.scrollOffset = m.cursor
 				}
+				m.detailScrollOffset = 0
 			}
 
 		case "down", "j":
@@ -196,6 +223,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.cursor >= m.scrollOffset+maxRows {
 					m.scrollOffset = m.cursor - maxRows + 1
 				}
+				m.detailScrollOffset = 0
+			}
+
+		case "g", "home":
+			m.cursor = 0
+			m.scrollOffset = 0
+			m.detailScrollOffset = 0
+
+		case "G", "end":
+			if len(m.tasks) > 0 {
+				m.cursor = len(m.tasks) - 1
+				if m.cursor >= m.scrollOffset+maxRows {
+					m.scrollOffset = m.cursor - maxRows + 1
+				}
+				m.detailScrollOffset = 0
+			}
+
+		case "J", "ctrl+d", "]":
+			m.detailScrollOffset += 4
+
+		case "K", "ctrl+u", "[":
+			if m.detailScrollOffset > 4 {
+				m.detailScrollOffset -= 4
+			} else {
+				m.detailScrollOffset = 0
 			}
 
 		case "esc", "c":
@@ -205,7 +257,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.fetchTasksCmd()
 			}
 
-		case "g":
+		case "S":
 			// Toggle local / global scope
 			if m.scope == "local" {
 				m.scope = "global"
@@ -228,6 +280,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter":
 			m.showDiff = !m.showDiff
+			if m.showDiff && len(m.tasks) > 0 && m.cursor < len(m.tasks) {
+				t := m.tasks[m.cursor]
+				if t.DiffContent == "" && t.CommitSHA != "" {
+					return m, m.fetchTaskDetailCmd(t.ID)
+				}
+			}
 
 		case "x":
 			// Prompt confirmation before deleting
@@ -1069,12 +1127,7 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 		// Description
 		if t.Description != "" {
 			descLines := wrapText(t.Description, detailWidth-4, "  ")
-			maxDesc := 3
-			for i, dl := range descLines {
-				if i >= maxDesc {
-					rightLines = append(rightLines, theme.Age.Width(detailWidth).Render("  ... (press 'e' to edit/view full)"))
-					break
-				}
+			for _, dl := range descLines {
 				rightLines = append(rightLines, theme.DetailDesc.Width(detailWidth).Render(dl))
 			}
 		}
@@ -1087,22 +1140,14 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 				rightLines = append(rightLines, theme.DetailResolved.Width(detailWidth).Render(rl))
 			}
 			if t.DiffStat != "" {
-				for i, sl := range strings.Split(strings.TrimSpace(t.DiffStat), "\n") {
-					if i >= 2 {
-						break
-					}
+				for _, sl := range strings.Split(strings.TrimSpace(t.DiffStat), "\n") {
 					rightLines = append(rightLines, theme.DiffStat.Width(detailWidth).Render("    "+strings.TrimSpace(sl)))
 				}
 			}
 			if m.showDiff && t.DiffContent != "" {
 				rightLines = append(rightLines, theme.Border.Width(detailWidth).Render("  ── Diff Content ──"))
 				diffLines := strings.Split(t.DiffContent, "\n")
-				maxDiff := 6
-				for i, dl := range diffLines {
-					if i >= maxDiff {
-						rightLines = append(rightLines, theme.Age.Width(detailWidth).Render("    [diff truncated, press enter to collapse]"))
-						break
-					}
+				for _, dl := range diffLines {
 					if strings.HasPrefix(dl, "+") {
 						rightLines = append(rightLines, theme.DiffAdd.Width(detailWidth).Render("    "+dl))
 					} else if strings.HasPrefix(dl, "-") {
@@ -1120,12 +1165,7 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 		if len(t.Notes) > 0 {
 			rightLines = append(rightLines, strings.Repeat(" ", detailWidth))
 			rightLines = append(rightLines, theme.NoteHeader.Width(detailWidth).Render(fmt.Sprintf("  • Notes (%d):", len(t.Notes))))
-			maxNotes := 3
-			for i, n := range t.Notes {
-				if i >= maxNotes {
-					rightLines = append(rightLines, theme.Age.Width(detailWidth).Render(fmt.Sprintf("    ... and %d more note(s)", len(t.Notes)-maxNotes)))
-					break
-				}
+			for _, n := range t.Notes {
 				timeStr := theme.NoteTime.Render(timeAgo(n.CreatedAt))
 				authorStr := ""
 				if n.Author != "" {
@@ -1141,6 +1181,25 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 					rightLines = append(rightLines, theme.NoteContent.Width(detailWidth).Render(line))
 				}
 			}
+		}
+
+		// Apply scrolling to detail pane if total lines exceed bodyHeight
+		totalDetail := len(rightLines)
+		if totalDetail > bodyHeight {
+			start := m.detailScrollOffset
+			if start > totalDetail-bodyHeight {
+				start = totalDetail - bodyHeight
+			}
+			if start < 0 {
+				start = 0
+			}
+			end := start + bodyHeight
+			if end > totalDetail {
+				end = totalDetail
+			}
+			panelTitle = fmt.Sprintf(" ── Details (L%d-%d/%d [J/K scroll]) ──", start+1, end, totalDetail)
+			rightLines[0] = theme.ColHeader.Width(detailWidth).Render(panelTitle)
+			rightLines = rightLines[start:end]
 		}
 	} else {
 		rightLines = append(rightLines, theme.ColHeader.Width(detailWidth).Render("  ── Task Details & Latest Activity ──"))
@@ -1202,6 +1261,7 @@ func (m Model) renderFooter(width int) string {
 	if width >= 120 {
 		keys = []string{
 			key("j/k", "Move"),
+			key("J/K", "Scroll"),
 			key("n", "New"),
 			key("e", "Edit"),
 			key("a", "Claim"),
@@ -1211,7 +1271,7 @@ func (m Model) renderFooter(width int) string {
 			key("Enter", "Diff"),
 			key("/", "Search"),
 			theme.FilterIndicator.Render("[Esc]") + " " + theme.FooterDesc.Render("Clear"),
-			key("g", "Scope"),
+			key("S", "Scope"),
 			key("r", "Refresh"),
 			theme.Age.Render("[q] Quit"),
 		}
@@ -1226,6 +1286,7 @@ func (m Model) renderFooter(width int) string {
 			theme.DiffSub.Render("[x] Del"),
 			key("Enter", "Diff"),
 			key("/", "Search"),
+			key("S", "Scope"),
 			theme.Age.Render("[q] Quit"),
 		}
 	} else if width >= 70 {
