@@ -390,6 +390,7 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		s.pubsub.Publish(protocol.Event{
 			Type:      protocol.EventTaskDeleted,
 			Timestamp: time.Now(),
+			Task:      &domain.Task{ID: p.ID},
 			Message:   fmt.Sprintf("- %s deleted", p.ID),
 		})
 
@@ -458,9 +459,11 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			return errorResp(req.ID, err.Error())
 		}
 
+		updatedTask, _ := db.GetTask(p.TaskID)
 		s.pubsub.Publish(protocol.Event{
 			Type:      protocol.EventTaskUpdated,
 			Timestamp: time.Now(),
+			Task:      updatedTask,
 			Message:   fmt.Sprintf("🔗 %s linked to depend on %s", p.TaskID, p.DependsOnID),
 		})
 
@@ -480,9 +483,11 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			return errorResp(req.ID, err.Error())
 		}
 
+		updatedTask, _ := db.GetTask(p.TaskID)
 		s.pubsub.Publish(protocol.Event{
 			Type:      protocol.EventTaskUpdated,
 			Timestamp: time.Now(),
+			Task:      updatedTask,
 			Message:   fmt.Sprintf("🔓 %s unlinked from %s", p.TaskID, p.DependsOnID),
 		})
 
