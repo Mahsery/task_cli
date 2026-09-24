@@ -26,7 +26,14 @@ var (
 var editCmd = &cobra.Command{
 	Use:   "edit <id> [flags]",
 	Short: "Edit a task (opens $EDITOR or uses CLI flags)",
-	Args:  cobra.ExactArgs(1),
+	Long: `Update task attributes using CLI flags or open the task in $EDITOR.
+Providing flags updates the specified fields directly; omitting all flags
+opens an interactive buffer with existing values pre-populated.`,
+	Example: `  tk edit T-1 -s in_progress -p urgent
+  tk edit T-1 --add-tag review
+  tk edit T-1 -n "Patch sent to mailing list"
+  tk edit T-1          # Opens full task buffer in $EDITOR`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 		task, err := taskClient.GetTask(taskID)

@@ -91,6 +91,7 @@ type TaskFilter struct {
 	Status   *Status
 	Priority *Priority
 	Tag      string
+	Assignee string
 	Search   string
 	Limit    int
 }

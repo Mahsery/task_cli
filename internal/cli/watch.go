@@ -18,6 +18,11 @@ import (
 var watchCmd = &cobra.Command{
 	Use:   "watch",
 	Short: "Stream real-time task events from daemon (great over SSH)",
+	Long: `Connect to the background daemon socket and stream live task lifecycle
+events (created, updated, resolved, attached git diffs, deleted). Ideal for
+terminal sidebars, tmux status lines, and multi-user SSH development.`,
+	Example: `  tk watch
+  tk watch --json | jq .`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
@@ -31,7 +36,9 @@ var watchCmd = &cobra.Command{
 			taskClient.Close()
 		}()
 
-		fmt.Println("Streaming live task events from daemon... (Ctrl+C to quit)")
+		if !jsonFlag {
+			fmt.Fprintln(os.Stderr, "Streaming live task events from daemon... (Ctrl+C to quit)")
+		}
 
 		err := taskClient.StreamEvents(func(ev protocol.Event) {
 			if jsonFlag {

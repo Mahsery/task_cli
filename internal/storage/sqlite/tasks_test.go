@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -152,3 +153,196 @@ func TestConcurrentWrites(t *testing.T) {
 		t.Fatalf("expected %d tasks, got %d", numWorkers, len(tasks))
 	}
 }
+
+func setupBenchDB(b *testing.B) (*DB, func()) {
+	b.Helper()
+	tmpDir, err := os.MkdirTemp("", "tk-bench-*")
+	if err != nil {
+		b.Fatalf("failed to create temp dir: %v", err)
+	}
+
+	dbPath := filepath.Join(tmpDir, "bench.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		b.Fatalf("failed to open bench db: %v", err)
+	}
+
+	cleanup := func() {
+		db.Close()
+		os.RemoveAll(tmpDir)
+	}
+	return db, cleanup
+}
+
+func BenchmarkCreateTask(b *testing.B) {
+	db, cleanup := setupBenchDB(b)
+	defer cleanup()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := db.CreateTask("local", "/repo/test", "Benchmark Task", "Benchmarking description", domain.StatusOpen, domain.PriorityNormal, []string{"bench"}, "Benchmarker", "")
+		if err != nil {
+			b.Fatalf("create failed at %d: %v", i, err)
+		}
+	}
+}
+
+func BenchmarkListTasks(b *testing.B) {
+	db, cleanup := setupBenchDB(b)
+	defer cleanup()
+
+	// Seed 500 tasks
+	for i := 0; i < 500; i++ {
+		_, err := db.CreateTask("local", "/repo/test", fmt.Sprintf("Task %d", i), "Desc", domain.StatusOpen, domain.PriorityNormal, []string{"bench"}, "Benchmarker", "")
+		if err != nil {
+			b.Fatalf("seed failed: %v", err)
+		}
+	}
+
+	filter := domain.TaskFilter{Scope: "local", RepoPath: "/repo/test"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tasks, err := db.ListTasks(filter)
+		if err != nil {
+			b.Fatalf("list failed: %v", err)
+		}
+		if len(tasks) != 500 {
+			b.Fatalf("expected 500 tasks, got %d", len(tasks))
+		}
+	}
+}
+
+func BenchmarkGetTask(b *testing.B) {
+	db, cleanup := setupBenchDB(b)
+	defer cleanup()
+
+	task, err := db.CreateTask("local", "/repo/test", "Task 1", "Desc", domain.StatusOpen, domain.PriorityNormal, []string{"bench"}, "Benchmarker", "")
+	if err != nil {
+		b.Fatalf("seed failed: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := db.GetTask(task.ID)
+		if err != nil {
+			b.Fatalf("get failed: %v", err)
+		}
+	}
+}
+
+func TestGlobalTaskSequence(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	t1, err := db.CreateTask("global", "/path/one", "Global Task 1", "", domain.StatusOpen, domain.PriorityNormal, nil, "User1", "")
+	if err != nil {
+		t.Fatalf("create t1 failed: %v", err)
+	}
+	if t1.ID != "G-1" {
+		t.Fatalf("expected ID G-1, got %s", t1.ID)
+	}
+
+	t2, err := db.CreateTask("global", "/path/two", "Global Task 2", "", domain.StatusOpen, domain.PriorityNormal, nil, "User2", "")
+	if err != nil {
+		t.Fatalf("create t2 failed: %v", err)
+	}
+	if t2.ID != "G-2" {
+		t.Fatalf("expected ID G-2, got %s", t2.ID)
+	}
+
+	t3, err := db.CreateTask("global", "", "Global Task 3", "", domain.StatusOpen, domain.PriorityNormal, nil, "User3", "")
+	if err != nil {
+		t.Fatalf("create t3 failed: %v", err)
+	}
+	if t3.ID != "G-3" {
+		t.Fatalf("expected ID G-3, got %s", t3.ID)
+	}
+}
+
+func TestDeleteTask(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	task, err := db.CreateTask("local", "/repo/test", "Task to delete", "", domain.StatusOpen, domain.PriorityNormal, nil, "User", "")
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	_, err = db.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("get before delete failed: %v", err)
+	}
+
+	err = db.DeleteTask(task.ID)
+	if err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	_, err = db.GetTask(task.ID)
+	if err == nil {
+		t.Fatalf("expected error getting deleted task, got nil")
+	}
+
+	// Deleting again should return error
+	err = db.DeleteTask(task.ID)
+	if err == nil {
+		t.Fatalf("expected error deleting non-existent task, got nil")
+	}
+}
+
+func TestListTasksFiltersAndNotes(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Task 1: user1, bug tag
+	t1, err := db.CreateTask("local", "/repo/test", "Task One", "Desc 1", domain.StatusOpen, domain.PriorityHigh, []string{"bug", "frontend"}, "Dev", "user1")
+	if err != nil {
+		t.Fatalf("create t1 failed: %v", err)
+	}
+	note := "First note on Task One"
+	_, err = db.UpdateTask(t1.ID, nil, nil, nil, nil, nil, nil, &note, "Dev")
+	if err != nil {
+		t.Fatalf("update t1 failed: %v", err)
+	}
+
+	// Task 2: user2, bugfix tag (should not match "bug" tag filter!)
+	_, err = db.CreateTask("local", "/repo/test", "Task Two", "Desc 2", domain.StatusInProgress, domain.PriorityNormal, []string{"bugfix"}, "Dev", "user2")
+	if err != nil {
+		t.Fatalf("create t2 failed: %v", err)
+	}
+
+	// Filter by Assignee "user1"
+	tasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", Assignee: "user1"})
+	if err != nil {
+		t.Fatalf("filter by assignee failed: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != t1.ID {
+		t.Fatalf("expected 1 task with ID %s, got %d tasks", t1.ID, len(tasks))
+	}
+	// Verify notes are populated by ListTasks!
+	if len(tasks[0].Notes) != 1 || tasks[0].Notes[0].Content != note {
+		t.Fatalf("expected note %q in ListTasks result, got %+v", note, tasks[0].Notes)
+	}
+
+	// Filter by Tag "bug" - exact match, should NOT match "bugfix"
+	bugTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", Tag: "bug"})
+	if err != nil {
+		t.Fatalf("filter by tag failed: %v", err)
+	}
+	if len(bugTasks) != 1 || bugTasks[0].ID != t1.ID {
+		t.Fatalf("expected exactly 1 task matching tag 'bug', got %d", len(bugTasks))
+	}
+
+	// Filter by Status "in_progress"
+	progStatus := domain.StatusInProgress
+	progTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", Status: &progStatus})
+	if err != nil {
+		t.Fatalf("filter by status failed: %v", err)
+	}
+	if len(progTasks) != 1 || progTasks[0].Title != "Task Two" {
+		t.Fatalf("expected 1 in_progress task, got %d", len(progTasks))
+	}
+}
+
+

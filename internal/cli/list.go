@@ -14,6 +14,7 @@ var (
 	listStatus   string
 	listPriority string
 	listTag      string
+	listAssignee string
 	listSearch   string
 	listShort    bool
 	listLimit    int
@@ -23,11 +24,20 @@ var listCmd = &cobra.Command{
 	Use:     "list [flags]",
 	Aliases: []string{"ls"},
 	Short:   "List tasks (formatted table, one-liners, or JSON)",
+	Long: `List tasks matching the specified status, priority, tag, assignee, or text query.
+Renders an aligned tabular view by default, or single-line summaries with --short.`,
+	Example: `  tk list
+  tk ls -s open -p high
+  tk list -t backend -q "jwt"
+  tk list -a alice
+  tk ls --short --limit 10
+  tk -g list --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		filter := domain.TaskFilter{
 			Scope:    scope,
 			RepoPath: repoRoot,
 			Tag:      listTag,
+			Assignee: listAssignee,
 			Search:   listSearch,
 			Limit:    listLimit,
 		}
@@ -53,11 +63,24 @@ var listCmd = &cobra.Command{
 		}
 
 		if jsonFlag {
+			if tasks == nil {
+				tasks = []*domain.Task{}
+			}
 			return outputJSON(tasks)
 		}
 
 		if len(tasks) == 0 {
-			fmt.Println("No tasks found.")
+			scopeDesc := "local git repository"
+			if scope == "global" {
+				scopeDesc = "global scope"
+			}
+			fmt.Printf("No tasks found in %s.\n\n", scopeDesc)
+			fmt.Println("Get started:")
+			fmt.Println("  tk new -t \"Task title\"    Create your first task")
+			fmt.Println("  tk                        Launch interactive dashboard")
+			if scope == "local" {
+				fmt.Println("  tk -g list                View global tasks")
+			}
 			return nil
 		}
 
@@ -101,6 +124,7 @@ func init() {
 	listCmd.Flags().StringVarP(&listStatus, "status", "s", "", "Filter by status (open, in_progress, done, closed)")
 	listCmd.Flags().StringVarP(&listPriority, "priority", "p", "", "Filter by priority (low, normal, high, urgent)")
 	listCmd.Flags().StringVarP(&listTag, "tag", "t", "", "Filter by tag")
+	listCmd.Flags().StringVarP(&listAssignee, "assignee", "a", "", "Filter by assignee")
 	listCmd.Flags().StringVarP(&listSearch, "search", "q", "", "Search query in title or description")
 	listCmd.Flags().BoolVar(&listShort, "short", false, "Output simple one-line list")
 	listCmd.Flags().IntVar(&listLimit, "limit", 0, "Limit number of results")

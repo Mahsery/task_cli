@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"task_cli/internal/daemon"
 
@@ -37,7 +38,10 @@ var daemonStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the running daemon",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := taskClient.Connect(); err != nil {
+		if err := taskClient.PingPassive(); err != nil {
+			if jsonFlag {
+				return outputJSON(map[string]any{"running": false, "message": "Daemon is not running."})
+			}
 			fmt.Println("Daemon is not running.")
 			return nil
 		}
@@ -45,6 +49,19 @@ var daemonStopCmd = &cobra.Command{
 
 		if err := taskClient.ShutdownDaemon(); err != nil {
 			return err
+		}
+
+		// Wait briefly for daemon to exit and release socket
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if err := taskClient.PingPassive(); err != nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		if jsonFlag {
+			return outputJSON(map[string]any{"stopped": true, "message": "Sent shutdown signal to daemon."})
 		}
 		fmt.Println("✓ Sent shutdown signal to daemon.")
 		return nil
@@ -55,10 +72,22 @@ var daemonStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Check daemon status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		err := taskClient.Ping()
+		err := taskClient.PingPassive()
 		if err != nil {
+			if jsonFlag {
+				return outputJSON(map[string]any{
+					"running": false,
+					"socket":  cfg.SocketPath,
+				})
+			}
 			fmt.Printf("Daemon is NOT running (socket: %s)\n", cfg.SocketPath)
 			return nil
+		}
+		if jsonFlag {
+			return outputJSON(map[string]any{
+				"running": true,
+				"socket":  cfg.SocketPath,
+			})
 		}
 		fmt.Printf("Daemon is running and healthy (socket: %s)\n", cfg.SocketPath)
 		return nil

@@ -20,7 +20,15 @@ var doneCmd = &cobra.Command{
 	Use:     "done <id> [flags]",
 	Aliases: []string{"close", "resolve"},
 	Short:   "Mark task as done (automatically attaches git commit/diff in kernel style)",
-	Args:    cobra.ExactArgs(1),
+	Long: `Mark a task as resolved. When executed within a git repository, tk
+automatically inspects HEAD and attaches the latest commit hash, subject line,
+diffstat, and patch diff in kernel development style.
+Use --diff to snapshot uncommitted working tree changes, or --no-commit to skip git binding.`,
+	Example: `  tk done T-1                  # Snapshots latest HEAD commit & diff
+  tk done T-1 --diff           # Snapshots uncommitted working tree diff
+  tk done T-1 -c abc1234       # Attach specific commit ref
+  tk done T-1 --no-commit      # Mark done without attaching git info`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 

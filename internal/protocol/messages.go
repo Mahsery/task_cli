@@ -68,6 +68,7 @@ type ListTasksPayload struct {
 	Status   *domain.Status   `json:"status,omitempty"`
 	Priority *domain.Priority `json:"priority,omitempty"`
 	Tag      string           `json:"tag,omitempty"`
+	Assignee string           `json:"assignee,omitempty"`
 	Search   string           `json:"search,omitempty"`
 	Limit    int              `json:"limit,omitempty"`
 }

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"log"
 	"sync"
 
 	"task_cli/internal/protocol"
@@ -42,7 +43,7 @@ func (ps *PubSub) Publish(event protocol.Event) {
 		select {
 		case ch <- event:
 		default:
-			// Non-blocking drop if client is too slow
+			log.Printf("[tkd/pubsub] Warning: subscriber channel full, dropped event %s", event.Type)
 		}
 	}
 }

@@ -26,6 +26,14 @@ var (
 var newCmd = &cobra.Command{
 	Use:   "new [flags]",
 	Short: "Create a new task (opens $EDITOR or uses CLI flags)",
+	Long: `Create a new task in the current scope (local git repository or global).
+If no flags are provided and input is not piped, opens $EDITOR with a template.
+Supports piped input from stdin, where the first line becomes the title
+and subsequent lines form the description.`,
+	Example: `  tk new -t "Fix auth crash" -p high -l bug,auth
+  tk new -t "Refactor storage" -m "Migrate to WAL mode"
+  echo -e "Update docs\nInclude quickstart" | tk new
+  tk new              # Opens interactive editor ($EDITOR)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var title string
 		var prio domain.Priority = domain.PriorityNormal
@@ -37,8 +45,19 @@ var newCmd = &cobra.Command{
 		stat, _ := os.Stdin.Stat()
 		piped := (stat.Mode() & os.ModeCharDevice) == 0
 
-		if newTitle != "" || piped {
-			title = newTitle
+		if cmd.Flags().Changed("title") && strings.TrimSpace(newTitle) == "" && !piped {
+			return fmt.Errorf("task title cannot be empty")
+		}
+
+		hasFlags := cmd.Flags().Changed("title") ||
+			cmd.Flags().Changed("priority") ||
+			cmd.Flags().Changed("tags") ||
+			cmd.Flags().Changed("assignee") ||
+			cmd.Flags().Changed("message") ||
+			cmd.Flags().Changed("desc")
+
+		if hasFlags || piped {
+			title = strings.TrimSpace(newTitle)
 			if newPriority != "" {
 				p, err := domain.ParsePriority(newPriority)
 				if err != nil {

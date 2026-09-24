@@ -10,12 +10,18 @@ import (
 var showCmd = &cobra.Command{
 	Use:   "show <id>",
 	Short: "Show task details, notes, and attached git commit/diff",
-	Args:  cobra.ExactArgs(1),
+	Long: `Display comprehensive details for a task, including metadata, tags,
+chronological activity notes, and attached Linux kernel-style git commit SHA,
+commit message, diffstat, and unified patch diff.`,
+	Example: `  tk show T-1
+  tk -g show G-3
+  tk show T-1 --json`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 		task, err := taskClient.GetTask(taskID)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w (run 'tk list' to view available tasks)", err)
 		}
 
 		if jsonFlag {

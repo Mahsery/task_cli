@@ -1,0 +1,144 @@
+# tk — Kernel-Style Task & Patch Management
+
+`tk` is a lightning-fast, socket-based local task management CLI and TUI written in Go. Built for developers who live in terminals and git trees, `tk` couples issue tracking directly to Linux kernel-style git diffs and commits, backed by an auto-spawning background daemon and pure-Go SQLite.
+
+```
+                     ┌───────────────────────────────────────┐
+                     │          tk CLI / TUI Client          │
+                     │  (Cobra CLI / Bubble Tea Dumb Term)   │
+                     └──────────────────┬────────────────────┘
+                                        │
+                         Unix Socket    │  TCP (Optional)
+                   /run/user/<uid>/tk.sock │  e.g. 127.0.0.1:4567
+                                        ▼
+                     ┌───────────────────────────────────────┐
+                     │          tk Socket Daemon             │
+                     │    (Auto-spawns on first demand)      │
+                     └──────────┬─────────────────┬──────────┘
+                                │                 │
+                       WAL Mode │                 │ WAL Mode
+                                ▼                 ▼
+                 ┌────────────────────┐     ┌──────────────────────┐
+                 │ Local Repo DB      │     │ Global DB            │
+                 │ .tasks/tasks.db    │     │ ~/.local/share/      │
+                 │ (Scope: T-1, T-2)  │     │ task_cli/global.db   │
+                 └────────────────────┘     │ (Scope: G-1, G-2)    │
+                                            └──────────────────────┘
+```
+
+---
+
+## Key Features
+
+- **Linux Kernel-Style Git Binding**: Automatically attaches commit hashes, commit subjects, diffstat summaries, and unified patch diffs to tasks upon completion or on demand.
+- **Auto-Spawning Socket Daemon**: The client transparently launches the background daemon via `setsid` if not already running—zero manual service configuration required.
+- **Dual Scope Isolation**:
+  - **Local (`T-<id>`)**: Tasks stored in `<repo_root>/.tasks/tasks.db` tied strictly to the current git repository.
+  - **Global (`G-<id>`)**: General tasks stored in `$XDG_DATA_HOME/task_cli/global.db` accessible anywhere with `-g` / `--global`.
+- **Pure-Go Embedded SQLite**: Backed by `modernc.org/sqlite` (no CGO required) with WAL journal mode, busy timeouts, and single-writer concurrency.
+- **Fast Dumb-Terminal TUI**: Interactive Bubble Tea interface with vim navigation, instant search filtering, diff toggles, and direct `$EDITOR` integration.
+- **Real-Time Event Streaming**: Daemon broadcasts task lifecycle events over socket connections; stream live with `tk watch` or pipe JSON into tools.
+- **Script & LLM Automation**: Global `--json` flag on all inspection commands outputs structured JSON payloads.
+
+---
+
+## Installation & Quickstart
+
+### Build from Source
+
+```bash
+# Clone and build
+git clone <repo-url> task_cli
+cd task_cli
+go build -o tk cmd/tk/main.go
+
+# Install to $GOPATH/bin or /usr/local/bin
+go install ./cmd/tk
+```
+
+### Quickstart Walkthrough
+
+```bash
+# 1. Create a task in current git repo (opens $EDITOR if flags omitted)
+tk new -t "Refactor authentication handler" -p high -l auth,security
+
+# 2. View active tasks in formatted table
+tk list
+
+# 3. Inspect task details, notes, and attached changes
+tk show T-1
+
+# 4. Work on your codebase and commit changes
+git commit -am "fix(auth): sanitize JWT claims before signature check"
+
+# 5. Mark task done (automatically snaps HEAD commit, diffstat, and diff)
+tk done T-1
+
+# 6. Launch interactive TUI (when run inside an interactive terminal)
+tk
+```
+
+---
+
+## CLI Cheat Sheet
+
+| Command | Aliases | Arguments & Flags | Description | Example |
+|---------|:-------:|-------------------|-------------|---------|
+| `tk` | — | — | Launch interactive TUI in terminal; prints help if non-TTY | `tk` |
+| `tk new` | — | `[-t title] [-p prio] [-l tags] [-a assignee] [-m desc]` | Create task via flags, piped stdin, or `$EDITOR` template | `tk new -t "Fix bug" -p high -l ui`<br>`echo "Piped Task" \| tk new` |
+| `tk list` | `ls` | `[-s status] [-p prio] [-t tag] [-q search] [--short] [--limit N]` | Query tasks with formatted table, one-liners, or JSON | `tk list -s open -p high`<br>`tk ls -q "auth" --short` |
+| `tk show` | — | `<id>` | Display task metadata, notes, commit SHA, and diff content | `tk show T-1`<br>`tk show G-2 --json` |
+| `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [-l tags] [--add-tag tag] [-a assignee] [-m note] [-d desc]` | Modify task fields via CLI flags or open interactive `$EDITOR` buffer | `tk edit T-1 -s in_progress`<br>`tk edit T-1 -m "Patch reviewed"` |
+| `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit]` | Mark task done; auto-attaches latest commit & diff by default | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 --no-commit` |
+| `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
+| `tk delete` | `rm` | `<id>` | Permanently remove a task and associated notes/diffs | `tk delete T-1`<br>`tk rm G-4` |
+| `tk watch` | — | `[--json]` | Stream real-time task lifecycle events from socket daemon | `tk watch`<br>`tk watch --json \| jq .` |
+| `tk daemon run` | — | `[--socket path] [--tcp addr]` | Run daemon process in foreground (debugging / headless / remote) | `tk daemon run --tcp 127.0.0.1:4567` |
+| `tk daemon status` | — | — | Ping daemon health and report active socket path | `tk daemon status` |
+| `tk daemon stop` | — | — | Transmit graceful shutdown signal to running daemon | `tk daemon stop` |
+
+### Global Flags
+
+- `-g, --global`: Operate on the global task database (`~/.local/share/task_cli/global.db`) instead of the current git repository.
+- `--json`: Output machine-readable JSON for scripting, CI/CD, or LLM agent pipelines.
+
+---
+
+## TUI Keybindings
+
+Running `tk` without subcommands inside any standard terminal opens the interactive Bubble Tea TUI:
+
+| Keybinding | Action | Description |
+|:----------:|--------|-------------|
+| `j` / `↓` | Move Down | Select next task in the list |
+| `k` / `↑` | Move Up | Select previous task in the list |
+| `n` | New Task | Launch `$EDITOR` with a new task template |
+| `e` | Edit Task | Launch `$EDITOR` with selected task pre-populated |
+| `d` | Mark Done | Mark selected task done and auto-attach latest git commit/diff |
+| `Enter` | Toggle Diff | Expand or collapse unified patch diff view |
+| `/` | Search Filter | Enter live fuzzy search filter (`Enter`/`Esc` to confirm, `Backspace` to delete) |
+| `g` | Toggle Scope | Switch view between `local` (git repository) and `global` scopes |
+| `r` | Refresh | Re-query tasks from daemon |
+| `q` / `Ctrl+C` | Quit | Exit the TUI |
+
+---
+
+## Configuration & Environment Variables
+
+`tk` requires zero configuration files by default. Behavior can be tailored using standard environment variables:
+
+| Variable | Default Value | Purpose |
+|----------|---------------|---------|
+| `TK_SOCKET` | `/run/user/<uid>/tk.sock`<br>*(fallback: `~/.local/share/task_cli/tk.sock`)* | Unix Domain Socket path used for client-daemon IPC communication |
+| `TK_ADDR` | *(unset)* | Optional TCP address (`host:port`) to bind or connect to (e.g. `127.0.0.1:4567` for SSH tunneling or containers) |
+| `EDITOR` | `$VISUAL` -> `nvim` | Text editor invoked when creating or editing tasks interactively |
+| `VISUAL` | `nvim` | Fallback editor if `EDITOR` is unset |
+| `XDG_DATA_HOME` | `~/.local/share` | Root directory for application state and the global SQLite database (`$XDG_DATA_HOME/task_cli/global.db`) |
+
+---
+
+## Storage & Data Locations
+
+- **Local Repository Database**: Stored at `<repo_root>/.tasks/tasks.db`. You can commit `.tasks/` to version control or add it to `.gitignore` based on team preference.
+- **Global Database**: Stored at `~/.local/share/task_cli/global.db` (or `$XDG_DATA_HOME/task_cli/global.db`).
+- **Daemon Socket**: Default `/run/user/<uid>/tk.sock` (in-memory `tmpfs` on modern Linux) ensuring minimal disk I/O.

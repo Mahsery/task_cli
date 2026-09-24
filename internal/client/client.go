@@ -123,11 +123,19 @@ func (c *Client) call(action protocol.Action, payload any) (*protocol.Response, 
 	}
 
 	if err := c.enc.Encode(req); err != nil {
+		_ = c.Close()
+		c.conn = nil
+		c.enc = nil
+		c.dec = nil
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
 	var resp protocol.Response
 	if err := c.dec.Decode(&resp); err != nil {
+		_ = c.Close()
+		c.conn = nil
+		c.enc = nil
+		c.dec = nil
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -141,6 +149,33 @@ func (c *Client) call(action protocol.Action, payload any) (*protocol.Response, 
 func (c *Client) Ping() error {
 	_, err := c.call(protocol.ActionPing, nil)
 	return err
+}
+
+func (c *Client) PingPassive() error {
+	conn, err := c.dial()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(conn)
+
+	req := protocol.Request{
+		ID:     uuid.New().String(),
+		Action: protocol.ActionPing,
+	}
+	if err := enc.Encode(req); err != nil {
+		return err
+	}
+	var resp protocol.Response
+	if err := dec.Decode(&resp); err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
 }
 
 func (c *Client) CreateTask(p protocol.CreateTaskPayload) (*domain.Task, error) {
@@ -186,6 +221,7 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		Status:   filter.Status,
 		Priority: filter.Priority,
 		Tag:      filter.Tag,
+		Assignee: filter.Assignee,
 		Search:   filter.Search,
 		Limit:    filter.Limit,
 	}
@@ -265,6 +301,15 @@ func (c *Client) StreamEvents(handler func(protocol.Event)) error {
 }
 
 func (c *Client) ShutdownDaemon() error {
+	if c.conn == nil {
+		conn, err := c.dial()
+		if err != nil {
+			return err
+		}
+		c.conn = conn
+		c.enc = json.NewEncoder(conn)
+		c.dec = json.NewDecoder(conn)
+	}
 	_, err := c.call(protocol.ActionShutdown, nil)
 	return err
 }

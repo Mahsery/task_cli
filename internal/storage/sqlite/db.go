@@ -67,6 +67,8 @@ func (d *DB) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_tasks_scope_repo ON tasks(scope, repo_path, status);
+	CREATE INDEX IF NOT EXISTS idx_tasks_scope_repo_seq ON tasks(scope, repo_path, seq_num DESC);
+	CREATE INDEX IF NOT EXISTS idx_tasks_global_seq ON tasks(scope, seq_num DESC);
 	CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
 
 	CREATE TABLE IF NOT EXISTS task_notes (

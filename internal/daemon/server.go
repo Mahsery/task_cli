@@ -44,6 +44,10 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.shutdown {
+		return nil, errors.New("server is shutting down")
+	}
+
 	var dbPath string
 	if scope == "global" || repoPath == "" {
 		dbPath = s.cfg.GlobalDBPath()
@@ -288,6 +292,7 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			Status:   p.Status,
 			Priority: p.Priority,
 			Tag:      p.Tag,
+			Assignee: p.Assignee,
 			Search:   p.Search,
 			Limit:    p.Limit,
 		}

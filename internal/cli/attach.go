@@ -13,7 +13,13 @@ var attachDiff bool
 var attachCmd = &cobra.Command{
 	Use:   "attach <id> [commit-ref]",
 	Short: "Attach a git commit or working tree diff to a task",
-	Args:  cobra.RangeArgs(1, 2),
+	Long: `Attach git commit metadata and patch diffs to an existing task without
+changing its completion status. If commit-ref is omitted, HEAD is attached.
+Must be executed within a git repository.`,
+	Example: `  tk attach T-1               # Attach latest commit (HEAD)
+  tk attach T-1 HEAD~1        # Attach specific ancestor commit
+  tk attach T-1 --diff        # Attach uncommitted working tree diff`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
 		if repoRoot == "" {

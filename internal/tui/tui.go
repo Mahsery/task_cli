@@ -17,28 +17,31 @@ import (
 )
 
 type Model struct {
-	client     *client.Client
-	editorCmd  string
-	tasks      []*domain.Task
-	cursor     int
-	width      int
-	height     int
-	scope      string
-	repoPath   string
-	filterText string
-	isSearch   bool
-	statusMsg  string
-	err        error
-	showDiff   bool
+	client       *client.Client
+	editorCmd    string
+	tasks        []*domain.Task
+	cursor       int
+	scrollOffset int
+	width        int
+	height       int
+	scope        string
+	repoPath     string
+	filterText   string
+	prevFilter   string
+	isSearch     bool
+	statusMsg    string
+	err          error
+	showDiff     bool
 }
 
 func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
 	return Model{
-		client:    c,
-		editorCmd: editorCmd,
-		scope:     scope,
-		repoPath:  repoPath,
-		cursor:    0,
+		client:       c,
+		editorCmd:    editorCmd,
+		scope:        scope,
+		repoPath:     repoPath,
+		cursor:       0,
+		scrollOffset: 0,
 	}
 }
 
@@ -65,7 +68,24 @@ func (m Model) fetchTasksCmd() tea.Cmd {
 	}
 }
 
+func (m Model) getMaxRows() int {
+	if m.height <= 0 {
+		return 8
+	}
+	// Reserve 14 lines for headers, detail pane, borders, and footer
+	rows := m.height - 14
+	if rows < 5 {
+		return 5
+	}
+	if rows > 25 {
+		return 25
+	}
+	return rows
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	maxRows := m.getMaxRows()
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -74,8 +94,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reloadMsg:
 		m.tasks = msg
-		if m.cursor >= len(m.tasks) && len(m.tasks) > 0 {
-			m.cursor = len(m.tasks) - 1
+		if m.cursor >= len(m.tasks) {
+			if len(m.tasks) > 0 {
+				m.cursor = len(m.tasks) - 1
+			} else {
+				m.cursor = 0
+			}
+		}
+		if m.cursor < m.scrollOffset {
+			m.scrollOffset = m.cursor
+		}
+		if m.scrollOffset < 0 {
+			m.scrollOffset = 0
 		}
 		return m, nil
 
@@ -91,17 +121,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.isSearch {
 			switch msg.String() {
-			case "enter", "esc":
+			case "enter":
 				m.isSearch = false
 				return m, m.fetchTasksCmd()
+			case "esc":
+				m.isSearch = false
+				m.filterText = m.prevFilter
+				return m, m.fetchTasksCmd()
 			case "backspace":
-				if len(m.filterText) > 0 {
-					m.filterText = m.filterText[:len(m.filterText)-1]
+				runes := []rune(m.filterText)
+				if len(runes) > 0 {
+					m.filterText = string(runes[:len(runes)-1])
 					return m, m.fetchTasksCmd()
 				}
 			default:
-				if len(msg.String()) == 1 {
-					m.filterText += msg.String()
+				if len(msg.Runes) > 0 {
+					m.filterText += string(msg.Runes)
 					return m, m.fetchTasksCmd()
 				}
 			}
@@ -115,11 +150,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
+				if m.cursor < m.scrollOffset {
+					m.scrollOffset = m.cursor
+				}
 			}
 
 		case "down", "j":
 			if m.cursor < len(m.tasks)-1 {
 				m.cursor++
+				if m.cursor >= m.scrollOffset+maxRows {
+					m.scrollOffset = m.cursor - maxRows + 1
+				}
+			}
+
+		case "c":
+			if m.filterText != "" {
+				m.filterText = ""
+				m.statusMsg = "Filter cleared"
+				return m, m.fetchTasksCmd()
 			}
 
 		case "g":
@@ -139,11 +187,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "/":
 			m.isSearch = true
+			m.prevFilter = m.filterText
 			m.filterText = ""
 			return m, nil
 
 		case "enter":
 			m.showDiff = !m.showDiff
+
+		case "x":
+			// Delete task
+			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
+				t := m.tasks[m.cursor]
+				return m, m.deleteTaskCmd(t.ID)
+			}
 
 		case "d":
 			// Mark done + auto-attach git commit
@@ -238,6 +294,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) deleteTaskCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.DeleteTask(taskID)
+		if err != nil {
+			return errMsg(err)
+		}
+		return m.fetchTasksCmd()()
+	}
+}
+
 func (m Model) markDoneCmd(taskID string) tea.Cmd {
 	return func() tea.Msg {
 		// Attempt to grab latest git commit if local
@@ -300,32 +366,37 @@ func (m Model) View() string {
 	countsLabel := fmt.Sprintf("%d Open | %d Active | %d Done", openCount, progCount, doneCount)
 	headerText := fmt.Sprintf("tk: task_cli %s  ─  %s", scopeLabel, countsLabel)
 	if m.isSearch {
-		headerText += fmt.Sprintf("  ─  [Search: %s_]", m.filterText)
+		headerText += fmt.Sprintf("  ─  [Search: %s_] (Enter apply, Esc cancel)", m.filterText)
+	} else if m.filterText != "" {
+		headerText += fmt.Sprintf("  ─  [Filter: %q (press 'c' to clear)]", m.filterText)
 	}
 	sb.WriteString(headerStyle.Width(width).Render(headerText))
 	sb.WriteString("\n")
 
 	// Table columns header
 	colHeader := fmt.Sprintf("  %-6s %-10s %-8s %-32s %-14s %s", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE")
-	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("246")).Render(colHeader))
+	sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("250")).Render(colHeader))
 	sb.WriteString("\n")
 	sb.WriteString(borderStyle.Render(strings.Repeat("─", width)))
 	sb.WriteString("\n")
 
-	// 2. Task rows (display up to 8 rows)
-	maxRows := 8
+	// 2. Task rows (scrollable window)
+	maxRows := m.getMaxRows()
 	if len(m.tasks) == 0 {
 		sb.WriteString("  No tasks found. Press 'n' to create a new task.\n")
 	} else {
-		for i, t := range m.tasks {
-			if i >= maxRows {
-				break
-			}
+		endIdx := m.scrollOffset + maxRows
+		if endIdx > len(m.tasks) {
+			endIdx = len(m.tasks)
+		}
+
+		for i := m.scrollOffset; i < endIdx; i++ {
+			t := m.tasks[i]
 			cursor := " "
 			rowStyle := lipgloss.NewStyle()
 			if i == m.cursor {
 				cursor = "►"
-				rowStyle = rowStyle.Bold(true).Background(lipgloss.Color("237"))
+				rowStyle = rowStyle.Bold(true).Background(lipgloss.Color("237")).Foreground(lipgloss.Color("15"))
 			}
 
 			title := t.Title
@@ -351,6 +422,12 @@ func (m Model) View() string {
 				cursor, t.ID, string(t.Status), string(t.Priority), title, tagsStr, age,
 			)
 			sb.WriteString(rowStyle.Width(width).Render(line))
+			sb.WriteString("\n")
+		}
+
+		if len(m.tasks) > maxRows {
+			pagination := fmt.Sprintf("  ── Showing %d-%d of %d tasks (▲/▼ to scroll) ──", m.scrollOffset+1, endIdx, len(m.tasks))
+			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(pagination))
 			sb.WriteString("\n")
 		}
 	}
@@ -399,9 +476,20 @@ func (m Model) View() string {
 		}
 
 		if len(t.Notes) > 0 {
-			sb.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render(
-				fmt.Sprintf("  • %d note(s) recorded\n", len(t.Notes)),
+			sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11")).Render(
+				fmt.Sprintf("  • %d note(s):\n", len(t.Notes)),
 			))
+			for i, n := range t.Notes {
+				if i >= 3 {
+					sb.WriteString(fmt.Sprintf("    ... and %d more note(s)\n", len(t.Notes)-3))
+					break
+				}
+				authorStr := ""
+				if n.Author != "" {
+					authorStr = fmt.Sprintf(" by %s", n.Author)
+				}
+				sb.WriteString(fmt.Sprintf("    [%s%s] %s\n", timeAgo(n.CreatedAt), authorStr, n.Content))
+			}
 		}
 	}
 
@@ -409,7 +497,7 @@ func (m Model) View() string {
 	sb.WriteString("\n")
 
 	// 4. Status Bar / Hotkey footer
-	footer := "[j/k] Move  [n] New  [e] Edit  [d] Done  [Enter] Diff  [/] Filter  [g] Scope  [r] Refresh  [q] Quit"
+	footer := "[j/k] Move  [n] New  [e] Edit  [d] Done  [x] Del  [Enter] Diff  [/] Filter  [c] Clear  [g] Scope  [r] Refresh  [q] Quit"
 	if m.statusMsg != "" {
 		footer = fmt.Sprintf("[%s]  %s", m.statusMsg, footer)
 	}

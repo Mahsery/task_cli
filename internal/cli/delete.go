@@ -2,27 +2,51 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
+
+var deleteForce bool
 
 var deleteCmd = &cobra.Command{
 	Use:     "delete <id>",
 	Aliases: []string{"rm"},
 	Short:   "Delete a task",
-	Args:    cobra.ExactArgs(1),
+	Long: `Permanently delete a task and all associated activity notes and diffs.
+In an interactive terminal, prompts for confirmation unless --yes or -y is specified.`,
+	Example: `  tk delete T-1
+  tk rm G-4
+  tk delete T-1 -y`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		taskID := args[0]
+
+		if isTerminal() && !deleteForce && !jsonFlag {
+			fmt.Printf("Delete task %s permanently? [y/N]: ", taskID)
+			var resp string
+			_, _ = fmt.Scanln(&resp)
+			resp = strings.ToLower(strings.TrimSpace(resp))
+			if resp != "y" && resp != "yes" {
+				fmt.Println("Aborted.")
+				return nil
+			}
+		}
+
 		if err := taskClient.DeleteTask(taskID); err != nil {
 			return err
 		}
 
 		if jsonFlag {
-			fmt.Printf("{\"id\":%q,\"deleted\":true}\n", taskID)
-			return nil
+			return outputJSON(map[string]any{"id": taskID, "deleted": true})
 		}
 
 		fmt.Printf("✓ Deleted %s\n", taskID)
 		return nil
 	},
+}
+
+func init() {
+	deleteCmd.Flags().BoolVarP(&deleteForce, "yes", "y", false, "Confirm deletion without interactive prompt")
+	deleteCmd.Flags().BoolVar(&deleteForce, "force", false, "Confirm deletion without interactive prompt")
 }

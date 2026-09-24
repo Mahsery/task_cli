@@ -14,10 +14,14 @@ type Config struct {
 }
 
 func Load() *Config {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
 	dataHome := os.Getenv("XDG_DATA_HOME")
 	if dataHome == "" {
-		dataHome = filepath.Join(home, ".local", "share")
+		if err == nil && home != "" {
+			dataHome = filepath.Join(home, ".local", "share")
+		} else {
+			dataHome = filepath.Join(os.TempDir(), "task_cli_data")
+		}
 	}
 
 	appDir := filepath.Join(dataHome, "task_cli")
@@ -37,9 +41,9 @@ func Load() *Config {
 
 	tcpAddr := os.Getenv("TK_ADDR") // e.g. "127.0.0.1:4567"
 
-	editor := os.Getenv("EDITOR")
+	editor := os.Getenv("VISUAL")
 	if editor == "" {
-		editor = os.Getenv("VISUAL")
+		editor = os.Getenv("EDITOR")
 	}
 	if editor == "" {
 		editor = "nvim"

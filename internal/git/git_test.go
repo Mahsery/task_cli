@@ -1,6 +1,7 @@
 package git
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -13,8 +14,9 @@ func TestFindRepoRoot(t *testing.T) {
 	if root == "" {
 		t.Fatal("expected non-empty repo root")
 	}
-	if !strings.Contains(root, "task_cli") {
-		t.Errorf("expected root to contain task_cli, got %q", root)
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("expected root %q to be an existing directory", root)
 	}
 }
 

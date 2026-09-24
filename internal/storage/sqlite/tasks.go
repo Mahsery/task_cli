@@ -27,12 +27,27 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 	prefix := "T"
 	if scope == "global" {
 		prefix = "G"
+		repoPath = "" // Normalize repoPath for global scope
 	}
 
-	// Compute next sequential number for this scope & repo
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Compute next sequential number for this scope
 	var maxSeq sql.NullInt64
-	query := "SELECT MAX(seq_num) FROM tasks WHERE scope = ? AND repo_path = ?"
-	if err := d.conn.QueryRow(query, scope, repoPath).Scan(&maxSeq); err != nil && err != sql.ErrNoRows {
+	var query string
+	var queryArgs []any
+	if scope == "global" {
+		query = "SELECT MAX(seq_num) FROM tasks WHERE scope = 'global'"
+	} else {
+		query = "SELECT MAX(seq_num) FROM tasks WHERE scope = ? AND repo_path = ?"
+		queryArgs = []any{scope, repoPath}
+	}
+
+	if err := tx.QueryRow(query, queryArgs...).Scan(&maxSeq); err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to get max seq_num: %w", err)
 	}
 
@@ -55,11 +70,15 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err = d.conn.Exec(insertSQL,
+	_, err = tx.Exec(insertSQL,
 		taskID, scope, repoPath, nextSeq, title, description, string(status), string(priority), string(tagsJSON), author, assignee, now, now, closedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert task: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit task insert: %w", err)
 	}
 
 	return &domain.Task{
@@ -132,6 +151,9 @@ func (d *DB) GetTask(id string) (*domain.Task, error) {
 		}
 		task.Notes = append(task.Notes, note)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate task notes: %w", err)
+	}
 
 	return &task, nil
 }
@@ -195,16 +217,27 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 
 	args = append(args, id)
 	updateSQL := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(updates, ", "))
-	if _, err := d.conn.Exec(updateSQL, args...); err != nil {
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(updateSQL, args...); err != nil {
 		return nil, fmt.Errorf("failed to update task: %w", err)
 	}
 
 	if addNote != nil && strings.TrimSpace(*addNote) != "" {
 		noteID := uuid.New().String()
 		noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
-		if _, err := d.conn.Exec(noteSQL, noteID, id, author, strings.TrimSpace(*addNote), now); err != nil {
+		if _, err := tx.Exec(noteSQL, noteID, id, author, strings.TrimSpace(*addNote), now); err != nil {
 			return nil, fmt.Errorf("failed to insert note: %w", err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit update: %w", err)
 	}
 
 	return d.GetTask(id)
@@ -231,8 +264,12 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		args = append(args, string(*filter.Priority))
 	}
 	if filter.Tag != "" {
-		conditions = append(conditions, "tags LIKE ?")
-		args = append(args, "%\""+filter.Tag+"\"%")
+		conditions = append(conditions, "EXISTS (SELECT 1 FROM json_each(tasks.tags) WHERE value = ?)")
+		args = append(args, filter.Tag)
+	}
+	if filter.Assignee != "" {
+		conditions = append(conditions, "assignee = ?")
+		args = append(args, filter.Assignee)
 	}
 	if filter.Search != "" {
 		conditions = append(conditions, "(title LIKE ? OR description LIKE ?)")
@@ -284,10 +321,44 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		if closedAt.Valid {
 			task.ClosedAt = &closedAt.Time
 		}
-		if err := json.Unmarshal([]byte(tagsJSON), &task.Tags); err != nil {
+		if tagsJSON == "[]" || tagsJSON == "" {
+			task.Tags = []string{}
+		} else if err := json.Unmarshal([]byte(tagsJSON), &task.Tags); err != nil {
 			task.Tags = []string{}
 		}
+		task.Notes = []domain.TaskNote{}
 		tasks = append(tasks, &task)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate tasks: %w", err)
+	}
+
+	// Batch load notes for listed tasks
+	if len(tasks) > 0 {
+		taskMap := make(map[string]*domain.Task, len(tasks))
+		var taskIDs []any
+		var placeholders []string
+		for _, t := range tasks {
+			taskMap[t.ID] = t
+			taskIDs = append(taskIDs, t.ID)
+			placeholders = append(placeholders, "?")
+		}
+
+		notesQuery := fmt.Sprintf("SELECT id, task_id, author, content, created_at FROM task_notes WHERE task_id IN (%s) ORDER BY created_at ASC", strings.Join(placeholders, ","))
+		noteRows, err := d.conn.Query(notesQuery, taskIDs...)
+		if err == nil {
+			defer noteRows.Close()
+			for noteRows.Next() {
+				var note domain.TaskNote
+				var tID string
+				if err := noteRows.Scan(&note.ID, &tID, &note.Author, &note.Content, &note.CreatedAt); err == nil {
+					if t, ok := taskMap[tID]; ok {
+						t.Notes = append(t.Notes, note)
+					}
+				}
+			}
+		}
 	}
 
 	return tasks, nil

@@ -43,6 +43,7 @@ Write task description here...
 `, initialTitle)
 
 	if _, err := tmpFile.WriteString(template); err != nil {
+		_ = os.Remove(tmpFile.Name())
 		return "", err
 	}
 
@@ -67,6 +68,7 @@ func CreateEditTaskFile(task *domain.Task) (string, error) {
 	sb.WriteString("\n\n# --- Add new notes/comments below (optional) ---\n")
 
 	if _, err := tmpFile.WriteString(sb.String()); err != nil {
+		_ = os.Remove(tmpFile.Name())
 		return "", err
 	}
 
@@ -87,22 +89,29 @@ func OpenNewTask(editorCmd string, initialTitle string) (*ParsedNewTask, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(tmpPath)
 
 	cmd := BuildEditorCmd(editorCmd, tmpPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		_ = os.Remove(tmpPath)
 		return nil, err
 	}
 
 	contentBytes, err := os.ReadFile(tmpPath)
 	if err != nil {
+		_ = os.Remove(tmpPath)
 		return nil, err
 	}
 
-	return ParseNewTaskContent(string(contentBytes))
+	parsed, err := ParseNewTaskContent(string(contentBytes))
+	if err != nil {
+		return nil, fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath)
+	}
+
+	_ = os.Remove(tmpPath)
+	return parsed, nil
 }
 
 func OpenEditTask(editorCmd string, task *domain.Task) (*ParsedEditTask, error) {
@@ -110,22 +119,42 @@ func OpenEditTask(editorCmd string, task *domain.Task) (*ParsedEditTask, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(tmpPath)
 
 	cmd := BuildEditorCmd(editorCmd, tmpPath)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
+		_ = os.Remove(tmpPath)
 		return nil, err
 	}
 
 	contentBytes, err := os.ReadFile(tmpPath)
 	if err != nil {
+		_ = os.Remove(tmpPath)
 		return nil, err
 	}
 
-	return ParseEditTaskContent(string(contentBytes), task)
+	parsed, err := ParseEditTaskContent(string(contentBytes), task)
+	if err != nil {
+		return nil, fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath)
+	}
+
+	_ = os.Remove(tmpPath)
+	return parsed, nil
+}
+
+func parseHeaderKV(trimmed string) (key, val string, ok bool) {
+	if !strings.HasPrefix(trimmed, "#") {
+		return "", "", false
+	}
+	colonIdx := strings.Index(trimmed, ":")
+	if colonIdx == -1 {
+		return "", "", false
+	}
+	key = strings.ToLower(strings.TrimSpace(trimmed[:colonIdx]))
+	val = strings.TrimSpace(trimmed[colonIdx+1:])
+	return key, val, true
 }
 
 func ParseNewTaskContent(content string) (*ParsedNewTask, error) {
@@ -140,32 +169,35 @@ func ParseNewTaskContent(content string) (*ParsedNewTask, error) {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if inHeader && strings.HasPrefix(trimmed, "#") {
-			lower := strings.ToLower(trimmed)
-			if strings.HasPrefix(lower, "# title:") {
-				res.Title = strings.TrimSpace(line[len("# title:"):])
-			} else if strings.HasPrefix(lower, "# priority:") {
-				val := strings.TrimSpace(line[len("# priority:"):])
-				if idx := strings.Index(val, "("); idx != -1 {
-					val = strings.TrimSpace(val[:idx])
-				}
-				if p, err := domain.ParsePriority(val); err == nil {
-					res.Priority = p
-				}
-			} else if strings.HasPrefix(lower, "# tags:") {
-				tagStr := strings.TrimSpace(line[len("# tags:"):])
-				if tagStr != "" {
-					parts := strings.Split(tagStr, ",")
-					for _, p := range parts {
-						p = strings.TrimSpace(p)
-						if p != "" {
-							res.Tags = append(res.Tags, p)
+			if key, val, ok := parseHeaderKV(trimmed); ok {
+				switch key {
+				case "# title":
+					res.Title = val
+				case "# priority":
+					if idx := strings.Index(val, "("); idx != -1 {
+						val = strings.TrimSpace(val[:idx])
+					}
+					if val != "" {
+						p, err := domain.ParsePriority(val)
+						if err != nil {
+							return nil, err
+						}
+						res.Priority = p
+					}
+				case "# tags":
+					if val != "" {
+						for _, p := range strings.Split(val, ",") {
+							p = strings.TrimSpace(p)
+							if p != "" {
+								res.Tags = append(res.Tags, p)
+							}
 						}
 					}
+				case "# assignee":
+					res.Assignee = val
 				}
-			} else if strings.HasPrefix(lower, "# assignee:") {
-				res.Assignee = strings.TrimSpace(line[len("# assignee:"):])
+				continue
 			}
-			continue
 		}
 
 		inHeader = false
@@ -173,6 +205,10 @@ func ParseNewTaskContent(content string) (*ParsedNewTask, error) {
 	}
 
 	res.Description = strings.TrimSpace(strings.Join(descLines, "\n"))
+	if res.Description == "Write task description here..." {
+		res.Description = ""
+	}
+
 	if res.Title == "" {
 		return nil, fmt.Errorf("task creation aborted: title cannot be empty")
 	}
@@ -209,42 +245,48 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 		}
 
 		if inHeader && strings.HasPrefix(trimmed, "#") {
-			lower := strings.ToLower(trimmed)
-			if strings.HasPrefix(lower, "# title:") {
-				res.Title = strings.TrimSpace(line[len("# title:"):])
-			} else if strings.HasPrefix(lower, "# status:") {
-				val := strings.TrimSpace(line[len("# status:"):])
-				if idx := strings.Index(val, "("); idx != -1 {
-					val = strings.TrimSpace(val[:idx])
-				}
-				if s, err := domain.ParseStatus(val); err == nil {
-					res.Status = s
-				}
-			} else if strings.HasPrefix(lower, "# priority:") {
-				val := strings.TrimSpace(line[len("# priority:"):])
-				if idx := strings.Index(val, "("); idx != -1 {
-					val = strings.TrimSpace(val[:idx])
-				}
-				if p, err := domain.ParsePriority(val); err == nil {
-					res.Priority = p
-				}
-			} else if strings.HasPrefix(lower, "# tags:") {
-				tagStr := strings.TrimSpace(line[len("# tags:"):])
-				var tags []string
-				if tagStr != "" {
-					parts := strings.Split(tagStr, ",")
-					for _, p := range parts {
-						p = strings.TrimSpace(p)
-						if p != "" {
-							tags = append(tags, p)
+			if key, val, ok := parseHeaderKV(trimmed); ok {
+				switch key {
+				case "# title":
+					res.Title = val
+				case "# status":
+					if idx := strings.Index(val, "("); idx != -1 {
+						val = strings.TrimSpace(val[:idx])
+					}
+					if val != "" {
+						s, err := domain.ParseStatus(val)
+						if err != nil {
+							return nil, err
+						}
+						res.Status = s
+					}
+				case "# priority":
+					if idx := strings.Index(val, "("); idx != -1 {
+						val = strings.TrimSpace(val[:idx])
+					}
+					if val != "" {
+						p, err := domain.ParsePriority(val)
+						if err != nil {
+							return nil, err
+						}
+						res.Priority = p
+					}
+				case "# tags":
+					var tags []string
+					if val != "" {
+						for _, p := range strings.Split(val, ",") {
+							p = strings.TrimSpace(p)
+							if p != "" {
+								tags = append(tags, p)
+							}
 						}
 					}
+					res.Tags = tags
+				case "# assignee":
+					res.Assignee = val
 				}
-				res.Tags = tags
-			} else if strings.HasPrefix(lower, "# assignee:") {
-				res.Assignee = strings.TrimSpace(line[len("# assignee:"):])
+				continue
 			}
-			continue
 		}
 
 		inHeader = false
