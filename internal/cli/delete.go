@@ -23,13 +23,18 @@ In an interactive terminal, prompts for confirmation unless --yes or -y is speci
 		taskID := args[0]
 
 		if IsInteractiveTerminal() && !deleteForce && !jsonFlag {
-			fmt.Printf("Delete task %s permanently? [y/N]: ", taskID)
+			task, _ := taskClient.GetTask(taskID)
+			var titlePrompt string
+			if task != nil && task.Title != "" {
+				titlePrompt = fmt.Sprintf(" %q", task.Title)
+			}
+			fmt.Printf("Delete task %s%s permanently? [y/N]: ", taskID, titlePrompt)
 			var resp string
 			_, _ = fmt.Scanln(&resp)
 			resp = strings.ToLower(strings.TrimSpace(resp))
 			if resp != "y" && resp != "yes" {
 				fmt.Println("Aborted.")
-				return fmt.Errorf("deletion cancelled")
+				return nil
 			}
 		}
 

@@ -79,13 +79,14 @@ func (d *DB) CreateRollingBackup(name string, maxSnapshots int) (string, error) 
 	}
 
 	backupDir := filepath.Join(filepath.Dir(d.dbPath), "backups")
-	if strings.TrimSpace(name) == "" {
-		name = fmt.Sprintf("backup-%s.db", time.Now().Format("20060102-150405"))
+	cleaned := filepath.Base(filepath.Clean(strings.TrimSpace(name)))
+	if cleaned == "" || cleaned == "." {
+		cleaned = fmt.Sprintf("backup-%s.db", time.Now().Format("20060102-150405"))
 	}
-	if !strings.HasSuffix(name, ".db") {
-		name += ".db"
+	if !strings.HasSuffix(cleaned, ".db") {
+		cleaned += ".db"
 	}
-	targetPath := filepath.Join(backupDir, name)
+	targetPath := filepath.Join(backupDir, cleaned)
 
 	if err := d.backupLocked(targetPath); err != nil {
 		return "", err

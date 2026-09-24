@@ -404,12 +404,21 @@ func (m Model) buildUndoAction(dlg *ConfirmDialog) UndoAction {
 
 	for _, t := range m.tasks {
 		if idMap[t.ID] {
-			clone := *t
-			if t.Tags != nil {
-				clone.Tags = append([]string(nil), t.Tags...)
+			var fullTask *domain.Task
+			if dlg.Kind == ConfirmDelete && m.client != nil {
+				if fetched, err := m.client.GetTask(t.ID); err == nil && fetched != nil {
+					fullTask = fetched
+				}
 			}
-			if t.Notes != nil {
-				clone.Notes = append([]domain.TaskNote(nil), t.Notes...)
+			if fullTask == nil {
+				clone := *t
+				if t.Tags != nil {
+					clone.Tags = append([]string(nil), t.Tags...)
+				}
+				if t.Notes != nil {
+					clone.Notes = append([]domain.TaskNote(nil), t.Notes...)
+				}
+				fullTask = &clone
 			}
 			var prevClosed *time.Time
 			if t.ClosedAt != nil {
@@ -417,7 +426,7 @@ func (m Model) buildUndoAction(dlg *ConfirmDialog) UndoAction {
 				prevClosed = &tCopy
 			}
 			snapshots = append(snapshots, TaskUndoSnapshot{
-				Task:             &clone,
+				Task:             fullTask,
 				PreviousStatus:   t.Status,
 				PreviousAssignee: t.Assignee,
 				PreviousClosedAt: prevClosed,

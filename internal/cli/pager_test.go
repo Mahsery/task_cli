@@ -78,10 +78,14 @@ func TestIsInteractiveTerminal(t *testing.T) {
 func TestIsASCIIOnly(t *testing.T) {
 	oldLC := os.Getenv("LC_ALL")
 	oldLang := os.Getenv("LANG")
+	oldTerm := os.Getenv("TERM")
 	defer func() {
 		os.Setenv("LC_ALL", oldLC)
 		os.Setenv("LANG", oldLang)
+		os.Setenv("TERM", oldTerm)
 	}()
+
+	os.Setenv("TERM", "xterm-256color")
 
 	os.Setenv("LC_ALL", "C")
 	if !IsASCIIOnly() {
@@ -96,5 +100,11 @@ func TestIsASCIIOnly(t *testing.T) {
 	os.Setenv("LC_ALL", "en_US.UTF-8")
 	if IsASCIIOnly() {
 		t.Errorf("Expected IsASCIIOnly() to be false for en_US.UTF-8")
+	}
+
+	// Test TERM=dumb forces ASCII fallback regardless of locale
+	os.Setenv("TERM", "dumb")
+	if !IsASCIIOnly() {
+		t.Errorf("Expected IsASCIIOnly() to be true when TERM=dumb")
 	}
 }

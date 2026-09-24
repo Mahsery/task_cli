@@ -138,6 +138,16 @@ func (d *DB) migrate() error {
 	SELECT scope, repo_path, COALESCE(MAX(seq_num), 0)
 	FROM tasks
 	GROUP BY scope, repo_path;
+
+	CREATE TABLE IF NOT EXISTS task_tombstones (
+		id TEXT PRIMARY KEY,
+		scope TEXT NOT NULL,
+		repo_path TEXT NOT NULL DEFAULT '',
+		task_json TEXT NOT NULL,
+		deleted_at DATETIME NOT NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_tombstones_scope_repo ON task_tombstones(scope, repo_path, deleted_at DESC);
 	`
 
 	if _, err := d.conn.Exec(schema); err != nil {

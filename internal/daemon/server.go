@@ -338,15 +338,16 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			return errorResp(req.ID, err.Error())
 		}
 		filter := domain.TaskFilter{
-			Scope:    p.Scope,
-			RepoPath: p.RepoPath,
-			Status:   p.Status,
-			Priority: p.Priority,
-			Tag:      p.Tag,
-			Assignee: p.Assignee,
-			Search:   p.Search,
-			Sort:     p.Sort,
-			Limit:    p.Limit,
+			Scope:        p.Scope,
+			RepoPath:     p.RepoPath,
+			Status:       p.Status,
+			Priority:     p.Priority,
+			Tag:          p.Tag,
+			Assignee:     p.Assignee,
+			Search:       p.Search,
+			Sort:         p.Sort,
+			Limit:        p.Limit,
+			IncludeNotes: p.IncludeNotes,
 		}
 		tasks, err := db.ListTasks(filter)
 		if err != nil {
@@ -383,25 +384,47 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		if err := json.Unmarshal(req.Payload, &p); err != nil {
 			return errorResp(req.ID, "invalid payload: "+err.Error())
 		}
-		if p.Task == nil {
-			return errorResp(req.ID, "task cannot be nil")
-		}
 		db, err := s.getDB(req.Scope, req.RepoPath)
 		if err != nil {
 			return errorResp(req.ID, err.Error())
 		}
-		if err := db.RestoreTask(p.Task); err != nil {
-			return errorResp(req.ID, err.Error())
+
+		var restored *domain.Task
+		if p.ID != "" {
+			restored, err = db.RestoreTaskByID(p.ID)
+			if err != nil {
+				return errorResp(req.ID, err.Error())
+			}
+		} else if p.Task != nil {
+			if err := db.RestoreTask(p.Task); err != nil {
+				return errorResp(req.ID, err.Error())
+			}
+			restored = p.Task
+		} else {
+			return errorResp(req.ID, "either id or task must be provided for restore")
 		}
 
 		s.pubsub.Publish(protocol.Event{
 			Type:      protocol.EventTaskCreated,
 			Timestamp: time.Now(),
-			Task:      p.Task,
-			Message:   fmt.Sprintf("+ %s restored: %q", p.Task.ID, p.Task.Title),
+			Task:      restored,
+			Message:   fmt.Sprintf("+ %s restored: %q", restored.ID, restored.Title),
 		})
 
-		data, _ := json.Marshal(p.Task)
+		data, _ := json.Marshal(restored)
+		resp.Data = data
+		return resp
+
+	case protocol.ActionListTombstones:
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		tombstones, err := db.ListTombstones(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		data, _ := json.Marshal(tombstones)
 		resp.Data = data
 		return resp
 
@@ -632,14 +655,32 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 		_ = copyFile(dbPath, preRestorePath)
 	}
 
-	// 4. Remove current db and any WAL / SHM files
-	_ = os.Remove(dbPath)
+	// 4. Copy to a staging file in the target directory and verify before replacing
+	tmpPath := fmt.Sprintf("%s.tmp-restore-%d", dbPath, time.Now().UnixNano())
+	if err := copyFile(p.BackupPath, tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return errorResp(req.ID, "failed to copy backup to staging file: "+err.Error())
+	}
+
+	testRestored, err := sqlite.Open(tmpPath)
+	if err != nil {
+		_ = os.Remove(tmpPath)
+		return errorResp(req.ID, "staging database failed to open: "+err.Error())
+	}
+	if err := testRestored.IntegrityCheck(); err != nil {
+		testRestored.Close()
+		_ = os.Remove(tmpPath)
+		return errorResp(req.ID, "staging database failed integrity check: "+err.Error())
+	}
+	testRestored.Close()
+
+	// 5. Clean up old WAL/SHM and atomically move staging file into place
 	_ = os.Remove(dbPath + "-wal")
 	_ = os.Remove(dbPath + "-shm")
 
-	// 5. Copy backup file to dbPath
-	if err := copyFile(p.BackupPath, dbPath); err != nil {
-		return errorResp(req.ID, "failed to copy backup to target db: "+err.Error())
+	if err := os.Rename(tmpPath, dbPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return errorResp(req.ID, "failed to atomically replace target db: "+err.Error())
 	}
 
 	// 6. Reopen DB to verify and cache

@@ -253,15 +253,16 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		repoPath = c.RepoPath
 	}
 	p := protocol.ListTasksPayload{
-		Scope:    scope,
-		RepoPath: repoPath,
-		Status:   filter.Status,
-		Priority: filter.Priority,
-		Tag:      filter.Tag,
-		Assignee: filter.Assignee,
-		Search:   filter.Search,
-		Sort:     filter.Sort,
-		Limit:    filter.Limit,
+		Scope:        scope,
+		RepoPath:     repoPath,
+		Status:       filter.Status,
+		Priority:     filter.Priority,
+		Tag:          filter.Tag,
+		Assignee:     filter.Assignee,
+		Search:       filter.Search,
+		Sort:         filter.Sort,
+		Limit:        filter.Limit,
+		IncludeNotes: filter.IncludeNotes,
 	}
 	resp, err := c.call(protocol.ActionListTasks, p)
 	if err != nil {
@@ -289,6 +290,30 @@ func (c *Client) RestoreTask(task *domain.Task) (*domain.Task, error) {
 		return nil, err
 	}
 	return &res, nil
+}
+
+func (c *Client) RestoreTaskByID(id string) (*domain.Task, error) {
+	resp, err := c.call(protocol.ActionRestoreTask, protocol.RestoreTaskPayload{ID: id})
+	if err != nil {
+		return nil, err
+	}
+	var res domain.Task
+	if err := json.Unmarshal(resp.Data, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) ListTombstones() ([]*domain.Task, error) {
+	resp, err := c.call(protocol.ActionListTombstones, nil)
+	if err != nil {
+		return nil, err
+	}
+	var tasks []*domain.Task
+	if err := json.Unmarshal(resp.Data, &tasks); err != nil {
+		return nil, err
+	}
+	return tasks, nil
 }
 
 func (c *Client) AttachGit(taskID string, sha, msg, diffStat, diffContent string, markDone bool) (*domain.Task, error) {

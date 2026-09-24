@@ -645,44 +645,97 @@ func TestRestoreTask(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	task, err := db.CreateTask("local", "/repo/test", "Original Task", "Original Desc", domain.StatusInProgress, domain.PriorityHigh, []string{"bug", "ui"}, "Tester", "Worker")
+	// 1. Create a local task with git diff and notes
+	task, err := db.CreateTask("local", "/repo/test", "Local Task with Diff", "Desc", domain.StatusInProgress, domain.PriorityHigh, []string{"git", "core"}, "Tester", "Worker")
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
 
-	noteContent := "Working on fix"
-	taskWithNote, err := db.UpdateTask(task.ID, nil, nil, nil, nil, nil, nil, nil, nil, &noteContent, "Worker")
+	task, err = db.AttachGit(task.ID, "abc1234", "fix: resolve buffer overflow", "2 files changed, 10 insertions(+)", "diff --git a/main.go b/main.go\n+fix", true)
 	if err != nil {
-		t.Fatalf("add note failed: %v", err)
+		t.Fatalf("attach git failed: %v", err)
 	}
-	task = taskWithNote
 
-	// Delete task
+	noteContent := "Audited commit evidence"
+	task, err = db.UpdateTask(task.ID, nil, nil, nil, nil, nil, nil, nil, nil, &noteContent, "Auditor")
+	if err != nil {
+		t.Fatalf("update task failed: %v", err)
+	}
+
+	// 2. Delete task -> should archive to tombstone
 	if err := db.DeleteTask(task.ID); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 
-	// Verify task is gone
-	_, err = db.GetTask(task.ID)
-	if err == nil {
-		t.Fatal("expected task to be deleted")
+	// Verify task is gone from active tasks
+	if _, err := db.GetTask(task.ID); err == nil {
+		t.Fatal("expected task to be deleted from active tasks")
 	}
 
-	// Restore task
-	if err := db.RestoreTask(task); err != nil {
-		t.Fatalf("restore task failed: %v", err)
-	}
-
-	// Verify restored task
-	restored, err := db.GetTask(task.ID)
+	// Verify task is present in tombstones
+	tombstones, err := db.ListTombstones("local", "/repo/test")
 	if err != nil {
-		t.Fatalf("get restored task failed: %v", err)
+		t.Fatalf("list tombstones failed: %v", err)
 	}
-	if restored.ID != task.ID || restored.Title != task.Title || restored.Status != task.Status {
-		t.Fatalf("restored task mismatch: got %+v, want %+v", restored, task)
+	if len(tombstones) != 1 || tombstones[0].ID != task.ID {
+		t.Fatalf("expected 1 tombstone with ID %s, got %v", task.ID, tombstones)
 	}
-	if len(restored.Notes) != 1 || restored.Notes[0].Content != "Working on fix" {
+	if tombstones[0].DiffContent != task.DiffContent {
+		t.Fatalf("tombstone diff content mismatch: got %q, want %q", tombstones[0].DiffContent, task.DiffContent)
+	}
+
+	// 3. Restore by ID
+	restored, err := db.RestoreTaskByID(task.ID)
+	if err != nil {
+		t.Fatalf("restore by ID failed: %v", err)
+	}
+	if restored.ID != task.ID || restored.Title != task.Title || restored.DiffContent != task.DiffContent {
+		t.Fatalf("restored task mismatch: got %+v", restored)
+	}
+	if len(restored.Notes) != 1 || restored.Notes[0].Content != "Audited commit evidence" {
 		t.Fatalf("restored notes mismatch: got %+v", restored.Notes)
+	}
+
+	// Verify tombstone is removed after restore
+	tombstonesAfter, err := db.ListTombstones("local", "/repo/test")
+	if err != nil {
+		t.Fatalf("list tombstones after restore failed: %v", err)
+	}
+	if len(tombstonesAfter) != 0 {
+		t.Fatalf("expected 0 tombstones after restore, got %d", len(tombstonesAfter))
+	}
+
+	// 4. Verify monotonic sequence safety: create subsequent task
+	nextTask, err := db.CreateTask("local", "/repo/test", "Subsequent Task", "", domain.StatusOpen, domain.PriorityNormal, nil, "Tester", "")
+	if err != nil {
+		t.Fatalf("create next task failed: %v", err)
+	}
+	if nextTask.ID != "T-2" {
+		t.Fatalf("expected next task ID T-2, got %s", nextTask.ID)
+	}
+
+	// 5. Global scope test
+	gTask, err := db.CreateTask("global", "", "Global Task", "", domain.StatusOpen, domain.PriorityNormal, nil, "Tester", "")
+	if err != nil {
+		t.Fatalf("create global task failed: %v", err)
+	}
+	if err := db.DeleteTask(gTask.ID); err != nil {
+		t.Fatalf("delete global task failed: %v", err)
+	}
+	gRestored, err := db.RestoreTaskByID(gTask.ID)
+	if err != nil {
+		t.Fatalf("restore global task failed: %v", err)
+	}
+	if gRestored.ID != gTask.ID {
+		t.Fatalf("expected global task %s, got %s", gTask.ID, gRestored.ID)
+	}
+
+	nextGTask, err := db.CreateTask("global", "", "Next Global Task", "", domain.StatusOpen, domain.PriorityNormal, nil, "Tester", "")
+	if err != nil {
+		t.Fatalf("create next global task failed: %v", err)
+	}
+	if nextGTask.ID != "G-2" {
+		t.Fatalf("expected next global task ID G-2, got %s", nextGTask.ID)
 	}
 }
 

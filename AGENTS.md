@@ -67,10 +67,31 @@ tk done <ID>
 tk done <ID> -c abc1234
 ```
 
-### Real-Time Monitoring
+### Disaster Recovery & Undo
+```bash
+# List recoverable deleted tasks from tombstone archive
+tk restore -l
+
+# Restore an accidentally deleted task with full git diff and notes intact
+tk restore <ID>
+
+# Create an atomic rolling backup snapshot
+tk backup create [optional-name]
+
+# List available point-in-time snapshots
+tk backup -l
+```
+
+### Real-Time Monitoring & Automation
 ```bash
 # Stream live repository task mutations and see latest active backlog
 tk watch
+
+# Use --json on inspection commands for reliable structured parsing:
+tk list --json
+tk show <ID> --json
+tk restore -l --json
+tk backup -l --json
 ```
 
 ---
@@ -79,4 +100,5 @@ tk watch
 
 - Repository tasks are persisted in `.tasks/tasks.db` (WAL mode enabled).
 - Backups and atomic snapshots are stored in `.tasks/backups/`.
+- Deleted tasks are archived to `task_tombstones` and can be retrieved using `tk restore <ID>`.
 - Never delete or manually overwrite `.tasks/tasks.db` directly. Always use `tk` CLI commands or `tk backup` for state inspection and recovery.

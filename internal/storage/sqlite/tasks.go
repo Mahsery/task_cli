@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,14 +98,19 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 	}, nil
 }
 
-func (d *DB) GetTask(id string) (*domain.Task, error) {
+type queryRower interface {
+	QueryRow(query string, args ...any) *sql.Row
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
 	query := `
 	SELECT id, scope, repo_path, title, description, status, priority, tags, author, assignee,
 	       created_at, updated_at, closed_at, commit_sha, commit_msg, diff_stat, diff_content
 	FROM tasks WHERE id = ?
 	`
 
-	row := d.conn.QueryRow(query, id)
+	row := q.QueryRow(query, id)
 
 	var task domain.Task
 	var statusStr, priorityStr, tagsJSON string
@@ -135,7 +141,7 @@ func (d *DB) GetTask(id string) (*domain.Task, error) {
 
 	// Fetch notes
 	notesQuery := `SELECT id, author, content, created_at FROM task_notes WHERE task_id = ? ORDER BY created_at ASC`
-	rows, err := d.conn.Query(notesQuery, id)
+	rows, err := q.Query(notesQuery, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query task notes: %w", err)
 	}
@@ -154,6 +160,10 @@ func (d *DB) GetTask(id string) (*domain.Task, error) {
 	}
 
 	return &task, nil
+}
+
+func (d *DB) GetTask(id string) (*domain.Task, error) {
+	return d.getTaskLocked(d.conn, id)
 }
 
 func (d *DB) UpdateTask(id string, title, description *string, status *domain.Status, priority *domain.Priority, tags *[]string, addTags []string, removeTags []string, assignee *string, addNote *string, author string) (*domain.Task, error) {
@@ -462,8 +472,8 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	}
 	_ = rows.Close() // Explicitly release cursor back to single connection pool before secondary query
 
-	// Batch load notes for listed tasks
-	if len(tasks) > 0 {
+	// Batch load notes for listed tasks (unless explicitly omitted and not required for in-memory search)
+	if len(tasks) > 0 && (!filter.OmitNotes || filter.Search != "") {
 		taskMap := make(map[string]*domain.Task, len(tasks))
 		var taskIDs []any
 		var placeholders []string
@@ -511,7 +521,52 @@ func (d *DB) DeleteTask(id string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	res, err := d.conn.Exec("DELETE FROM tasks WHERE id = ?", id)
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 1. Fetch full task including notes & git diff inside tx
+	task, err := d.getTaskLocked(tx, id)
+	if err != nil {
+		return err
+	}
+
+	taskJSON, err := json.Marshal(task)
+	if err != nil {
+		return fmt.Errorf("failed to marshal task for tombstone: %w", err)
+	}
+
+	// 2. Insert into task_tombstones
+	now := time.Now().UTC()
+	_, err = tx.Exec(`
+		INSERT INTO task_tombstones (id, scope, repo_path, task_json, deleted_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET task_json = excluded.task_json, deleted_at = excluded.deleted_at
+	`, task.ID, task.Scope, task.RepoPath, string(taskJSON), now)
+	if err != nil {
+		return fmt.Errorf("failed to record tombstone: %w", err)
+	}
+
+	// 3. Prune old tombstones if exceeding limit (keep last 50 per scope/repo)
+	_, _ = tx.Exec(`
+		DELETE FROM task_tombstones
+		WHERE id NOT IN (
+			SELECT id FROM task_tombstones
+			WHERE scope = ? AND repo_path = ?
+			ORDER BY deleted_at DESC
+			LIMIT 50
+		) AND scope = ? AND repo_path = ?
+	`, task.Scope, task.RepoPath, task.Scope, task.RepoPath)
+
+	// 4. Delete notes
+	if _, err := tx.Exec("DELETE FROM task_notes WHERE task_id = ?", id); err != nil {
+		return fmt.Errorf("failed to delete task notes: %w", err)
+	}
+
+	// 5. Delete task
+	res, err := tx.Exec("DELETE FROM tasks WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete task: %w", err)
 	}
@@ -519,7 +574,8 @@ func (d *DB) DeleteTask(id string) error {
 	if rowsAffected == 0 {
 		return fmt.Errorf("task %q not found", id)
 	}
-	return nil
+
+	return tx.Commit()
 }
 
 func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, markDone bool) (*domain.Task, error) {
@@ -550,19 +606,10 @@ func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, m
 	return d.GetTask(id)
 }
 
-func (d *DB) RestoreTask(task *domain.Task) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
+func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 	if task == nil {
 		return fmt.Errorf("task cannot be nil")
 	}
-
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
 
 	tagsJSON, err := json.Marshal(task.Tags)
 	if err != nil {
@@ -576,7 +623,12 @@ func (d *DB) RestoreTask(task *domain.Task) error {
 
 	var seqNum int
 	if parts := strings.Split(task.ID, "-"); len(parts) == 2 {
-		fmt.Sscanf(parts[1], "%d", &seqNum)
+		seqNum, _ = strconv.Atoi(parts[1])
+	}
+
+	// Clean up any stale notes before restoring to prevent PRIMARY KEY collisions
+	if _, err := tx.Exec("DELETE FROM task_notes WHERE task_id = ?", task.ID); err != nil {
+		return fmt.Errorf("failed to clean existing notes: %w", err)
 	}
 
 	insertSQL := `
@@ -584,6 +636,24 @@ func (d *DB) RestoreTask(task *domain.Task) error {
 		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at,
 		commit_sha, commit_msg, diff_stat, diff_content
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		scope = excluded.scope,
+		repo_path = excluded.repo_path,
+		seq_num = excluded.seq_num,
+		title = excluded.title,
+		description = excluded.description,
+		status = excluded.status,
+		priority = excluded.priority,
+		tags = excluded.tags,
+		author = excluded.author,
+		assignee = excluded.assignee,
+		created_at = excluded.created_at,
+		updated_at = excluded.updated_at,
+		closed_at = excluded.closed_at,
+		commit_sha = excluded.commit_sha,
+		commit_msg = excluded.commit_msg,
+		diff_stat = excluded.diff_stat,
+		diff_content = excluded.diff_content
 	`
 	_, err = tx.Exec(insertSQL,
 		task.ID, task.Scope, task.RepoPath, seqNum, task.Title, task.Description,
@@ -595,7 +665,6 @@ func (d *DB) RestoreTask(task *domain.Task) error {
 		return fmt.Errorf("failed to insert restored task: %w", err)
 	}
 
-	// Restore notes
 	for _, n := range task.Notes {
 		noteID := n.ID
 		if noteID == "" {
@@ -609,11 +678,110 @@ func (d *DB) RestoreTask(task *domain.Task) error {
 		}
 	}
 
-	// Monotonic sequence safety: ensure last_seq is at least seqNum
-	_, _ = tx.Exec(`
+	seqRepoPath := task.RepoPath
+	if task.Scope == string(domain.ScopeGlobal) {
+		seqRepoPath = ""
+	}
+
+	_, err = tx.Exec(`
 	INSERT INTO task_sequences (scope, repo_path, last_seq) VALUES (?, ?, ?)
 	ON CONFLICT(scope, repo_path) DO UPDATE SET last_seq = MAX(last_seq, excluded.last_seq)
-	`, task.Scope, task.RepoPath, seqNum)
+	`, task.Scope, seqRepoPath, seqNum)
+	if err != nil {
+		return fmt.Errorf("failed to update sequence: %w", err)
+	}
 
+	_, _ = tx.Exec("DELETE FROM task_tombstones WHERE id = ?", task.ID)
+	return nil
+}
+
+func (d *DB) RestoreTask(task *domain.Task) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := d.restoreTaskTx(tx, task); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func (d *DB) RestoreTaskByID(id string) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var taskJSON string
+	err := d.conn.QueryRow("SELECT task_json FROM task_tombstones WHERE id = ?", id).Scan(&taskJSON)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("tombstone for task %q not found", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tombstone: %w", err)
+	}
+
+	var task domain.Task
+	if err := json.Unmarshal([]byte(taskJSON), &task); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal tombstone task: %w", err)
+	}
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err := d.restoreTaskTx(tx, &task); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit restore: %w", err)
+	}
+
+	return &task, nil
+}
+
+func (d *DB) ListTombstones(scope, repoPath string) ([]*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var query string
+	var args []any
+
+	if scope == string(domain.ScopeGlobal) {
+		query = "SELECT task_json FROM task_tombstones WHERE scope = ? ORDER BY deleted_at DESC LIMIT 50"
+		args = []any{scope}
+	} else if scope != "" && repoPath != "" {
+		query = "SELECT task_json FROM task_tombstones WHERE scope = ? AND repo_path = ? ORDER BY deleted_at DESC LIMIT 50"
+		args = []any{scope, repoPath}
+	} else {
+		query = "SELECT task_json FROM task_tombstones ORDER BY deleted_at DESC LIMIT 50"
+	}
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tombstones: %w", err)
+	}
+	defer rows.Close()
+
+	var tasks []*domain.Task
+	for rows.Next() {
+		var taskJSON string
+		if err := rows.Scan(&taskJSON); err != nil {
+			return nil, err
+		}
+		var t domain.Task
+		if err := json.Unmarshal([]byte(taskJSON), &t); err != nil {
+			continue
+		}
+		tasks = append(tasks, &t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate tombstones: %w", err)
+	}
+	return tasks, nil
 }

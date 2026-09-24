@@ -13,6 +13,7 @@ import (
 var (
 	backupMaxSnapshots int
 	backupForceRestore bool
+	backupListFlag     bool
 )
 
 var backupCmd = &cobra.Command{
@@ -20,6 +21,12 @@ var backupCmd = &cobra.Command{
 	Short: "Manage task database backups and disaster recovery",
 	Long: `Inspect, create, verify, and restore atomic SQLite snapshots of the tasklog.
 Backups use SQLite's native VACUUM INTO for non-blocking point-in-time recovery.`,
+	Example: `  tk backup                     # List available snapshots
+  tk backup -l                  # List available snapshots
+  tk backup create              # Create atomic rolling snapshot
+  tk backup create my-milestone # Create named snapshot
+  tk backup verify              # Run SQLite integrity_check on active database
+  tk backup restore <file> -f   # Restore snapshot without confirmation`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runBackupList()
 	},
@@ -29,6 +36,9 @@ var backupListCmd = &cobra.Command{
 	Use:     "list",
 	Short:   "List available database backups",
 	Aliases: []string{"ls"},
+	Long:    `Display all point-in-time backup snapshots in the .tasks/backups directory with size and age.`,
+	Example: `  tk backup list
+  tk backup list --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runBackupList()
 	},
@@ -62,6 +72,9 @@ func runBackupList() error {
 var backupCreateCmd = &cobra.Command{
 	Use:   "create [name]",
 	Short: "Create an atomic point-in-time backup snapshot",
+	Long:  `Create a clean, consistent SQLite snapshot of the active database using VACUUM INTO without interrupting concurrent daemon queries.`,
+	Example: `  tk backup create
+  tk backup create pre-refactor --keep 10`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := ""
@@ -90,6 +103,9 @@ var backupCreateCmd = &cobra.Command{
 var backupVerifyCmd = &cobra.Command{
 	Use:   "verify [file]",
 	Short: "Verify SQLite database or backup file integrity",
+	Long:  `Run a full SQLite integrity_check on the active repository database or a specified backup file.`,
+	Example: `  tk backup verify
+  tk backup verify .tasks/backups/snapshot-20260924-120000.db`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		target := ""
@@ -117,6 +133,9 @@ var backupVerifyCmd = &cobra.Command{
 var backupRestoreCmd = &cobra.Command{
 	Use:   "restore <backup-file>",
 	Short: "Restore task database from a backup snapshot",
+	Long:  `Safely overwrite the active database with a verified backup snapshot. In interactive mode, a confirmation prompt is displayed unless --force is supplied.`,
+	Example: `  tk backup restore .tasks/backups/snapshot-20260924-120000.db
+  tk backup restore .tasks/backups/snapshot-20260924-120000.db --force`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		backupPath := args[0]
@@ -128,6 +147,9 @@ var backupRestoreCmd = &cobra.Command{
 		}
 
 		if !backupForceRestore {
+			if !IsInteractiveTerminal() {
+				return fmt.Errorf("refusing to restore without confirmation in non-interactive environment (use --force)")
+			}
 			fmt.Printf("WARNING: Restoring will overwrite the current %s database with:\n  %s\n", taskClient.Scope, backupPath)
 			fmt.Print("Proceed with restore? [y/N]: ")
 			reader := bufio.NewReader(os.Stdin)
@@ -169,6 +191,7 @@ func formatFileSize(bytes int64) string {
 }
 
 func init() {
+	backupCmd.Flags().BoolVarP(&backupListFlag, "list", "l", false, "List available backups")
 	backupCreateCmd.Flags().IntVar(&backupMaxSnapshots, "keep", 5, "Number of snapshots to retain before pruning")
 	backupRestoreCmd.Flags().BoolVarP(&backupForceRestore, "force", "f", false, "Force restore without interactive confirmation")
 

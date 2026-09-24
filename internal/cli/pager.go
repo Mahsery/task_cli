@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
 )
 
@@ -52,8 +53,11 @@ func IsInteractiveTerminal() bool {
 	return true
 }
 
-// IsASCIIOnly returns true if the current locale is strictly 7-bit ASCII (e.g. C or POSIX).
+// IsASCIIOnly returns true if the current locale is strictly 7-bit ASCII (e.g. C or POSIX) or TERM=dumb.
 func IsASCIIOnly() bool {
+	if strings.ToLower(os.Getenv("TERM")) == "dumb" {
+		return true
+	}
 	lc := os.Getenv("LC_ALL")
 	if lc == "" {
 		lc = os.Getenv("LANG")
@@ -87,8 +91,9 @@ func PrintWithPager(content string) error {
 	totalVisualLines := 0
 	for _, l := range lines {
 		totalVisualLines++
-		if termWidth > 0 && len(l) > termWidth {
-			totalVisualLines += (len(l) - 1) / termWidth
+		w := lipgloss.Width(l)
+		if termWidth > 0 && w > termWidth {
+			totalVisualLines += (w - 1) / termWidth
 		}
 	}
 

@@ -25,6 +25,7 @@ const (
 	ActionBackupList    Action = "backup_list"
 	ActionBackupRestore Action = "backup_restore"
 	ActionBackupVerify  Action = "backup_verify"
+	ActionListTombstones Action = "list_tombstones"
 )
 
 type Request struct {
@@ -84,8 +85,9 @@ type ListTasksPayload struct {
 	Tag      string           `json:"tag,omitempty"`
 	Assignee string           `json:"assignee,omitempty"`
 	Search   string           `json:"search,omitempty"`
-	Sort     string           `json:"sort,omitempty"`
-	Limit    int              `json:"limit,omitempty"`
+	Sort         string           `json:"sort,omitempty"`
+	Limit        int              `json:"limit,omitempty"`
+	IncludeNotes bool             `json:"include_notes,omitempty"`
 }
 
 type DeleteTaskPayload struct {
@@ -93,7 +95,8 @@ type DeleteTaskPayload struct {
 }
 
 type RestoreTaskPayload struct {
-	Task *domain.Task `json:"task"`
+	ID   string       `json:"id,omitempty"`
+	Task *domain.Task `json:"task,omitempty"`
 }
 
 type AttachGitPayload struct {

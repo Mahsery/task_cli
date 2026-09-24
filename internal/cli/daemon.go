@@ -17,11 +17,20 @@ var (
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
 	Short: "Manage the background task daemon",
+	Long: `Control and inspect the background tk daemon process (tkd).
+The daemon manages concurrency-safe SQLite database access, in-memory event publishing,
+and WAL checkpoints over Unix domain sockets or optional TCP listeners.`,
+	Example: `  tk daemon status    # Check if daemon is active
+  tk daemon stop      # Gracefully stop background daemon
+  tk daemon run       # Run daemon in foreground for debugging`,
 }
 
 var daemonRunCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Run the daemon in the foreground",
+	Long:  `Run the task daemon process in the foreground, logging requests and events to stdout. Useful for debugging or containerized services.`,
+	Example: `  tk daemon run
+  tk daemon run --socket /tmp/tk-custom.sock`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if daemonSocketPath != "" {
 			cfg.SocketPath = daemonSocketPath
@@ -37,6 +46,9 @@ var daemonRunCmd = &cobra.Command{
 var daemonStopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop the running daemon",
+	Long:  `Send a graceful shutdown signal to the active daemon, closing database connections, flushing WAL frames, and unlinking the socket.`,
+	Example: `  tk daemon stop
+  tk daemon stop --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := taskClient.PingPassive(); err != nil {
 			if jsonFlag {
@@ -71,6 +83,9 @@ var daemonStopCmd = &cobra.Command{
 var daemonStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Check daemon status",
+	Long:  `Ping the daemon socket passively without triggering auto-spawn to verify whether the background process is running and healthy.`,
+	Example: `  tk daemon status
+  tk daemon status --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		err := taskClient.PingPassive()
 		if err != nil {

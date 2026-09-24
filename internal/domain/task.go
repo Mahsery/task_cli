@@ -9,6 +9,11 @@ import (
 type Status string
 
 const (
+	ScopeLocal  = "local"
+	ScopeGlobal = "global"
+)
+
+const (
 	StatusOpen       Status = "open"
 	StatusInProgress Status = "in_progress"
 	StatusDone       Status = "done"
@@ -86,13 +91,15 @@ type Task struct {
 }
 
 type TaskFilter struct {
-	Scope    string
-	RepoPath string
-	Status   *Status
-	Priority *Priority
-	Tag      string
-	Assignee string
-	Search   string
-	Sort     string
-	Limit    int
+	Scope        string
+	RepoPath     string
+	Status       *Status
+	Priority     *Priority
+	Tag          string
+	Assignee     string
+	Search       string
+	Sort         string
+	Limit        int
+	OmitNotes    bool
+	IncludeNotes bool
 }

@@ -93,7 +93,9 @@ tk
 | `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [-l tags] [--add-tag tag] [--remove-tag tag] [--claim] [-a assignee] [-m/-n note] [-d desc]` | Modify task fields via CLI flags, atomically add/remove tags, or open `$EDITOR` | `tk edit T-1 -s in_progress`<br>`tk edit T-1 --add-tag review`<br>`tk edit T-1 --claim`<br>`tk edit T-1 -n "New note"` |
 | `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit]` | Mark task done; auto-attaches latest commit & diff by default | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 --no-commit` |
 | `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
-| `tk delete` | `rm` | `<id> [-y/--yes] [--force]` | Permanently remove a task and associated notes/diffs (prompts unless `-y` or `--force`) | `tk delete T-1`<br>`tk delete -y T-1`<br>`tk rm --force G-4` |
+| `tk delete` | `rm` | `<id> [-y/--yes] [--force]` | Remove a task to the tombstone archive (prompts unless `-y` or `--force`) | `tk delete T-1`<br>`tk delete -y T-1`<br>`tk rm --force G-4` |
+| `tk restore` | `undo-delete` | `<id> [-l/--list]` | Restore deleted task from tombstone archive or list recoverable tasks | `tk restore T-1`<br>`tk restore -l` |
+| `tk backup` | — | `[list\|create\|verify\|restore] [-l] [-f]` | Manage atomic SQLite snapshots and disaster recovery | `tk backup -l`<br>`tk backup create`<br>`tk backup verify` |
 | `tk watch` | — | `[--json]` | Stream real-time task lifecycle events from socket daemon | `tk watch`<br>`tk watch --json \| jq .` |
 | `tk daemon run` | — | `[--socket path] [--tcp addr]` | Run daemon process in foreground (debugging / headless / remote) | `tk daemon run --tcp 127.0.0.1:4567` |
 | `tk daemon status` | — | — | Ping daemon health and report active socket path | `tk daemon status` |
@@ -123,10 +125,11 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `Space` | Multi-Select Toggle | Toggle task selection (`●`/`○` marker) and advance cursor down |
 | `v` | Select / Deselect | Toggle task selection for current row without advancing cursor |
 | `V` | Select All / Deselect | Toggle selection across all currently visible tasks |
+| `u` | Multi-Level Undo | Revert recent mutations (restores deleted tasks, claims, done, status) |
 | `d` | Reversible / Batch Done | Mark task(s) done (or **reopen** if already done); auto-attaches git diff |
 | `s` | Status / Batch Toggle | Cycle status between `open` and `in_progress` for selected tasks |
 | `a` | Claim / Batch Claim | Atomically claim selected task(s) for current actor |
-| `x` | Delete / Batch Delete | Prompt for confirmation (`[y/N]`) and permanently remove selected tasks |
+| `x` | Delete / Batch Delete | Prompt for confirmation (`[y/N]`) and remove selected tasks to tombstones |
 | `n` | New Task | Launch `$EDITOR` with a new task template |
 | `e` | Edit Task | Launch `$EDITOR` with selected task pre-populated |
 | `Enter` | Toggle Diff | Expand or collapse unified patch diff view |
