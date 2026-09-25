@@ -90,11 +90,11 @@ tk transfer <ID> <new-actor> -m "Handing off database work"
 # List orphaned tasks or stale candidates
 tk list --orphaned
 tk orphan list
-tk orphan list --older-than 12h
+tk orphan list --older-than 30m
 
-# Preview or reap stale tasks inactive past threshold (checks commits, updates, and dependencies)
+# Preview or reap stale tasks inactive past threshold (default: 1h; checks commits, updates, and dependencies)
 tk orphan reap --dry-run
-tk orphan reap --older-than 24h
+tk orphan reap --older-than 2h
 
 # Manually orphan an abandoned task (drops assignee, resets to open, tags 'orphaned')
 tk orphan <ID> -m "Agent timed out"

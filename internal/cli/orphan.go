@@ -33,12 +33,13 @@ When a task is orphaned:
 	Example: `  # Manually orphan a specific task
   tk orphan T-1 -m "Assignee unresponsive"
 
-  # Preview stale tasks inactive for longer than 24 hours
+  # Preview stale tasks inactive for longer than 1 hour
   tk orphan --all --dry-run
   tk orphan reap --dry-run
 
-  # Reap all stale tasks inactive for longer than 12 hours
-  tk orphan --all --older-than 12h
+  # Reap all stale tasks inactive for longer than 2 hours
+  tk orphan --all --older-than 2h
+  tk orphan reap --older-than 30m
 
   # List currently orphaned tasks and stale candidates
   tk orphan --list
@@ -72,11 +73,11 @@ When a task is orphaned:
 			return nil
 		}
 
-		threshold := 24 * time.Hour
+		threshold := 1 * time.Hour
 		if orphanOlderThan != "" {
 			d, err := time.ParseDuration(orphanOlderThan)
 			if err != nil {
-				return fmt.Errorf("invalid --older-than duration %q: %w (e.g. 12h, 24h, 48h)", orphanOlderThan, err)
+				return fmt.Errorf("invalid --older-than duration %q: %w (e.g. 30m, 1h, 4h, 24h)", orphanOlderThan, err)
 			}
 			threshold = d
 		}
@@ -187,8 +188,17 @@ func runOrphanList(threshold time.Duration, actor string) error {
 
 var orphanReapCmd = &cobra.Command{
 	Use:   "reap [flags]",
-	Short: "Reap all stale tasks inactive past threshold duration",
-	Long:  "Scans and orphans ongoing assigned tasks that have not had updates, commits, or dependency activity.",
+	Short: "Reap all stale tasks inactive past threshold duration (default: 1h)",
+	Long: `Scans and orphans ongoing assigned tasks that have not had updates,
+commits, or dependency activity within the threshold window.`,
+	Example: `  # Preview tasks inactive for > 1 hour
+  tk orphan reap --dry-run
+
+  # Automatically orphan tasks inactive for > 1 hour
+  tk orphan reap
+
+  # Custom inactivity threshold with reason
+  tk orphan reap --older-than 2h -m "Reaping inactive tasks"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
@@ -203,11 +213,11 @@ var orphanReapCmd = &cobra.Command{
 			actor = "anonymous"
 		}
 
-		threshold := 24 * time.Hour
+		threshold := 1 * time.Hour
 		if orphanOlderThan != "" {
 			d, err := time.ParseDuration(orphanOlderThan)
 			if err != nil {
-				return fmt.Errorf("invalid --older-than duration %q: %w", orphanOlderThan, err)
+				return fmt.Errorf("invalid --older-than duration %q: %w (e.g. 30m, 1h, 4h, 24h)", orphanOlderThan, err)
 			}
 			threshold = d
 		}
@@ -219,6 +229,9 @@ var orphanReapCmd = &cobra.Command{
 var orphanListCmd = &cobra.Command{
 	Use:   "list [flags]",
 	Short: "List currently orphaned tasks and stale candidates",
+	Long:  "Displays tasks that are currently tagged 'orphaned' along with stale candidate tasks.",
+	Example: `  tk orphan list
+  tk orphan list --older-than 30m`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
@@ -230,11 +243,11 @@ var orphanListCmd = &cobra.Command{
 			actor = orphanActor
 		}
 
-		threshold := 24 * time.Hour
+		threshold := 1 * time.Hour
 		if orphanOlderThan != "" {
 			d, err := time.ParseDuration(orphanOlderThan)
 			if err != nil {
-				return fmt.Errorf("invalid --older-than duration %q: %w", orphanOlderThan, err)
+				return fmt.Errorf("invalid --older-than duration %q: %w (e.g. 30m, 1h, 4h, 24h)", orphanOlderThan, err)
 			}
 			threshold = d
 		}
@@ -244,19 +257,19 @@ var orphanListCmd = &cobra.Command{
 }
 
 func init() {
-	orphanCmd.Flags().StringVar(&orphanOlderThan, "older-than", "24h", "Inactivity duration threshold (e.g. 12h, 24h, 48h)")
+	orphanCmd.Flags().StringVar(&orphanOlderThan, "older-than", "1h", "Inactivity duration threshold (e.g. 30m, 1h, 4h, 24h)")
 	orphanCmd.Flags().StringVarP(&orphanMessage, "message", "m", "", "Audit note or reason for orphaning")
 	orphanCmd.Flags().StringVar(&orphanActor, "actor", "", "Explicit actor identity")
 	orphanCmd.Flags().BoolVar(&orphanDryRun, "dry-run", false, "Preview matching tasks without modifying them")
 	orphanCmd.Flags().BoolVar(&orphanAll, "all", false, "Reap all stale tasks matching inactivity threshold")
 	orphanCmd.Flags().BoolVarP(&orphanList, "list", "l", false, "List currently orphaned tasks and stale candidates")
 
-	orphanReapCmd.Flags().StringVar(&orphanOlderThan, "older-than", "24h", "Inactivity duration threshold (e.g. 12h, 24h, 48h)")
+	orphanReapCmd.Flags().StringVar(&orphanOlderThan, "older-than", "1h", "Inactivity duration threshold (e.g. 30m, 1h, 4h, 24h)")
 	orphanReapCmd.Flags().StringVarP(&orphanMessage, "message", "m", "", "Audit note or reason for orphaning")
 	orphanReapCmd.Flags().StringVar(&orphanActor, "actor", "", "Explicit actor identity")
 	orphanReapCmd.Flags().BoolVar(&orphanDryRun, "dry-run", false, "Preview matching tasks without modifying them")
 
-	orphanListCmd.Flags().StringVar(&orphanOlderThan, "older-than", "24h", "Inactivity duration threshold (e.g. 12h, 24h, 48h)")
+	orphanListCmd.Flags().StringVar(&orphanOlderThan, "older-than", "1h", "Inactivity duration threshold (e.g. 30m, 1h, 4h, 24h)")
 	orphanListCmd.Flags().StringVar(&orphanActor, "actor", "", "Explicit actor identity")
 
 	orphanCmd.AddCommand(orphanReapCmd)

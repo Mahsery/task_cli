@@ -572,7 +572,7 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 	defer d.mu.Unlock()
 
 	if threshold <= 0 {
-		threshold = 24 * time.Hour
+		threshold = 1 * time.Hour
 	}
 
 	now := time.Now().UTC()

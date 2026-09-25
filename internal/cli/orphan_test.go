@@ -22,6 +22,11 @@ func TestOrphanCommandRegistration(t *testing.T) {
 		}
 	}
 
+	olderThanFlag := cmd.Flags().Lookup("older-than")
+	if olderThanFlag == nil || olderThanFlag.DefValue != "1h" {
+		t.Errorf("expected --older-than default '1h', got %v", olderThanFlag)
+	}
+
 	if cmd.Flags().ShorthandLookup("m") == nil {
 		t.Error("expected -m shorthand on orphan command")
 	}
