@@ -14,6 +14,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 type Pane int
@@ -90,6 +91,7 @@ type Model struct {
 	confirmDialog      *ConfirmDialog
 	undoStack          []UndoAction
 	treeViewMode       bool
+	splitOffset        int
 	isLinking          bool
 	linkInput          string
 	linkTaskID         string
@@ -195,16 +197,28 @@ func (m Model) getDetailDimensions() (detailWidth, visibleBody int) {
 	}
 
 	dividerWidth := 1
-	tableWidth := width * 48 / 100
-	if tableWidth < 52 {
-		tableWidth = 52
+	basePercent := 48
+	if m.treeViewMode {
+		basePercent = 56
 	}
-	if tableWidth > 75 {
-		tableWidth = 75
-	}
-	detailWidth = width - tableWidth - dividerWidth
-	if detailWidth < 20 {
-		detailWidth = 20
+
+	tableWidth := (width * basePercent / 100) + m.splitOffset
+
+	minTableWidth := 38
+	minDetailWidth := 25
+
+	if width < minTableWidth+minDetailWidth+dividerWidth {
+		tableWidth = width / 2
+		detailWidth = width - tableWidth - dividerWidth
+	} else {
+		maxTableWidth := width - minDetailWidth - dividerWidth
+		if tableWidth < minTableWidth {
+			tableWidth = minTableWidth
+		}
+		if tableWidth > maxTableWidth {
+			tableWidth = maxTableWidth
+		}
+		detailWidth = width - tableWidth - dividerWidth
 	}
 
 	bodyHeight := height - 4
@@ -298,7 +312,7 @@ func (m Model) getTreeRows() []TreeRow {
 
 		var children []*domain.Task
 		for _, blkID := range t.Blocks {
-			if child, ok := taskMap[blkID]; ok && !branchVisited[blkID] {
+			if child, ok := taskMap[blkID]; ok && !visited[blkID] && !branchVisited[blkID] {
 				children = append(children, child)
 			}
 		}
@@ -1766,21 +1780,21 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 	}
 	var colHeader string
 	if tagsWidth > 0 {
-		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s %-*s",
-			idWidth, "ID",
-			statusWidth, "STATUS",
-			priWidth, "PRI",
-			titleWidth, colTitle,
-			tagsWidth, "TAGS",
-			ageWidth, "AGE",
+		colHeader = fmt.Sprintf("  %s %s %s %s %s %s",
+			padRight("ID", idWidth),
+			padRight("STATUS", statusWidth),
+			padRight("PRI", priWidth),
+			padRight(colTitle, titleWidth),
+			padRight("TAGS", tagsWidth),
+			padRight("AGE", ageWidth),
 		)
 	} else {
-		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s",
-			idWidth, "ID",
-			statusWidth, "STATUS",
-			priWidth, "PRI",
-			titleWidth, colTitle,
-			ageWidth, "AGE",
+		colHeader = fmt.Sprintf("  %s %s %s %s %s",
+			padRight("ID", idWidth),
+			padRight("STATUS", statusWidth),
+			padRight("PRI", priWidth),
+			padRight(colTitle, titleWidth),
+			padRight("AGE", ageWidth),
 		)
 	}
 	sb.WriteString(theme.ColHeader.Render(colHeader))
@@ -1816,6 +1830,15 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 		for i := m.scrollOffset; i < endIdx; i++ {
 			t := displayTasks[i]
 			treeBranch := displayPrefixes[i]
+			if m.treeViewMode && treeBranch != "" {
+				maxBranch := titleWidth - 10
+				if maxBranch < 6 {
+					maxBranch = titleWidth / 2
+				}
+				if maxBranch > 0 && runewidth.StringWidth(treeBranch) > maxBranch {
+					treeBranch = compactTreeBranch(treeBranch, maxBranch)
+				}
+			}
 			isCursor := (i == m.cursor)
 			prefix := "  "
 			if len(m.selected) > 0 {
@@ -1835,19 +1858,13 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 				}
 			}
 
-			title := treeBranch + t.Title
+			rawTitle := treeBranch + t.Title
 			if t.IsBlocked {
-				title += " 🔒"
+				rawTitle += " 🔒"
 			} else if t.Status != domain.StatusDone && t.Status != domain.StatusClosed && len(t.DependsOn) > 0 {
-				title += " ⚡"
+				rawTitle += " ⚡"
 			}
-			if len(title) > titleWidth {
-				if titleWidth > 3 {
-					title = title[:titleWidth-2] + ".."
-				} else {
-					title = title[:titleWidth]
-				}
-			}
+			title := truncateToWidth(rawTitle, titleWidth)
 
 			age := timeAgo(t.CreatedAt)
 			if t.CommitSHA != "" {
@@ -1857,36 +1874,21 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 				}
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
-			if len(age) > ageWidth {
-				age = age[:ageWidth]
-			}
+			age = truncateToWidth(age, ageWidth)
+			status := truncateToWidth(string(t.Status), statusWidth)
+			prio := truncateToWidth(string(t.Priority), priWidth)
 
-			status := string(t.Status)
-			if len(status) > statusWidth {
-				status = status[:statusWidth]
-			}
-			prio := string(t.Priority)
-			if len(prio) > priWidth {
-				prio = prio[:priWidth]
-			}
-
-			idStr := theme.TaskID.Render(fmt.Sprintf("%-*s", idWidth, t.ID))
-			statusStr := StatusStyle(t.Status).Render(fmt.Sprintf("%-*s", statusWidth, status))
-			priStr := PriorityStyle(t.Priority).Render(fmt.Sprintf("%-*s", priWidth, prio))
-			titleStr := theme.TaskTitle.Render(fmt.Sprintf("%-*s", titleWidth, title))
-			ageDisplay := theme.Age.Render(fmt.Sprintf("%-*s", ageWidth, age))
+			idStr := theme.TaskID.Render(padRight(t.ID, idWidth))
+			statusStr := StatusStyle(t.Status).Render(padRight(status, statusWidth))
+			priStr := PriorityStyle(t.Priority).Render(padRight(prio, priWidth))
+			titleStr := theme.TaskTitle.Render(padRight(title, titleWidth))
+			ageDisplay := theme.Age.Render(padRight(age, ageWidth))
 
 			var line string
 			if tagsWidth > 0 {
 				tagsStr := strings.Join(t.Tags, ",")
-				if len(tagsStr) > tagsWidth {
-					if tagsWidth > 3 {
-						tagsStr = tagsStr[:tagsWidth-2] + ".."
-					} else {
-						tagsStr = tagsStr[:tagsWidth]
-					}
-				}
-				tagsDisplay := theme.Tag.Render(fmt.Sprintf("%-*s", tagsWidth, tagsStr))
+				tagsStr = truncateToWidth(tagsStr, tagsWidth)
+				tagsDisplay := theme.Tag.Render(padRight(tagsStr, tagsWidth))
 				line = fmt.Sprintf("%s%s %s %s %s %s %s",
 					prefix, idStr, statusStr, priStr, titleStr, tagsDisplay, ageDisplay,
 				)
@@ -2093,16 +2095,22 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 	priWidth := 6
 	ageWidth := 10
 	var tagsWidth int
-	if tableWidth >= 65 {
-		tagsWidth = 10
+	if m.treeViewMode {
+		if tableWidth >= 80 {
+			tagsWidth = 10
+		}
+	} else {
+		if tableWidth >= 65 {
+			tagsWidth = 10
+		}
 	}
 	fixed := 39
 	if tagsWidth > 0 {
 		fixed += tagsWidth + 1
 	}
 	titleWidth := tableWidth - fixed
-	if titleWidth < 10 {
-		titleWidth = 10
+	if titleWidth < 12 {
+		titleWidth = 12
 	}
 
 	colTitle := "TITLE"
@@ -2111,11 +2119,22 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 	}
 	var colHeader string
 	if tagsWidth > 0 {
-		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s %-*s",
-			idWidth, "ID", statusWidth, "STATUS", priWidth, "PRI", titleWidth, colTitle, tagsWidth, "TAGS", ageWidth, "AGE")
+		colHeader = fmt.Sprintf("  %s %s %s %s %s %s",
+			padRight("ID", idWidth),
+			padRight("STATUS", statusWidth),
+			padRight("PRI", priWidth),
+			padRight(colTitle, titleWidth),
+			padRight("TAGS", tagsWidth),
+			padRight("AGE", ageWidth),
+		)
 	} else {
-		colHeader = fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s",
-			idWidth, "ID", statusWidth, "STATUS", priWidth, "PRI", titleWidth, colTitle, ageWidth, "AGE")
+		colHeader = fmt.Sprintf("  %s %s %s %s %s",
+			padRight("ID", idWidth),
+			padRight("STATUS", statusWidth),
+			padRight("PRI", priWidth),
+			padRight(colTitle, titleWidth),
+			padRight("AGE", ageWidth),
+		)
 	}
 	var tableHeaderStyled string
 	if m.activePane == PaneList {
@@ -2160,6 +2179,15 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 		for i := m.scrollOffset; i < endIdx; i++ {
 			t := displayTasks[i]
 			treeBranch := displayPrefixes[i]
+			if m.treeViewMode && treeBranch != "" {
+				maxBranch := titleWidth - 10
+				if maxBranch < 6 {
+					maxBranch = titleWidth / 2
+				}
+				if maxBranch > 0 && runewidth.StringWidth(treeBranch) > maxBranch {
+					treeBranch = compactTreeBranch(treeBranch, maxBranch)
+				}
+			}
 			isCursor := (i == m.cursor)
 			prefix := "  "
 			if len(m.selected) > 0 {
@@ -2179,19 +2207,13 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 				}
 			}
 
-			title := treeBranch + t.Title
+			rawTitle := treeBranch + t.Title
 			if t.IsBlocked {
-				title += " 🔒"
+				rawTitle += " 🔒"
 			} else if t.Status != domain.StatusDone && t.Status != domain.StatusClosed && len(t.DependsOn) > 0 {
-				title += " ⚡"
+				rawTitle += " ⚡"
 			}
-			if len(title) > titleWidth {
-				if titleWidth > 3 {
-					title = title[:titleWidth-2] + ".."
-				} else {
-					title = title[:titleWidth]
-				}
-			}
+			title := truncateToWidth(rawTitle, titleWidth)
 
 			age := timeAgo(t.CreatedAt)
 			if t.CommitSHA != "" {
@@ -2201,36 +2223,21 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 				}
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
-			if len(age) > ageWidth {
-				age = age[:ageWidth]
-			}
+			age = truncateToWidth(age, ageWidth)
+			status := truncateToWidth(string(t.Status), statusWidth)
+			prio := truncateToWidth(string(t.Priority), priWidth)
 
-			status := string(t.Status)
-			if len(status) > statusWidth {
-				status = status[:statusWidth]
-			}
-			prio := string(t.Priority)
-			if len(prio) > priWidth {
-				prio = prio[:priWidth]
-			}
-
-			idStr := theme.TaskID.Render(fmt.Sprintf("%-*s", idWidth, t.ID))
-			statusStr := StatusStyle(t.Status).Render(fmt.Sprintf("%-*s", statusWidth, status))
-			priStr := PriorityStyle(t.Priority).Render(fmt.Sprintf("%-*s", priWidth, prio))
-			titleStr := theme.TaskTitle.Render(fmt.Sprintf("%-*s", titleWidth, title))
-			ageDisplay := theme.Age.Render(fmt.Sprintf("%-*s", ageWidth, age))
+			idStr := theme.TaskID.Render(padRight(t.ID, idWidth))
+			statusStr := StatusStyle(t.Status).Render(padRight(status, statusWidth))
+			priStr := PriorityStyle(t.Priority).Render(padRight(prio, priWidth))
+			titleStr := theme.TaskTitle.Render(padRight(title, titleWidth))
+			ageDisplay := theme.Age.Render(padRight(age, ageWidth))
 
 			var line string
 			if tagsWidth > 0 {
 				tagsStr := strings.Join(t.Tags, ",")
-				if len(tagsStr) > tagsWidth {
-					if tagsWidth > 3 {
-						tagsStr = tagsStr[:tagsWidth-2] + ".."
-					} else {
-						tagsStr = tagsStr[:tagsWidth]
-					}
-				}
-				tagsDisplay := theme.Tag.Render(fmt.Sprintf("%-*s", tagsWidth, tagsStr))
+				tagsStr = truncateToWidth(tagsStr, tagsWidth)
+				tagsDisplay := theme.Tag.Render(padRight(tagsStr, tagsWidth))
 				line = fmt.Sprintf("%s%s %s %s %s %s %s", prefix, idStr, statusStr, priStr, titleStr, tagsDisplay, ageDisplay)
 			} else {
 				line = fmt.Sprintf("%s%s %s %s %s %s", prefix, idStr, statusStr, priStr, titleStr, ageDisplay)
@@ -2780,3 +2787,105 @@ func isASCIIOnly() bool {
 	}
 	return lc == "C" || lc == "POSIX"
 }
+
+// truncateToWidth truncates s so its terminal visual display width does not exceed maxWidth.
+// If truncated, it appends ".." within the maxWidth budget. It never slices multi-byte UTF-8 runes.
+func truncateToWidth(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	w := runewidth.StringWidth(s)
+	if w <= maxWidth {
+		return s
+	}
+	if maxWidth <= 2 {
+		return strings.Repeat(".", maxWidth)
+	}
+
+	target := maxWidth - 2
+	var sb strings.Builder
+	curW := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if curW+rw > target {
+			break
+		}
+		sb.WriteRune(r)
+		curW += rw
+	}
+	sb.WriteString("..")
+	return sb.String()
+}
+
+// padRight pads s with spaces so its visual terminal display width equals targetWidth.
+func padRight(s string, targetWidth int) string {
+	w := runewidth.StringWidth(s)
+	if w >= targetWidth {
+		return s
+	}
+	return s + strings.Repeat(" ", targetWidth-w)
+}
+
+// compactTreeBranch compacts deep tree branch indentation so it does not exceed maxW visual cells,
+// ensuring the connector and task title remain clearly visible without getting squeezed out.
+func compactTreeBranch(branch string, maxW int) string {
+	w := runewidth.StringWidth(branch)
+	if w <= maxW || maxW <= 0 {
+		return branch
+	}
+
+	ascii := isASCIIOnly()
+	connectorW := 4
+	if maxW < connectorW+2 {
+		return truncateToWidth(branch, maxW)
+	}
+
+	var connector string
+	switch {
+	case strings.HasSuffix(branch, "├── "):
+		connector = "├── "
+	case strings.HasSuffix(branch, "└── "):
+		connector = "└── "
+	case strings.HasSuffix(branch, "|-- "):
+		connector = "|-- "
+	case strings.HasSuffix(branch, "\\-- "):
+		connector = "\\-- "
+	default:
+		runes := []rune(branch)
+		if len(runes) >= 4 {
+			connector = string(runes[len(runes)-4:])
+		} else {
+			return truncateToWidth(branch, maxW)
+		}
+	}
+
+	ellipsis := "..│ "
+	if ascii {
+		ellipsis = "..| "
+	}
+	if maxW < 8 {
+		ellipsis = ".."
+	}
+	elW := runewidth.StringWidth(ellipsis)
+	avail := maxW - connectorW - elW
+	if avail <= 0 {
+		return ellipsis + connector
+	}
+
+	prefixWithoutConnector := branch[:len(branch)-len(connector)]
+	runes := []rune(prefixWithoutConnector)
+	var middle string
+	for len(runes) >= 4 {
+		lastChunk := string(runes[len(runes)-4:])
+		cw := runewidth.StringWidth(lastChunk)
+		if avail-cw < 0 {
+			break
+		}
+		middle = lastChunk + middle
+		avail -= cw
+		runes = runes[:len(runes)-4]
+	}
+
+	return ellipsis + middle + connector
+}
+
