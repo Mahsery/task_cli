@@ -3366,19 +3366,23 @@ func (m Model) renderFooter(width int) string {
 
 	if len(m.selected) > 0 {
 		selCount := len(m.selected)
-		selBadge := theme.BatchBadge.Render(fmt.Sprintf("%d sel", selCount))
+		selWord := "sel"
+		if width >= 100 {
+			selWord = "selected"
+		}
+		selBadge := theme.BatchBadge.Render(fmt.Sprintf("%d %s", selCount, selWord))
 		candidateKeys = []string{
 			selBadge,
-			theme.CountDone.Render(fmt.Sprintf("[d] Done(%d)", selCount)),
-			theme.CountProg.Render(fmt.Sprintf("[s] Prog(%d)", selCount)),
-			theme.CountOpen.Render(fmt.Sprintf("[a] Claim(%d)", selCount)),
-			theme.CountArchived.Render(fmt.Sprintf("[A] Arc(%d)", selCount)),
-			theme.DiffSub.Render(fmt.Sprintf("[x] Del(%d)", selCount)),
 		}
 		if undoKey != "" {
 			candidateKeys = append(candidateKeys, undoKey)
 		}
 		candidateKeys = append(candidateKeys,
+			theme.CountDone.Render(fmt.Sprintf("[d] Done(%d)", selCount)),
+			theme.CountProg.Render(fmt.Sprintf("[s] Prog(%d)", selCount)),
+			theme.CountOpen.Render(fmt.Sprintf("[a] Claim(%d)", selCount)),
+			theme.CountArchived.Render(fmt.Sprintf("[A] Arc(%d)", selCount)),
+			theme.DiffSub.Render(fmt.Sprintf("[x] Del(%d)", selCount)),
 			key("m", fmt.Sprintf("Tag(%d)", selCount)),
 			key("Space", "Sel"),
 			theme.FilterIndicator.Render("[Esc] Clear"),
@@ -3400,10 +3404,17 @@ func (m Model) renderFooter(width int) string {
 				archiveLabel = theme.CountArchived.Render("[A] Unarc")
 			}
 		}
+		detBadge := theme.BatchBadge.Render("DET")
+		if width >= 120 {
+			detBadge = theme.BatchBadge.Render("DETAILS PANE")
+		}
 		candidateKeys = []string{
-			theme.BatchBadge.Render("DET"),
+			detBadge,
 			key("j/k", "Scroll"),
 			key("Tab", "Tasks"),
+		}
+		if undoKey != "" {
+			candidateKeys = append(candidateKeys, undoKey)
 		}
 		if m.isSplitView() {
 			candidateKeys = append(candidateKeys, key("<>", "Split"))
@@ -3414,11 +3425,6 @@ func (m Model) renderFooter(width int) string {
 			statusLabel,
 			archiveLabel,
 			theme.DiffSub.Render("[x] Del"),
-		)
-		if undoKey != "" {
-			candidateKeys = append(candidateKeys, undoKey)
-		}
-		candidateKeys = append(candidateKeys,
 			key("L", "Link"),
 			key("m", "Tag"),
 			theme.Age.Render("[q] Quit"),
@@ -3451,6 +3457,9 @@ func (m Model) renderFooter(width int) string {
 				key("j/k", "Nav"),
 				key("Tab", "Det"),
 			}
+			if undoKey != "" {
+				candidateKeys = append(candidateKeys, undoKey)
+			}
 			if m.isSplitView() {
 				candidateKeys = append(candidateKeys, key("<>", "Split"))
 			}
@@ -3465,11 +3474,6 @@ func (m Model) renderFooter(width int) string {
 				statusLabel,
 				archiveLabel,
 				theme.DiffSub.Render("[x] Del"),
-			)
-			if undoKey != "" {
-				candidateKeys = append(candidateKeys, undoKey)
-			}
-			candidateKeys = append(candidateKeys,
 				key("/", "Find"),
 				theme.Age.Render("[q] Quit"),
 			)
@@ -3477,6 +3481,14 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = []string{
 				key("j/k", "Nav"),
 				key("Tab", "Det"),
+			}
+			if undoKey != "" {
+				candidateKeys = append(candidateKeys, undoKey)
+			}
+			if m.isSplitView() {
+				candidateKeys = append(candidateKeys, key("<>", "Split"))
+			}
+			candidateKeys = append(candidateKeys,
 				key("Space", "Sel"),
 				key("n", "New"),
 				key("e", "Edit"),
@@ -3485,11 +3497,6 @@ func (m Model) renderFooter(width int) string {
 				statusLabel,
 				archiveLabel,
 				theme.DiffSub.Render("[x] Del"),
-			}
-			if undoKey != "" {
-				candidateKeys = append(candidateKeys, undoKey)
-			}
-			candidateKeys = append(candidateKeys,
 				key("/", "Find"),
 				theme.Age.Render("[q] Quit"),
 			)
@@ -3498,14 +3505,14 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = []string{
 				key("j/k", "Nav"),
 				key("a", "Claim"),
-				doneLabel,
-				archiveLabel,
-				theme.DiffSub.Render("[x] Del"),
 			}
 			if undoKey != "" {
 				candidateKeys = append(candidateKeys, undoKey)
 			}
 			candidateKeys = append(candidateKeys,
+				doneLabel,
+				archiveLabel,
+				theme.DiffSub.Render("[x] Del"),
 				key("/", "Find"),
 				theme.Age.Render("[q]"),
 			)
