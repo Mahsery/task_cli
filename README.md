@@ -44,16 +44,18 @@
 
 ## Installation & Quickstart
 
-### Build from Source
+### Build & Install
 
 ```bash
-# Clone and build
+# Clone repository
 git clone <repo-url> task_cli
 cd task_cli
-go build -o tk cmd/tk/main.go
 
-# Install to $GOPATH/bin or /usr/local/bin
-go install ./cmd/tk
+# Build binary locally with embedded version ldflags
+make build
+
+# Install to ~/.local/bin/tk, restart background daemon, and verify migration
+make install
 ```
 
 ### Quickstart Walkthrough

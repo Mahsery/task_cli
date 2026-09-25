@@ -17,6 +17,8 @@
 4. **Verified Completion with Commit Evidence**:
    - Once implementation passes tests (`go test -race ./...`), mark the task done with `tk done <ID>`.
    - `tk done` automatically anchors the current Git HEAD commit SHA and diff summary into the tasklog.
+5. **Install & Migrate After Significant Changes**:
+   - Always run `make install` after significant modifications so that the binary is built with version ldflags (`tk version`), installed to `~/.local/bin/tk`, and any running daemon is cleanly restarted with migrations applied.
 
 ---
 

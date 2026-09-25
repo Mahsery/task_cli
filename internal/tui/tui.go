@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -2459,7 +2460,13 @@ func (m Model) View() string {
 	if m.showArchived {
 		modeBadge += "  ─  " + theme.ArchiveBadge.Render("[ARCHIVE VIEW]")
 	}
-	headerText := fmt.Sprintf("%s %s%s  ─  %s", titleStyle.Render("tk: task_cli"), scopeBadge, modeBadge, countsLabel)
+	appName := "task_cli"
+	if m.scope == "local" && m.repoPath != "" {
+		appName = filepath.Base(m.repoPath)
+	} else if m.scope == "global" {
+		appName = "global"
+	}
+	headerText := fmt.Sprintf("%s %s%s  ─  %s", titleStyle.Render("tk: "+appName), scopeBadge, modeBadge, countsLabel)
 	if m.isSearch {
 		headerText += "  ─  " + theme.SearchPrompt.Render(fmt.Sprintf("[Search: %s_] (Enter apply, Esc cancel)", m.filterText))
 	} else if m.filterText != "" {

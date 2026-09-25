@@ -1531,3 +1531,33 @@ func TestTUIOrphanVsActiveDistinction(t *testing.T) {
 	}
 }
 
+func TestTUIDynamicRepoHeader(t *testing.T) {
+	// Case 1: local scope with a repository path (e.g. TheDream)
+	m1 := Model{
+		tasks:    []*domain.Task{},
+		scope:    "local",
+		repoPath: "/home/mahsery/Data/Projects/odin_projects/TheDream",
+		width:    120,
+		height:   24,
+		theme:    NewKanagawaTheme(),
+	}
+	view1 := m1.View()
+	if !strings.Contains(view1, "tk: TheDream") {
+		t.Errorf("Expected 'tk: TheDream' in header for TheDream repo, got:\n%s", view1)
+	}
+
+	// Case 2: global scope
+	m2 := Model{
+		tasks:  []*domain.Task{},
+		scope:  "global",
+		width:  120,
+		height: 24,
+		theme:  NewKanagawaTheme(),
+	}
+	view2 := m2.View()
+	if !strings.Contains(view2, "tk: global") {
+		t.Errorf("Expected 'tk: global' in header for global scope, got:\n%s", view2)
+	}
+}
+
+

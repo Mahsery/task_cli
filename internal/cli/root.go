@@ -9,6 +9,7 @@ import (
 	"task_cli/internal/config"
 	"task_cli/internal/git"
 	"task_cli/internal/tui"
+	"task_cli/internal/version"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -88,6 +89,8 @@ Running 'tk' without arguments in an interactive terminal launches the TUI.`,
 
 func init() {
 	RootCmd.SilenceUsage = true
+	RootCmd.Version = version.String()
+	RootCmd.SetVersionTemplate("{{.Version}}\n")
 	RootCmd.PersistentFlags().BoolVarP(&globalFlag, "global", "g", false, "Operate on global tasks instead of current git repo")
 	RootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output machine-readable JSON for LLM / script automation")
 	RootCmd.PersistentFlags().StringVar(&flagSocket, "socket", "", "Custom unix socket path for daemon IPC")
