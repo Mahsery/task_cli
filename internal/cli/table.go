@@ -8,7 +8,16 @@ import (
 	"task_cli/internal/domain"
 
 	"github.com/charmbracelet/x/term"
+	"github.com/mattn/go-runewidth"
 )
+
+func padRight(s string, targetWidth int) string {
+	w := runewidth.StringWidth(s)
+	if w >= targetWidth {
+		return s
+	}
+	return s + strings.Repeat(" ", targetWidth-w)
+}
 
 func renderTaskTable(tasks []*domain.Task) {
 	width := 88
@@ -27,17 +36,18 @@ func renderTaskTable(tasks []*domain.Task) {
 
 	if width < 88 {
 		// Responsive layout for 80-column screens (74 cols total)
-		sb.WriteString(fmt.Sprintf("%-6s %-11s %-6s %-26s %-10s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE"))
+		sb.WriteString(fmt.Sprintf("%s %s %s %s %s %s\n",
+			padRight("ID", 6),
+			padRight("STATUS", 11),
+			padRight("PRI", 6),
+			padRight("TITLE", 26),
+			padRight("TAGS", 10),
+			"AGE",
+		))
 		sb.WriteString(strings.Repeat(sepChar, 74) + "\n")
 		for _, t := range tasks {
-			title := t.Title
-			if len(title) > 24 {
-				title = title[:22] + ".."
-			}
-			tags := strings.Join(t.Tags, ",")
-			if len(tags) > 8 {
-				tags = tags[:6] + ".."
-			}
+			title := truncateWithEllipsis(t.Title, 26)
+			tags := truncateWithEllipsis(strings.Join(t.Tags, ","), 10)
 			age := formatAge(t.CreatedAt)
 			if t.CommitSHA != "" {
 				sha := t.CommitSHA
@@ -46,8 +56,13 @@ func renderTaskTable(tasks []*domain.Task) {
 				}
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
-			sb.WriteString(fmt.Sprintf("%-6s %-11s %-6s %-26s %-10s %s\n",
-				t.ID, string(t.Status), string(t.Priority), title, tags, age,
+			sb.WriteString(fmt.Sprintf("%s %s %s %s %s %s\n",
+				padRight(t.ID, 6),
+				padRight(string(t.Status), 11),
+				padRight(string(t.Priority), 6),
+				padRight(title, 26),
+				padRight(tags, 10),
+				age,
 			))
 		}
 		_ = PrintWithPager(sb.String())
@@ -55,17 +70,18 @@ func renderTaskTable(tasks []*domain.Task) {
 	}
 
 	// Standard wide layout (88 cols total)
-	sb.WriteString(fmt.Sprintf("%-6s %-12s %-8s %-34s %-16s %s\n", "ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE"))
+	sb.WriteString(fmt.Sprintf("%s %s %s %s %s %s\n",
+		padRight("ID", 6),
+		padRight("STATUS", 12),
+		padRight("PRI", 8),
+		padRight("TITLE", 34),
+		padRight("TAGS", 16),
+		"AGE",
+	))
 	sb.WriteString(strings.Repeat(sepChar, 88) + "\n")
 	for _, t := range tasks {
-		title := t.Title
-		if len(title) > 32 {
-			title = title[:30] + ".."
-		}
-		tags := strings.Join(t.Tags, ",")
-		if len(tags) > 14 {
-			tags = tags[:12] + ".."
-		}
+		title := truncateWithEllipsis(t.Title, 34)
+		tags := truncateWithEllipsis(strings.Join(t.Tags, ","), 16)
 		age := formatAge(t.CreatedAt)
 		if t.CommitSHA != "" {
 			sha := t.CommitSHA
@@ -74,8 +90,13 @@ func renderTaskTable(tasks []*domain.Task) {
 			}
 			age = fmt.Sprintf("%s (%s)", age, sha)
 		}
-		sb.WriteString(fmt.Sprintf("%-6s %-12s %-8s %-34s %-16s %s\n",
-			t.ID, string(t.Status), string(t.Priority), title, tags, age,
+		sb.WriteString(fmt.Sprintf("%s %s %s %s %s %s\n",
+			padRight(t.ID, 6),
+			padRight(string(t.Status), 12),
+			padRight(string(t.Priority), 8),
+			padRight(title, 34),
+			padRight(tags, 16),
+			age,
 		))
 	}
 	_ = PrintWithPager(sb.String())

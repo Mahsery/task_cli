@@ -127,6 +127,9 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `Tab` / `Shift+Tab` | Toggle Active Pane | Switch focus between Tasks List (left) and Details & Messages (right) |
 | `l` / `→` | Focus Details Pane | Move focus from task list into details/messages pane |
 | `h` / `←` | Focus Tasks List | Return focus from details pane back to task list |
+| `>` / `.` / `Alt+→` | Widen Table Pane | Move split divider right (widen task list/tree, narrow details) |
+| `<` / `,` / `Alt+←` | Narrow Table Pane | Move split divider left (narrow task list/tree, widen details) |
+| `=` | Reset Split Ratio | Reset pane split to default (48/52 normal, 56/44 in Tree mode) |
 | `t` | Toggle Tree Mode | Toggle between standard flat tabular list and hierarchical DAG tree view |
 | `L` | Link Dependency Modal | Open interactive modal to make the current task depend on a prerequisite task ID |
 | `j` / `k` / `↓` / `↑` | Move / Scroll | In **List**: navigate task selection; in **Details**: scroll message content line-by-line |

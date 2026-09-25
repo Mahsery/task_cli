@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"task_cli/internal/domain"
 )
 
@@ -976,3 +977,194 @@ func TestTUILinkModalInteraction(t *testing.T) {
 		t.Fatalf("expected 'Link cancelled' statusMsg, got %q", m.statusMsg)
 	}
 }
+
+func TestTUITruncateToWidthAndPadRight(t *testing.T) {
+	// 1. Basic ASCII truncation
+	s := "Hello World"
+	tr := truncateToWidth(s, 8)
+	if tr != "Hello .." {
+		t.Errorf("expected 'Hello ..', got %q", tr)
+	}
+	if runewidth.StringWidth(tr) > 8 {
+		t.Errorf("visual width %d exceeds max 8", runewidth.StringWidth(tr))
+	}
+
+	// 2. Multi-byte UTF-8 branch runes: ensure NO broken rune (no \ufffd)
+	branch := "├── └── │   "
+	for maxW := 1; maxW <= runewidth.StringWidth(branch)+5; maxW++ {
+		res := truncateToWidth(branch, maxW)
+		if strings.Contains(res, "\ufffd") {
+			t.Fatalf("truncateToWidth produced invalid UTF-8 (replacement char) for maxW=%d: %q", maxW, res)
+		}
+		if runewidth.StringWidth(res) > maxW {
+			t.Fatalf("result visual width %d exceeds maxW %d: %q", runewidth.StringWidth(res), maxW, res)
+		}
+	}
+
+	// 3. Emojis and CJK
+	emojiStr := "Task with 🔒 and ⚡ and 日本語"
+	for maxW := 1; maxW <= runewidth.StringWidth(emojiStr)+5; maxW++ {
+		res := truncateToWidth(emojiStr, maxW)
+		if strings.Contains(res, "\ufffd") {
+			t.Fatalf("truncateToWidth produced replacement char for emoji string maxW=%d: %q", maxW, res)
+		}
+		if runewidth.StringWidth(res) > maxW {
+			t.Fatalf("result width %d exceeds maxW %d: %q", runewidth.StringWidth(res), maxW, res)
+		}
+	}
+
+	// 4. padRight tests
+	pad1 := padRight("ID", 6)
+	if runewidth.StringWidth(pad1) != 6 {
+		t.Errorf("expected visual width 6, got %d (%q)", runewidth.StringWidth(pad1), pad1)
+	}
+
+	// Multi-byte string: ├── (visual width 4, byte len 10)
+	pad2 := padRight("├── ", 10)
+	if runewidth.StringWidth(pad2) != 10 {
+		t.Errorf("expected visual width 10, got %d (%q)", runewidth.StringWidth(pad2), pad2)
+	}
+	if pad2 != "├──       " {
+		t.Errorf("expected '├──       ' (4 cells + 6 spaces), got %q", pad2)
+	}
+}
+
+func TestTUICompactTreeBranch(t *testing.T) {
+	// Deep branch at depth 4: │   │   │   ├── (16 cells)
+	branch := "│   │   │   ├── "
+	w := runewidth.StringWidth(branch)
+	if w != 16 {
+		t.Fatalf("expected 16 visual cells, got %d", w)
+	}
+
+	// Max 10 cells: should compact with connector preserved
+	c10 := compactTreeBranch(branch, 10)
+	if runewidth.StringWidth(c10) > 10 {
+		t.Errorf("c10 width %d exceeds 10: %q", runewidth.StringWidth(c10), c10)
+	}
+	if !strings.HasSuffix(c10, "├── ") {
+		t.Errorf("c10 missing connector '├── ': %q", c10)
+	}
+	if !strings.HasPrefix(c10, "..") {
+		t.Errorf("c10 missing '..' compaction prefix: %q", c10)
+	}
+	if strings.Contains(c10, "\ufffd") {
+		t.Errorf("c10 contains replacement character: %q", c10)
+	}
+
+	// Last child connector: │   │   └── 
+	lastBranch := "│   │   └── "
+	c8 := compactTreeBranch(lastBranch, 8)
+	if runewidth.StringWidth(c8) > 8 {
+		t.Errorf("c8 width %d exceeds 8: %q", runewidth.StringWidth(c8), c8)
+	}
+	if !strings.HasSuffix(c8, "└── ") {
+		t.Errorf("c8 missing connector '└── ': %q", c8)
+	}
+}
+
+func TestTUISplitResizingKeys(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task 1", Status: domain.StatusOpen, Priority: domain.PriorityNormal, CreatedAt: time.Now()},
+	}
+
+	m := Model{
+		tasks:      tasks,
+		cursor:     0,
+		width:      120,
+		height:     30,
+		theme:      NewKanagawaTheme(),
+		activePane: PaneList,
+	}
+
+	// Initial split dimensions
+	detWInit, _ := m.getDetailDimensions()
+	tableWInit := 120 - detWInit - 1
+
+	// 1. Press '>' to widen table
+	up, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'>'}})
+	m = up.(Model)
+	if m.splitOffset != 4 {
+		t.Fatalf("expected splitOffset to be 4 after '>', got %d", m.splitOffset)
+	}
+	detW1, _ := m.getDetailDimensions()
+	tableW1 := 120 - detW1 - 1
+	if tableW1 <= tableWInit {
+		t.Fatalf("expected table width %d to be greater than initial %d", tableW1, tableWInit)
+	}
+	if !strings.Contains(m.statusMsg, "Split resized") {
+		t.Fatalf("expected 'Split resized' status, got %q", m.statusMsg)
+	}
+
+	// 2. Press '.' to widen further
+	up, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}})
+	m = up.(Model)
+	if m.splitOffset != 8 {
+		t.Fatalf("expected splitOffset to be 8 after '.', got %d", m.splitOffset)
+	}
+
+	// 3. Press '<' to narrow table
+	up, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}})
+	m = up.(Model)
+	if m.splitOffset != 4 {
+		t.Fatalf("expected splitOffset to be 4 after '<', got %d", m.splitOffset)
+	}
+
+	// 4. Press '=' to reset split
+	up, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'='}})
+	m = up.(Model)
+	if m.splitOffset != 0 {
+		t.Fatalf("expected splitOffset to be 0 after '=', got %d", m.splitOffset)
+	}
+	detWReset, _ := m.getDetailDimensions()
+	if detWReset != detWInit {
+		t.Fatalf("expected detail width %d to match initial %d after reset", detWReset, detWInit)
+	}
+}
+
+func TestTUIDeepTreeViewNoCorruptRunesAndAlignment(t *testing.T) {
+	now := time.Now()
+	// Build a deep dependency chain (depth 5):
+	// T-1 -> T-2 -> T-3 -> T-4 -> T-5 -> T-6
+	t1 := &domain.Task{ID: "T-1", Title: "Root Foundation Task", Status: domain.StatusDone, Blocks: []string{"T-2"}, CreatedAt: now}
+	t2 := &domain.Task{ID: "T-2", Title: "Second Level Component", Status: domain.StatusInProgress, DependsOn: []string{"T-1"}, Blocks: []string{"T-3"}, CreatedAt: now}
+	t3 := &domain.Task{ID: "T-3", Title: "Third Level Integration", Status: domain.StatusOpen, DependsOn: []string{"T-2"}, Blocks: []string{"T-4"}, CreatedAt: now}
+	t4 := &domain.Task{ID: "T-4", Title: "Fourth Level Deep Feature", Status: domain.StatusOpen, DependsOn: []string{"T-3"}, Blocks: []string{"T-5"}, CreatedAt: now}
+	t5 := &domain.Task{ID: "T-5", Title: "Fifth Level Very Deep Feature", Status: domain.StatusOpen, DependsOn: []string{"T-4"}, Blocks: []string{"T-6"}, CreatedAt: now}
+	t6 := &domain.Task{ID: "T-6", Title: "Sixth Level Leaf Task", Status: domain.StatusOpen, DependsOn: []string{"T-5"}, CreatedAt: now}
+
+	tasks := []*domain.Task{t1, t2, t3, t4, t5, t6}
+	m := Model{
+		tasks:        tasks,
+		cursor:       0,
+		width:        115,
+		height:       24,
+		theme:        NewKanagawaTheme(),
+		treeViewMode: true,
+	}
+
+	viewOut := m.View()
+
+	// 1. Verify NO unicode replacement characters anywhere in the rendered view
+	if strings.Contains(viewOut, "\ufffd") {
+		t.Fatalf("rendered tree view contains unicode replacement character \ufffd:\n%s", viewOut)
+	}
+
+	// 2. Verify all tasks are rendered
+	for _, id := range []string{"T-1", "T-2", "T-3", "T-4", "T-5", "T-6"} {
+		if !strings.Contains(viewOut, id) {
+			t.Fatalf("rendered tree view missing task %s:\n%s", id, viewOut)
+		}
+	}
+
+	// 3. Verify TREE / TITLE header
+	if !strings.Contains(viewOut, "TREE / TITLE") {
+		t.Fatalf("rendered tree view missing TREE / TITLE header:\n%s", viewOut)
+	}
+
+	// 4. Verify footer contains [<>] Split hint
+	if !strings.Contains(viewOut, "Split") {
+		t.Fatalf("rendered footer missing [<>] Split hint:\n%s", viewOut)
+	}
+}
+

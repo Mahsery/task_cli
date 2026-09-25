@@ -369,9 +369,7 @@ func (m Model) getDetailContentLines(detailWidth int) []string {
 	} else {
 		latestBadge = fmt.Sprintf(" Created: %s", timeAgo(t.CreatedAt))
 	}
-	if lipgloss.Width(latestBadge) > detailWidth {
-		latestBadge = latestBadge[:detailWidth]
-	}
+	latestBadge = truncateToWidth(latestBadge, detailWidth)
 	contentLines = append(contentLines, theme.NoteTime.Width(detailWidth).Render(latestBadge))
 	contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
 
@@ -480,10 +478,7 @@ func (m Model) getDetailContentLines(detailWidth int) []string {
 			authorStr := ""
 			if n.Author != "" {
 				availAuthor := detailWidth - 18
-				author := n.Author
-				if availAuthor > 6 && len(author) > availAuthor {
-					author = author[:availAuthor-2] + ".."
-				}
+				author := truncateToWidth(n.Author, availAuthor)
 				authorStr = " by " + theme.NoteAuthor.Render(author)
 			}
 			contentLines = append(contentLines, fmt.Sprintf("    • %s%s:", timeStr, authorStr))
@@ -945,6 +940,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMsg = "Focused Tasks list (j/k to select task)"
 				return m, nil
 			}
+
+		case ">", ".", "alt+right", "alt+l":
+			if m.isSplitView() {
+				m.splitOffset += 4
+				detailW, _ := m.getDetailDimensions()
+				tableW := m.width - detailW - 1
+				m.statusMsg = fmt.Sprintf("Split resized: %d cols table / %d cols detail (reset with '=')", tableW, detailW)
+			}
+			return m, nil
+
+		case "<", ",", "alt+left", "alt+h":
+			if m.isSplitView() {
+				m.splitOffset -= 4
+				detailW, _ := m.getDetailDimensions()
+				tableW := m.width - detailW - 1
+				m.statusMsg = fmt.Sprintf("Split resized: %d cols table / %d cols detail (reset with '=')", tableW, detailW)
+			}
+			return m, nil
+
+		case "=":
+			if m.isSplitView() {
+				m.splitOffset = 0
+				detailW, _ := m.getDetailDimensions()
+				tableW := m.width - detailW - 1
+				m.statusMsg = fmt.Sprintf("Split reset: %d cols table / %d cols detail", tableW, detailW)
+			}
+			return m, nil
 
 		case "up", "k":
 			if m.activePane == PaneDetail {
@@ -2052,10 +2074,7 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 				authorStr := ""
 				if n.Author != "" {
 					availAuthor := width - 18
-					author := n.Author
-					if availAuthor > 6 && len(author) > availAuthor {
-						author = author[:availAuthor-2] + ".."
-					}
+					author := truncateToWidth(n.Author, availAuthor)
 					authorStr = " by " + theme.NoteAuthor.Render(author)
 				}
 				sb.WriteString(fmt.Sprintf("    • %s%s:\n", timeStr, authorStr))
@@ -2622,6 +2641,10 @@ func (m Model) renderFooter(width int) string {
 		treeLabel = theme.ModalKey.Render("[t] List")
 	}
 	linkLabel := key("L", "Link")
+	splitLabel := ""
+	if m.isSplitView() {
+		splitLabel = key("<>", "Split")
+	}
 
 	if m.activePane == PaneDetail {
 		var keys []string
@@ -2632,12 +2655,17 @@ func (m Model) renderFooter(width int) string {
 				key("Ctrl+D/U", "Page"),
 				key("g/G", "Top/Bottom"),
 				key("Tab/h", "Tasks List"),
+			}
+			if splitLabel != "" {
+				keys = append(keys, splitLabel)
+			}
+			keys = append(keys,
 				key("Enter", "Diff"),
 				linkLabel,
 				doneLabel,
 				statusLabel,
 				theme.DiffSub.Render("[x] Del"),
-			}
+			)
 			if undoKey != "" {
 				keys = append(keys, undoKey)
 			}
@@ -2647,11 +2675,16 @@ func (m Model) renderFooter(width int) string {
 				theme.BatchBadge.Render("DETAILS"),
 				key("j/k", "Scroll"),
 				key("Tab", "Tasks"),
+			}
+			if splitLabel != "" {
+				keys = append(keys, splitLabel)
+			}
+			keys = append(keys,
 				key("Enter", "Diff"),
 				linkLabel,
 				doneLabel,
 				statusLabel,
-			}
+			)
 			if undoKey != "" {
 				keys = append(keys, undoKey)
 			}
@@ -2679,6 +2712,11 @@ func (m Model) renderFooter(width int) string {
 		keys = []string{
 			key("j/k", "Move"),
 			key("Tab/l", "Details"),
+		}
+		if splitLabel != "" {
+			keys = append(keys, splitLabel)
+		}
+		keys = append(keys,
 			treeLabel,
 			linkLabel,
 			key("Space", "Sel"),
@@ -2687,15 +2725,15 @@ func (m Model) renderFooter(width int) string {
 			key("a", "Claim"),
 			doneLabel,
 			statusLabel,
-			theme.DiffSub.Render("[x]") + " " + theme.FooterDesc.Render("Del"),
-		}
+			theme.DiffSub.Render("[x]")+" "+theme.FooterDesc.Render("Del"),
+		)
 		if undoKey != "" {
 			keys = append(keys, undoKey)
 		}
 		keys = append(keys,
 			key("Enter", "Diff"),
 			key("/", "Search"),
-			theme.FilterIndicator.Render("[Esc]") + " " + theme.FooterDesc.Render("Clear"),
+			theme.FilterIndicator.Render("[Esc]")+" "+theme.FooterDesc.Render("Clear"),
 			key("S", "Scope"),
 			key("r", "Refresh"),
 			theme.Age.Render("[q] Quit"),
@@ -2704,6 +2742,11 @@ func (m Model) renderFooter(width int) string {
 		keys = []string{
 			key("j/k", "Move"),
 			key("Tab/l", "Details"),
+		}
+		if splitLabel != "" {
+			keys = append(keys, splitLabel)
+		}
+		keys = append(keys,
 			treeLabel,
 			linkLabel,
 			key("Space", "Sel"),
@@ -2713,7 +2756,7 @@ func (m Model) renderFooter(width int) string {
 			doneLabel,
 			statusLabel,
 			theme.DiffSub.Render("[x] Del"),
-		}
+		)
 		if undoKey != "" {
 			keys = append(keys, undoKey)
 		}
