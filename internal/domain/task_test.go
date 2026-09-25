@@ -108,45 +108,47 @@ func TestIsOrphaned(t *testing.T) {
 		t.Error("expected task tagged orphaned to return true")
 	}
 
-	// Open, unassigned, older than 1h, not archived -> orphaned
+	// Open, unassigned, older than 1h -> CANNOT be orphaned
 	oldOpen := &Task{
 		Status:    StatusOpen,
 		Assignee:  "",
 		CreatedAt: time.Now().Add(-2 * time.Hour),
 	}
-	if !oldOpen.IsOrphaned() {
-		t.Error("expected open unassigned task older than 1h to return true")
+	if oldOpen.IsOrphaned() {
+		t.Error("expected open unassigned task to NEVER be orphaned")
 	}
 
-	// Open, unassigned, older than 1h, BUT archived -> NOT orphaned
-	archivedOldOpen := &Task{
-		Status:     StatusArchived,
-		Assignee:   "",
-		CreatedAt:  time.Now().Add(-2 * time.Hour),
-		ArchivedAt: func() *time.Time { t := time.Now(); return &t }(),
-	}
-	if archivedOldOpen.IsOrphaned() {
-		t.Error("expected archived task to not be orphaned via dynamic rule")
-	}
-
-	// Open, unassigned, newer than 1h -> NOT orphaned
-	recentOpen := &Task{
-		Status:    StatusOpen,
-		Assignee:  "",
-		CreatedAt: time.Now().Add(-10 * time.Minute),
-	}
-	if recentOpen.IsOrphaned() {
-		t.Error("expected recent task (<1h) to not be orphaned dynamically")
-	}
-
-	// In progress, assigned -> NOT orphaned
-	inProg := &Task{
+	// In progress, assigned, inactive for 2h -> IS orphaned
+	inactiveInProg := &Task{
 		Status:    StatusInProgress,
 		Assignee:  "alice",
 		CreatedAt: time.Now().Add(-2 * time.Hour),
+		UpdatedAt: time.Now().Add(-2 * time.Hour),
 	}
-	if inProg.IsOrphaned() {
-		t.Error("expected assigned task to not be orphaned")
+	if !inactiveInProg.IsOrphaned() {
+		t.Error("expected assigned in_progress task inactive for 2h to be orphaned")
+	}
+
+	// In progress, assigned, recent activity (10m ago) -> ACTIVE (NOT orphaned)
+	activeInProg := &Task{
+		Status:    StatusInProgress,
+		Assignee:  "alice",
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+		UpdatedAt: time.Now().Add(-10 * time.Minute),
+	}
+	if activeInProg.IsOrphaned() {
+		t.Error("expected active in_progress task with recent updates to NOT be orphaned")
+	}
+
+	// In progress, inactive for 2h BUT archived -> NOT orphaned
+	archivedInProg := &Task{
+		Status:     StatusArchived,
+		Assignee:   "alice",
+		CreatedAt:  time.Now().Add(-2 * time.Hour),
+		ArchivedAt: func() *time.Time { t := time.Now(); return &t }(),
+	}
+	if archivedInProg.IsOrphaned() {
+		t.Error("expected archived task to never be considered orphaned")
 	}
 }
 

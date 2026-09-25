@@ -393,14 +393,24 @@ func (m Model) getDetailContentLines(detailWidth int) []string {
 	}
 
 	// Metadata badges
+	statusDisplay := string(t.Status)
+	statusStyle := StatusStyle(t.Status)
+	if t.IsOrphaned() {
+		statusDisplay = fmt.Sprintf("%s 👻 (ORPHANED)", string(t.Status))
+		statusStyle = theme.CountOrphaned
+	}
 	meta1 := fmt.Sprintf("  %s %s   %s %s   %s %s",
-		theme.DetailLabel.Render("Status:"), StatusStyle(t.Status).Render(string(t.Status)),
+		theme.DetailLabel.Render("Status:"), statusStyle.Render(statusDisplay),
 		theme.DetailLabel.Render("Pri:"), PriorityStyle(t.Priority).Render(string(t.Priority)),
 		theme.DetailLabel.Render("Scope:"), theme.TaskID.Render(t.Scope),
 	)
 	var metaParts []string
 	if t.Assignee != "" {
-		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(t.Assignee)))
+		assigneeDisplay := t.Assignee
+		if t.IsOrphaned() {
+			assigneeDisplay += " [STALE / TIMED OUT]"
+		}
+		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(assigneeDisplay)))
 	}
 	if len(t.Tags) > 0 {
 		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Tags:"), theme.Tag.Render(strings.Join(t.Tags, ", "))))
@@ -2399,18 +2409,7 @@ func (m Model) View() string {
 			continue
 		}
 
-		// A task is orphaned if: t.IsOrphaned() or has tag 'orphaned' (and !t.IsArchived()).
-		isOrphan := false
-		if t.IsOrphaned() {
-			isOrphan = true
-		} else {
-			for _, tag := range t.Tags {
-				if strings.EqualFold(tag, "orphaned") {
-					isOrphan = true
-					break
-				}
-			}
-		}
+		isOrphan := t.IsOrphaned()
 		if isOrphan {
 			orphanCount++
 		}
@@ -2419,9 +2418,13 @@ func (m Model) View() string {
 		case domain.StatusOpen:
 			openCount++
 		case domain.StatusInProgress:
-			progCount++
+			if !isOrphan {
+				progCount++
+			}
 		case domain.StatusDone, domain.StatusClosed:
 			doneCount++
+		default:
+			openCount++
 		}
 	}
 
@@ -2612,6 +2615,9 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 			} else if t.Status != domain.StatusDone && t.Status != domain.StatusClosed && len(t.DependsOn) > 0 {
 				rawTitle += " ⚡"
 			}
+			if t.IsOrphaned() {
+				rawTitle += " 👻"
+			}
 			title := truncateToWidth(rawTitle, titleWidth)
 
 			age := timeAgo(t.CreatedAt)
@@ -2623,11 +2629,21 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
 			age = truncateToWidth(age, ageWidth)
-			status := truncateToWidth(string(t.Status), statusWidth)
+			statusText := string(t.Status)
+			if t.IsOrphaned() {
+				statusText = "orphan"
+			}
+			status := truncateToWidth(statusText, statusWidth)
 			prio := truncateToWidth(string(t.Priority), priWidth)
 
 			idStr := theme.TaskID.Render(padRight(t.ID, idWidth))
-			statusStr := StatusStyle(t.Status).Render(padRight(status, statusWidth))
+			var statusStyle lipgloss.Style
+			if t.IsOrphaned() {
+				statusStyle = theme.CountOrphaned
+			} else {
+				statusStyle = StatusStyle(t.Status)
+			}
+			statusStr := statusStyle.Render(padRight(status, statusWidth))
 			priStr := PriorityStyle(t.Priority).Render(padRight(prio, priWidth))
 			titleStr := theme.TaskTitle.Render(padRight(title, titleWidth))
 			ageDisplay := theme.Age.Render(padRight(age, ageWidth))
@@ -2687,9 +2703,15 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 		}
 
 		// Metadata line(s) - responsive to avoid ugly mid-tag wrapping
+		statusDisplay := string(t.Status)
+		statusStyle := StatusStyle(t.Status)
+		if t.IsOrphaned() {
+			statusDisplay = fmt.Sprintf("%s 👻 (ORPHANED)", string(t.Status))
+			statusStyle = theme.CountOrphaned
+		}
 		metaLine1 := fmt.Sprintf("  %s %s   %s %s   %s %s",
 			theme.DetailLabel.Render("Status:"),
-			StatusStyle(t.Status).Render(string(t.Status)),
+			statusStyle.Render(statusDisplay),
 			theme.DetailLabel.Render("Priority:"),
 			PriorityStyle(t.Priority).Render(string(t.Priority)),
 			theme.DetailLabel.Render("Scope:"),
@@ -2698,7 +2720,11 @@ func (m Model) renderStackedView(width, height int, headerText string) string {
 
 		var metaParts []string
 		if t.Assignee != "" {
-			metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(t.Assignee)))
+			assigneeDisplay := t.Assignee
+			if t.IsOrphaned() {
+				assigneeDisplay += " [STALE / TIMED OUT]"
+			}
+			metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(assigneeDisplay)))
 		}
 		if len(t.Tags) > 0 {
 			metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Tags:"), theme.Tag.Render(strings.Join(t.Tags, ", "))))
@@ -2958,6 +2984,9 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 			} else if t.Status != domain.StatusDone && t.Status != domain.StatusClosed && len(t.DependsOn) > 0 {
 				rawTitle += " ⚡"
 			}
+			if t.IsOrphaned() {
+				rawTitle += " 👻"
+			}
 			title := truncateToWidth(rawTitle, titleWidth)
 
 			age := timeAgo(t.CreatedAt)
@@ -2969,11 +2998,21 @@ func (m Model) renderSplitView(width, height int, headerText string) string {
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
 			age = truncateToWidth(age, ageWidth)
-			status := truncateToWidth(string(t.Status), statusWidth)
+			statusText := string(t.Status)
+			if t.IsOrphaned() {
+				statusText = "orphan"
+			}
+			status := truncateToWidth(statusText, statusWidth)
 			prio := truncateToWidth(string(t.Priority), priWidth)
 
 			idStr := theme.TaskID.Render(padRight(t.ID, idWidth))
-			statusStr := StatusStyle(t.Status).Render(padRight(status, statusWidth))
+			var statusStyle lipgloss.Style
+			if t.IsOrphaned() {
+				statusStyle = theme.CountOrphaned
+			} else {
+				statusStyle = StatusStyle(t.Status)
+			}
+			statusStr := statusStyle.Render(padRight(status, statusWidth))
 			priStr := PriorityStyle(t.Priority).Render(padRight(prio, priWidth))
 			titleStr := theme.TaskTitle.Render(padRight(title, titleWidth))
 			ageDisplay := theme.Age.Render(padRight(age, ageWidth))

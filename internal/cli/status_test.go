@@ -79,53 +79,56 @@ func TestIsTaskOrphaned(t *testing.T) {
 		t.Error("expected archived task tagged 'orphaned' to NOT be considered orphaned")
 	}
 
-	// 4. Stale unassigned task older than 1h (not archived)
-	staleUnassigned := &domain.Task{
+	// 4. Unassigned open task older than 1h (not archived) -> CANNOT be orphaned
+	unassignedOld := &domain.Task{
 		ID:        "T-4",
-		Title:     "Stale Unassigned",
+		Title:     "Old Open Unassigned",
 		Status:    domain.StatusOpen,
 		Assignee:  "",
 		CreatedAt: now.Add(-2 * time.Hour),
 	}
-	if !isTaskOrphaned(staleUnassigned) {
-		t.Error("expected stale unassigned task older than 1h to be recognized as orphaned")
+	if isTaskOrphaned(unassignedOld) {
+		t.Error("expected unassigned open task to NEVER be recognized as orphaned")
 	}
 
-	// 5. Stale unassigned task BUT archived -> MUST return false
+	// 5. Inactive in_progress task older than 1h -> MUST be recognized as orphaned
+	inactiveInProg := &domain.Task{
+		ID:        "T-5-inactive",
+		Title:     "Inactive In Progress",
+		Status:    domain.StatusInProgress,
+		Assignee:  "alice",
+		CreatedAt: now.Add(-2 * time.Hour),
+		UpdatedAt: now.Add(-2 * time.Hour),
+	}
+	if !isTaskOrphaned(inactiveInProg) {
+		t.Error("expected inactive in_progress task older than 1h to be recognized as orphaned")
+	}
+
+	// 6. Inactive task BUT archived -> MUST return false
 	staleArchived := &domain.Task{
 		ID:         "T-5",
 		Title:      "Stale Archived",
 		Status:     domain.StatusArchived,
-		Assignee:   "",
+		Assignee:   "alice",
 		ArchivedAt: &now,
 		CreatedAt:  now.Add(-2 * time.Hour),
+		UpdatedAt:  now.Add(-2 * time.Hour),
 	}
 	if isTaskOrphaned(staleArchived) {
 		t.Error("expected stale archived task to NOT be considered orphaned")
 	}
 
-	// 6. Recent unassigned task (<1h) -> false
-	recentUnassigned := &domain.Task{
-		ID:        "T-6",
-		Title:     "Recent Unassigned",
-		Status:    domain.StatusOpen,
-		Assignee:  "",
-		CreatedAt: now.Add(-10 * time.Minute),
-	}
-	if isTaskOrphaned(recentUnassigned) {
-		t.Error("expected recent task to not be orphaned")
-	}
-
-	// 7. Assigned in-progress task -> false
-	assignedInProgress := &domain.Task{
+	// 7. Active in_progress task (<1h activity) -> false
+	activeInProgress := &domain.Task{
 		ID:        "T-7",
-		Title:     "Assigned Task",
+		Title:     "Active In-Progress Task",
 		Status:    domain.StatusInProgress,
 		Assignee:  "alice",
 		CreatedAt: now.Add(-2 * time.Hour),
+		UpdatedAt: now.Add(-10 * time.Minute),
 	}
-	if isTaskOrphaned(assignedInProgress) {
-		t.Error("expected assigned task to not be orphaned")
+	if isTaskOrphaned(activeInProgress) {
+		t.Error("expected active in_progress task with recent activity to not be orphaned")
 	}
 }
 
@@ -138,8 +141,8 @@ func TestStatusReportAndRendering(t *testing.T) {
 		{ID: "T-1", Title: "Open Ready", Status: domain.StatusOpen, Priority: domain.PriorityNormal, CreatedAt: now.Add(-10 * time.Minute)},
 		// Open blocked task
 		{ID: "T-2", Title: "Open Blocked", Status: domain.StatusOpen, Priority: domain.PriorityHigh, IsBlocked: true, BlockedBy: []string{"T-1"}, CreatedAt: now.Add(-20 * time.Minute)},
-		// Active in-progress task
-		{ID: "T-3", Title: "In Progress Task", Status: domain.StatusInProgress, Priority: domain.PriorityUrgent, Assignee: "agent-test", CreatedAt: now.Add(-30 * time.Minute)},
+		// Active in-progress task (recent activity)
+		{ID: "T-3", Title: "In Progress Task", Status: domain.StatusInProgress, Priority: domain.PriorityUrgent, Assignee: "agent-test", CreatedAt: now.Add(-30 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute)},
 		// Done task
 		{ID: "T-4", Title: "Completed Task", Status: domain.StatusDone, Priority: domain.PriorityNormal, CreatedAt: now.Add(-2 * time.Hour)},
 		// Closed task
@@ -150,8 +153,8 @@ func TestStatusReportAndRendering(t *testing.T) {
 		{ID: "T-7", Title: "Archived Timestamp", Status: domain.StatusDone, Priority: domain.PriorityLow, ArchivedAt: &archivedTime, CreatedAt: now.Add(-6 * time.Hour)},
 		// Tagged orphaned task (unarchived)
 		{ID: "T-8", Title: "Tagged Orphan", Status: domain.StatusOpen, Priority: domain.PriorityNormal, Tags: []string{"orphaned"}, CreatedAt: now.Add(-40 * time.Minute)},
-		// Stale unassigned task (unarchived)
-		{ID: "T-9", Title: "Stale Task", Status: domain.StatusOpen, Priority: domain.PriorityHigh, Assignee: "", CreatedAt: now.Add(-2 * time.Hour)},
+		// Inactive in_progress task (unarchived, orphaned)
+		{ID: "T-9", Title: "Stale Task", Status: domain.StatusInProgress, Priority: domain.PriorityHigh, Assignee: "abandoned-agent", CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour)},
 	}
 
 	var (
@@ -182,8 +185,10 @@ func TestStatusReportAndRendering(t *testing.T) {
 
 		switch t.Status {
 		case domain.StatusInProgress:
-			inProgressCount++
-			activeTasks = append(activeTasks, t)
+			if !isTaskOrphaned(t) {
+				inProgressCount++
+				activeTasks = append(activeTasks, t)
+			}
 		case domain.StatusOpen:
 			openCount++
 			if t.IsBlocked {
@@ -234,14 +239,14 @@ func TestStatusReportAndRendering(t *testing.T) {
 	if report.Summary.Done != 2 {
 		t.Errorf("expected done 2, got %d", report.Summary.Done)
 	}
-	if report.Summary.Open != 4 { // T-1, T-2, T-8, T-9
-		t.Errorf("expected open 4, got %d", report.Summary.Open)
+	if report.Summary.Open != 3 { // T-1, T-2, T-8
+		t.Errorf("expected open 3, got %d", report.Summary.Open)
 	}
 	if report.Summary.Orphaned != 2 { // T-8, T-9
 		t.Errorf("expected orphaned 2, got %d", report.Summary.Orphaned)
 	}
-	if report.Summary.Ready != 3 { // T-1, T-8, T-9
-		t.Errorf("expected ready 3, got %d", report.Summary.Ready)
+	if report.Summary.Ready != 2 { // T-1, T-8
+		t.Errorf("expected ready 2, got %d", report.Summary.Ready)
 	}
 	if report.Summary.Blocked != 1 { // T-2
 		t.Errorf("expected blocked 1, got %d", report.Summary.Blocked)
@@ -266,12 +271,12 @@ func TestStatusReportAndRendering(t *testing.T) {
 		"Branch:  feature-status",
 		"Actor:   agent-test",
 		"Summary:",
-		"Open: 4",
+		"Open: 3",
 		"Active: 1",
 		"Done: 2",
 		"Orphaned: 2",
 		"Archived: 2",
-		"Ready: 3",
+		"Ready: 2",
 		"Blocked: 1",
 		"Active Tasks (1):",
 		"T-3",

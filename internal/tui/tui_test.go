@@ -1463,3 +1463,71 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 	}
 }
 
+func TestTUIOrphanVsActiveDistinction(t *testing.T) {
+	now := time.Now()
+	tasks := []*domain.Task{
+		// 1. Normal unassigned open task (1d old) -> MUST count as Open, NOT Orphaned
+		{
+			ID:        "T-1",
+			Title:     "Backlog Item",
+			Status:    domain.StatusOpen,
+			Assignee:  "",
+			CreatedAt: now.Add(-24 * time.Hour),
+		},
+		// 2. Active in_progress task (assigned, active 5m ago) -> MUST count as Active, NOT Orphaned
+		{
+			ID:        "T-2",
+			Title:     "Active Feature",
+			Status:    domain.StatusInProgress,
+			Assignee:  "alice",
+			CreatedAt: now.Add(-2 * time.Hour),
+			UpdatedAt: now.Add(-5 * time.Minute),
+		},
+		// 3. Abandoned in_progress task (assigned, inactive 4h ago) -> MUST count as Orphaned, NOT Active
+		{
+			ID:        "T-3",
+			Title:     "Abandoned Feature",
+			Status:    domain.StatusInProgress,
+			Assignee:  "bob",
+			CreatedAt: now.Add(-4 * time.Hour),
+			UpdatedAt: now.Add(-4 * time.Hour),
+		},
+	}
+
+	m := Model{
+		tasks:      tasks,
+		width:      120,
+		height:     24,
+		theme:      NewKanagawaTheme(),
+		activePane: PaneList,
+		cursor:     2, // on T-3 (abandoned)
+	}
+
+	view := m.View()
+
+	// 1. Header counts: 1 Open, 1 Active, 0 Done, 1 Orphaned
+	if !strings.Contains(view, "1 Open") {
+		t.Errorf("Expected '1 Open' in header, got:\n%s", view)
+	}
+	if !strings.Contains(view, "1 Active") {
+		t.Errorf("Expected '1 Active' in header, got:\n%s", view)
+	}
+	if !strings.Contains(view, "1 Orphaned") {
+		t.Errorf("Expected '1 Orphaned' in header, got:\n%s", view)
+	}
+
+	// 2. Table row visual markers:
+	// T-3 must show orphan status and ghost icon in title
+	if !strings.Contains(view, "orphan") {
+		t.Errorf("Expected 'orphan' in status column for T-3, got:\n%s", view)
+	}
+	if !strings.Contains(view, "👻") {
+		t.Errorf("Expected '👻' marker in title for orphaned T-3, got:\n%s", view)
+	}
+
+	// 3. Detail pane for T-3 must show stale assignee warning
+	if !strings.Contains(view, "[STALE / TIMED OUT]") {
+		t.Errorf("Expected '[STALE / TIMED OUT]' in detail pane for T-3, got:\n%s", view)
+	}
+}
+

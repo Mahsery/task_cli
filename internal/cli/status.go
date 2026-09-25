@@ -102,8 +102,10 @@ var statusCmd = &cobra.Command{
 
 			switch t.Status {
 			case domain.StatusInProgress:
-				inProgressCount++
-				activeTasks = append(activeTasks, t)
+				if !isTaskOrphaned(t) {
+					inProgressCount++
+					activeTasks = append(activeTasks, t)
+				}
 			case domain.StatusOpen:
 				openCount++
 				if t.IsBlocked {

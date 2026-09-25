@@ -58,12 +58,25 @@ func CreateEditTaskFile(task *domain.Task) (string, error) {
 	defer tmpFile.Close()
 
 	var sb strings.Builder
+	if task.IsOrphaned() {
+		sb.WriteString("# ⚠️  WARNING: THIS TASK IS ORPHANED / STALE\n")
+		sb.WriteString("# Inactivity has exceeded threshold or assignee abandoned work.\n")
+		sb.WriteString("# Run 'tk takeover " + task.ID + "' to claim, or update assignee/status below.\n#\n")
+	}
 	sb.WriteString(fmt.Sprintf("# Task: %s\n", task.ID))
 	sb.WriteString(fmt.Sprintf("# Title: %s\n", task.Title))
-	sb.WriteString(fmt.Sprintf("# Status: %s (open | in_progress | done | closed)\n", task.Status))
+	if task.IsOrphaned() {
+		sb.WriteString(fmt.Sprintf("# Status: %s [ORPHANED] (open | in_progress | done | closed)\n", task.Status))
+	} else {
+		sb.WriteString(fmt.Sprintf("# Status: %s (open | in_progress | done | closed)\n", task.Status))
+	}
 	sb.WriteString(fmt.Sprintf("# Priority: %s (low | normal | high | urgent)\n", task.Priority))
 	sb.WriteString(fmt.Sprintf("# Tags: %s\n", strings.Join(task.Tags, ", ")))
-	sb.WriteString(fmt.Sprintf("# Assignee: %s\n\n", task.Assignee))
+	if task.IsOrphaned() && task.Assignee != "" {
+		sb.WriteString(fmt.Sprintf("# Assignee: %s [STALE / TIMED OUT]\n\n", task.Assignee))
+	} else {
+		sb.WriteString(fmt.Sprintf("# Assignee: %s\n\n", task.Assignee))
+	}
 	sb.WriteString(task.Description)
 	sb.WriteString("\n\n# --- Add new notes/comments below (optional) ---\n")
 
@@ -253,6 +266,9 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 					if idx := strings.Index(val, "("); idx != -1 {
 						val = strings.TrimSpace(val[:idx])
 					}
+					if idx := strings.Index(val, "["); idx != -1 {
+						val = strings.TrimSpace(val[:idx])
+					}
 					if val != "" {
 						s, err := domain.ParseStatus(val)
 						if err != nil {
@@ -262,6 +278,9 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 					}
 				case "# priority":
 					if idx := strings.Index(val, "("); idx != -1 {
+						val = strings.TrimSpace(val[:idx])
+					}
+					if idx := strings.Index(val, "["); idx != -1 {
 						val = strings.TrimSpace(val[:idx])
 					}
 					if val != "" {
@@ -283,6 +302,9 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 					}
 					res.Tags = tags
 				case "# assignee":
+					if idx := strings.Index(val, "["); idx != -1 {
+						val = strings.TrimSpace(val[:idx])
+					}
 					res.Assignee = val
 				}
 				continue

@@ -731,7 +731,7 @@ func (d *DB) findStaleTasksLocked(scope, repoPath string, threshold time.Duratio
 	now := time.Now().UTC()
 	cutoff := now.Add(-threshold)
 
-	query := `SELECT id FROM tasks WHERE status IN ('open', 'in_progress') AND (archived_at IS NULL AND status != 'archived')`
+	query := `SELECT id FROM tasks WHERE (status = 'in_progress' OR (status = 'open' AND assignee != '')) AND (archived_at IS NULL AND status != 'archived')`
 	var args []any
 	if scope != "" {
 		query += " AND scope = ?"
@@ -762,11 +762,6 @@ func (d *DB) findStaleTasksLocked(scope, repoPath string, threshold time.Duratio
 	for _, id := range candidateIDs {
 		t, err := d.getTaskLocked(d.conn, id)
 		if err != nil || t == nil {
-			continue
-		}
-
-		// Skip unassigned tasks that already have the 'orphaned' tag
-		if t.Assignee == "" && hasTag(t.Tags, "orphaned") {
 			continue
 		}
 
@@ -805,10 +800,6 @@ func (d *DB) findStaleTasksLocked(scope, repoPath string, threshold time.Duratio
 		}
 
 		inactiveDur := now.Sub(selfActivity)
-		if t.Assignee == "" && (t.UpdatedAt.IsZero() || t.UpdatedAt.Equal(t.CreatedAt)) && len(t.Notes) == 0 {
-			inactiveDur = now.Sub(t.CreatedAt)
-		}
-
 		candidates = append(candidates, domain.StaleTaskCandidate{
 			TaskID:           t.ID,
 			Title:            t.Title,
@@ -841,11 +832,7 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 	for _, cand := range candidates {
 		orphanReason := reason
 		if orphanReason == "" {
-			if cand.Assignee == "" {
-				orphanReason = fmt.Sprintf("inactive for %s since creation (threshold: %s)", formatDurationBrief(cand.InactiveDuration), formatDurationBrief(threshold))
-			} else {
-				orphanReason = fmt.Sprintf("inactivity for %s (threshold: %s)", formatDurationBrief(cand.InactiveDuration), formatDurationBrief(threshold))
-			}
+			orphanReason = fmt.Sprintf("inactivity for %s (threshold: %s)", formatDurationBrief(cand.InactiveDuration), formatDurationBrief(threshold))
 		}
 		if err := d.orphanTaskLocked(cand.TaskID, actor, orphanReason, now); err == nil {
 			orphanedIDs = append(orphanedIDs, cand.TaskID)

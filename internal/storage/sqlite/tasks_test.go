@@ -1320,17 +1320,9 @@ func TestFindAndReapStaleTasks_UnassignedAndArchived(t *testing.T) {
 		candMap[c.TaskID] = c
 	}
 
-	// Verify tUnassigned is detected
-	cUnassigned, ok := candMap[tUnassigned.ID]
-	if !ok {
-		t.Errorf("expected unassigned task %s to be detected as stale candidate", tUnassigned.ID)
-	} else {
-		if cUnassigned.Assignee != "" {
-			t.Errorf("expected empty assignee, got %q", cUnassigned.Assignee)
-		}
-		if cUnassigned.InactiveDuration < 3*time.Hour {
-			t.Errorf("expected InactiveDuration > 3h, got %v", cUnassigned.InactiveDuration)
-		}
+	// Verify tUnassigned is NOT detected (unassigned open tasks can never be orphaned/stale)
+	if _, ok := candMap[tUnassigned.ID]; ok {
+		t.Errorf("unassigned open task %s should NOT be detected as stale candidate", tUnassigned.ID)
 	}
 
 	// Verify tAssigned is detected
@@ -1376,41 +1368,11 @@ func TestFindAndReapStaleTasks_UnassignedAndArchived(t *testing.T) {
 		reapedMap[id] = true
 	}
 
-	if !reapedMap[tUnassigned.ID] {
-		t.Errorf("expected %s to be reaped", tUnassigned.ID)
+	if reapedMap[tUnassigned.ID] {
+		t.Errorf("unassigned task %s should NOT be reaped", tUnassigned.ID)
 	}
 	if !reapedMap[tAssigned.ID] {
 		t.Errorf("expected %s to be reaped", tAssigned.ID)
-	}
-
-	// Verify tUnassigned state in DB
-	afterUnassigned, err := db.GetTask(tUnassigned.ID)
-	if err != nil {
-		t.Fatalf("failed to get task: %v", err)
-	}
-	if afterUnassigned.Status != domain.StatusOpen {
-		t.Errorf("expected status open, got %s", afterUnassigned.Status)
-	}
-	if afterUnassigned.Assignee != "" {
-		t.Errorf("expected empty assignee, got %q", afterUnassigned.Assignee)
-	}
-	hasOrphanTag := false
-	for _, tag := range afterUnassigned.Tags {
-		if tag == "orphaned" {
-			hasOrphanTag = true
-			break
-		}
-	}
-	if !hasOrphanTag {
-		t.Errorf("expected tag 'orphaned' on task %s", afterUnassigned.ID)
-	}
-	// Verify audit note format: Task marked orphaned: inactive for %s since creation (threshold: %s)
-	if len(afterUnassigned.Notes) == 0 {
-		t.Fatalf("expected audit note on unassigned reaped task")
-	}
-	lastNote := afterUnassigned.Notes[len(afterUnassigned.Notes)-1]
-	if !strings.HasPrefix(lastNote.Content, "Task marked orphaned: inactive for ") || !strings.Contains(lastNote.Content, "since creation (threshold: ") {
-		t.Errorf("unexpected audit note format: %q", lastNote.Content)
 	}
 
 	// Verify tAssigned state in DB

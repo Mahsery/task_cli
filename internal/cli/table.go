@@ -46,7 +46,15 @@ func renderTaskTable(tasks []*domain.Task) {
 		))
 		sb.WriteString(strings.Repeat(sepChar, 74) + "\n")
 		for _, t := range tasks {
-			title := truncateWithEllipsis(t.Title, 26)
+			rawTitle := t.Title
+			if t.IsOrphaned() {
+				if IsASCIIOnly() {
+					rawTitle = "[orphan] " + rawTitle
+				} else {
+					rawTitle = rawTitle + " 👻"
+				}
+			}
+			title := truncateWithEllipsis(rawTitle, 26)
 			tags := truncateWithEllipsis(strings.Join(t.Tags, ","), 10)
 			age := formatAge(t.CreatedAt)
 			if t.CommitSHA != "" {
@@ -56,9 +64,13 @@ func renderTaskTable(tasks []*domain.Task) {
 				}
 				age = fmt.Sprintf("%s (%s)", age, sha)
 			}
+			status := string(t.Status)
+			if t.IsOrphaned() {
+				status = "orphan"
+			}
 			sb.WriteString(fmt.Sprintf("%s %s %s %s %s %s\n",
 				padRight(t.ID, 6),
-				padRight(string(t.Status), 11),
+				padRight(status, 11),
 				padRight(string(t.Priority), 6),
 				padRight(title, 26),
 				padRight(tags, 10),
@@ -80,7 +92,15 @@ func renderTaskTable(tasks []*domain.Task) {
 	))
 	sb.WriteString(strings.Repeat(sepChar, 88) + "\n")
 	for _, t := range tasks {
-		title := truncateWithEllipsis(t.Title, 34)
+		rawTitle := t.Title
+		if t.IsOrphaned() {
+			if IsASCIIOnly() {
+				rawTitle = "[orphan] " + rawTitle
+			} else {
+				rawTitle = rawTitle + " 👻"
+			}
+		}
+		title := truncateWithEllipsis(rawTitle, 34)
 		tags := truncateWithEllipsis(strings.Join(t.Tags, ","), 16)
 		age := formatAge(t.CreatedAt)
 		if t.CommitSHA != "" {
@@ -90,9 +110,13 @@ func renderTaskTable(tasks []*domain.Task) {
 			}
 			age = fmt.Sprintf("%s (%s)", age, sha)
 		}
+		status := string(t.Status)
+		if t.IsOrphaned() {
+			status = "orphan"
+		}
 		sb.WriteString(fmt.Sprintf("%s %s %s %s %s %s\n",
 			padRight(t.ID, 6),
-			padRight(string(t.Status), 12),
+			padRight(status, 12),
 			padRight(string(t.Priority), 8),
 			padRight(title, 34),
 			padRight(tags, 16),

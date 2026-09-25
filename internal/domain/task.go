@@ -104,16 +104,57 @@ func (t *Task) IsArchived() bool {
 	return t != nil && (t.ArchivedAt != nil || t.Status == StatusArchived)
 }
 
-func (t *Task) IsOrphaned() bool {
+func (t *Task) LastActivityTime() time.Time {
 	if t == nil {
+		return time.Time{}
+	}
+	latest := t.UpdatedAt
+	if latest.IsZero() {
+		latest = t.CreatedAt
+	}
+	for _, n := range t.Notes {
+		if n.CreatedAt.After(latest) {
+			latest = n.CreatedAt
+		}
+	}
+	if t.ClosedAt != nil && t.ClosedAt.After(latest) {
+		latest = *t.ClosedAt
+	}
+	return latest
+}
+
+func (t *Task) InactiveDuration() time.Duration {
+	act := t.LastActivityTime()
+	if act.IsZero() {
+		return 0
+	}
+	return time.Since(act)
+}
+
+func (t *Task) IsOrphaned() bool {
+	if t == nil || t.IsArchived() {
+		return false
+	}
+	if t.Status == StatusDone || t.Status == StatusClosed {
 		return false
 	}
 	for _, tag := range t.Tags {
-		if tag == "orphaned" {
+		if strings.EqualFold(tag, "orphaned") {
 			return true
 		}
 	}
-	return t.Status == StatusOpen && strings.TrimSpace(t.Assignee) == "" && time.Since(t.CreatedAt) > time.Hour && !t.IsArchived()
+	// Open tasks without an assignee are normal backlog items and can NEVER be orphaned.
+	if t.Status == StatusOpen && strings.TrimSpace(t.Assignee) == "" {
+		return false
+	}
+	// Assigned or in_progress tasks whose activity has timed out (> 1 hour) are orphaned.
+	if t.Status == StatusInProgress || strings.TrimSpace(t.Assignee) != "" {
+		act := t.LastActivityTime()
+		if !act.IsZero() && time.Since(act) > time.Hour {
+			return true
+		}
+	}
+	return false
 }
 
 type TaskDependency struct {
