@@ -24,6 +24,7 @@ var (
 	listBlocked   bool
 	listDependsOn string
 	listBlocks    string
+	listOrphaned  bool
 )
 
 var listCmd = &cobra.Command{
@@ -37,6 +38,7 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
   tk list -t backend -q "jwt"
   tk ls -l backend --short
   tk list -a alice
+  tk ls --orphaned
   tk ls --short --limit 10
   tk -g list --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -50,17 +52,18 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 		}
 
 		filter := domain.TaskFilter{
-			Scope:       scope,
-			RepoPath:    repoRoot,
-			Tag:         tagFilter,
-			Assignee:    listAssignee,
-			Search:      listSearch,
-			Sort:        listSort,
-			Limit:       listLimit,
-			OnlyReady:   listReady,
-			OnlyBlocked: listBlocked,
-			DependsOn:   listDependsOn,
-			Blocks:      listBlocks,
+			Scope:        scope,
+			RepoPath:     repoRoot,
+			Tag:          tagFilter,
+			Assignee:     listAssignee,
+			Search:       listSearch,
+			Sort:         listSort,
+			Limit:        listLimit,
+			OnlyReady:    listReady,
+			OnlyBlocked:  listBlocked,
+			OnlyOrphaned: listOrphaned,
+			DependsOn:    listDependsOn,
+			Blocks:       listBlocks,
 		}
 
 		if listStatus != "" {
@@ -136,6 +139,7 @@ func init() {
 	listCmd.Flags().StringVar(&listDependsOn, "after", "", "Show tasks that depend on the specified task ID")
 	listCmd.Flags().StringVar(&listDependsOn, "depends-on", "", "Alias for --after")
 	listCmd.Flags().StringVar(&listBlocks, "blocks", "", "Show tasks that are prerequisite blockers for the specified task ID")
+	listCmd.Flags().BoolVar(&listOrphaned, "orphaned", false, "Show only tasks marked as orphaned")
 }
 
 func formatAge(t time.Time) string {

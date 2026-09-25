@@ -78,6 +78,28 @@ tk edit <ID> --add-tag "tested" --remove-tag "blocked"
 tk edit <ID> --assignee "reviewer-agent"
 ```
 
+### Stale Tasks, Orphaning & Handover
+```bash
+# Take over a task from another actor or claim an orphaned task with a reason
+tk takeover <ID> -m "Taking over implementation for sprint"
+tk take <ID> -m "Assignee unresponsive; taking over"
+
+# Hand off / transfer a task directly to another actor
+tk transfer <ID> <new-actor> -m "Handing off database work"
+
+# List orphaned tasks or stale candidates
+tk list --orphaned
+tk orphan list
+tk orphan list --older-than 12h
+
+# Preview or reap stale tasks inactive past threshold (checks commits, updates, and dependencies)
+tk orphan reap --dry-run
+tk orphan reap --older-than 24h
+
+# Manually orphan an abandoned task (drops assignee, resets to open, tags 'orphaned')
+tk orphan <ID> -m "Agent timed out"
+```
+
 ### Completing Tasks
 ```bash
 # Complete task and automatically attach HEAD commit evidence

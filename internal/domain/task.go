@@ -116,6 +116,17 @@ type TaskFilter struct {
 	IncludeNotes bool
 	OnlyReady    bool   // Return tasks with status open and 0 unfinished blockers
 	OnlyBlocked  bool   // Return tasks that have unfinished blockers
+	OnlyOrphaned bool   // Return tasks that are tagged orphaned
 	DependsOn    string // Filter by prerequisite task ID
 	Blocks       string // Filter by downstream task ID
+}
+
+type StaleTaskCandidate struct {
+	TaskID           string        `json:"task_id"`
+	Title            string        `json:"title"`
+	Assignee         string        `json:"assignee"`
+	Status           Status        `json:"status"`
+	Priority         Priority      `json:"priority"`
+	InactiveDuration time.Duration `json:"inactive_duration"`
+	LastActivity     time.Time     `json:"last_activity"`
 }

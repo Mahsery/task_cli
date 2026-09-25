@@ -341,6 +341,91 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		resp.Data = data
 		return resp
 
+	case protocol.ActionOrphanTask:
+		var p protocol.OrphanTaskPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		task, err := db.OrphanTask(p.ID, p.Actor, p.Reason)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+
+		s.pubsub.Publish(protocol.Event{
+			Type:      protocol.EventTaskUpdated,
+			Timestamp: time.Now(),
+			Task:      task,
+			Message:   fmt.Sprintf("⚠ %s orphaned (dropped assignee, status: open)", task.ID),
+		})
+
+		data, _ := json.Marshal(task)
+		resp.Data = data
+		return resp
+
+	case protocol.ActionTransferTask:
+		var p protocol.TransferTaskPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		task, err := db.TransferTask(p.ID, p.Actor, p.NewAssignee, p.Note, p.Force)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+
+		s.pubsub.Publish(protocol.Event{
+			Type:      protocol.EventTaskUpdated,
+			Timestamp: time.Now(),
+			Task:      task,
+			Message:   fmt.Sprintf("* %s transferred to %q", task.ID, p.NewAssignee),
+		})
+
+		data, _ := json.Marshal(task)
+		resp.Data = data
+		return resp
+
+	case protocol.ActionReapStaleTasks:
+		var p protocol.ReapStaleTasksPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		candidates, orphanedIDs, err := db.ReapStaleTasks(req.Scope, req.RepoPath, p.Threshold, p.DryRun, p.Actor, p.Reason)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+
+		for _, oID := range orphanedIDs {
+			if t, err := db.GetTask(oID); err == nil {
+				s.pubsub.Publish(protocol.Event{
+					Type:      protocol.EventTaskUpdated,
+					Timestamp: time.Now(),
+					Task:      t,
+					Message:   fmt.Sprintf("⚠ %s orphaned due to inactivity", t.ID),
+				})
+			}
+		}
+
+		result := protocol.ReapStaleTasksResult{
+			Threshold:  p.Threshold,
+			DryRun:     p.DryRun,
+			Candidates: candidates,
+			Orphaned:   orphanedIDs,
+		}
+		data, _ := json.Marshal(result)
+		resp.Data = data
+		return resp
+
 	case protocol.ActionListTasks:
 		var p protocol.ListTasksPayload
 		if err := json.Unmarshal(req.Payload, &p); err != nil {
@@ -363,6 +448,7 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			IncludeNotes: p.IncludeNotes,
 			OnlyReady:    p.OnlyReady,
 			OnlyBlocked:  p.OnlyBlocked,
+			OnlyOrphaned: p.OnlyOrphaned,
 			DependsOn:    p.DependsOn,
 			Blocks:       p.Blocks,
 		}

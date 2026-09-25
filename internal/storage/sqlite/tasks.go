@@ -353,9 +353,9 @@ func (d *DB) ClaimTask(id string, assignee string, force bool) (*domain.Task, er
 	}
 	defer tx.Rollback()
 
-	var currentAssignee, currentStatus string
-	query := "SELECT assignee, status FROM tasks WHERE id = ?"
-	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus); err != nil {
+	var currentAssignee, currentStatus, currentTagsJSON string
+	query := "SELECT assignee, status, tags FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus, &currentTagsJSON); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("task %s not found", id)
 		}
@@ -367,14 +367,26 @@ func (d *DB) ClaimTask(id string, assignee string, force bool) (*domain.Task, er
 		return nil, fmt.Errorf("task %s is already claimed by %q (use --force to overwrite)", id, currentAssignee)
 	}
 
+	var tags []string
+	if err := json.Unmarshal([]byte(currentTagsJSON), &tags); err != nil {
+		tags = []string{}
+	}
+	var newTags []string
+	for _, tag := range tags {
+		if tag != "orphaned" {
+			newTags = append(newTags, tag)
+		}
+	}
+	newTagsBytes, _ := json.Marshal(newTags)
+
 	now := time.Now().UTC()
 	newStatus := currentStatus
 	if currentStatus == string(domain.StatusOpen) {
 		newStatus = string(domain.StatusInProgress)
 	}
 
-	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, updated_at = ? WHERE id = ?"
-	if _, err := tx.Exec(updateSQL, assignee, newStatus, now, id); err != nil {
+	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, tags = ?, updated_at = ? WHERE id = ?"
+	if _, err := tx.Exec(updateSQL, assignee, newStatus, string(newTagsBytes), now, id); err != nil {
 		return nil, fmt.Errorf("failed to claim task: %w", err)
 	}
 
@@ -393,6 +405,307 @@ func (d *DB) ClaimTask(id string, assignee string, force bool) (*domain.Task, er
 
 	return d.GetTask(id)
 }
+
+func (d *DB) orphanTaskLocked(id string, actor, reason string, now time.Time) error {
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentAssignee, currentStatus, currentTagsJSON string
+	query := "SELECT assignee, status, tags FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus, &currentTagsJSON); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("task %s not found", id)
+		}
+		return fmt.Errorf("failed to query task: %w", err)
+	}
+
+	var tags []string
+	if err := json.Unmarshal([]byte(currentTagsJSON), &tags); err != nil {
+		tags = []string{}
+	}
+
+	hasOrphanTag := false
+	for _, tag := range tags {
+		if tag == "orphaned" {
+			hasOrphanTag = true
+			break
+		}
+	}
+	if !hasOrphanTag {
+		tags = append(tags, "orphaned")
+	}
+	newTagsBytes, _ := json.Marshal(tags)
+
+	newStatus := currentStatus
+	if currentStatus == string(domain.StatusInProgress) {
+		newStatus = string(domain.StatusOpen)
+	}
+
+	updateSQL := "UPDATE tasks SET assignee = '', status = ?, tags = ?, updated_at = ? WHERE id = ?"
+	if _, err := tx.Exec(updateSQL, newStatus, string(newTagsBytes), now, id); err != nil {
+		return fmt.Errorf("failed to orphan task: %w", err)
+	}
+
+	if actor == "" {
+		actor = "system"
+	}
+	noteContent := ""
+	if reason != "" {
+		if currentAssignee != "" {
+			noteContent = fmt.Sprintf("Task orphaned: %s (dropped assignee %q, reset status to %s)", reason, currentAssignee, newStatus)
+		} else {
+			noteContent = fmt.Sprintf("Task orphaned: %s (status reset to %s)", reason, newStatus)
+		}
+	} else {
+		if currentAssignee != "" {
+			noteContent = fmt.Sprintf("Task orphaned due to inactivity (dropped assignee %q, reset status to %s)", currentAssignee, newStatus)
+		} else {
+			noteContent = fmt.Sprintf("Task marked as orphaned (status reset to %s)", newStatus)
+		}
+	}
+
+	noteID := uuid.New().String()
+	noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
+	if _, err := tx.Exec(noteSQL, noteID, id, actor, noteContent, now); err != nil {
+		return fmt.Errorf("failed to insert orphan note: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (d *DB) OrphanTask(id string, actor, reason string) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	now := time.Now().UTC()
+	if err := d.orphanTaskLocked(id, actor, reason, now); err != nil {
+		return nil, err
+	}
+	return d.getTaskLocked(d.conn, id)
+}
+
+func (d *DB) TransferTask(id string, fromActor, toAssignee, note string, force bool) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	toAssignee = strings.TrimSpace(toAssignee)
+	if toAssignee == "" {
+		return nil, fmt.Errorf("new assignee cannot be empty")
+	}
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentAssignee, currentStatus, currentTagsJSON string
+	query := "SELECT assignee, status, tags FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus, &currentTagsJSON); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("task %s not found", id)
+		}
+		return nil, fmt.Errorf("failed to query task: %w", err)
+	}
+
+	var tags []string
+	if err := json.Unmarshal([]byte(currentTagsJSON), &tags); err != nil {
+		tags = []string{}
+	}
+	var newTags []string
+	for _, tag := range tags {
+		if tag != "orphaned" {
+			newTags = append(newTags, tag)
+		}
+	}
+	newTagsBytes, _ := json.Marshal(newTags)
+
+	now := time.Now().UTC()
+	newStatus := currentStatus
+	if currentStatus == string(domain.StatusOpen) {
+		newStatus = string(domain.StatusInProgress)
+	}
+
+	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, tags = ?, updated_at = ? WHERE id = ?"
+	if _, err := tx.Exec(updateSQL, toAssignee, newStatus, string(newTagsBytes), now, id); err != nil {
+		return nil, fmt.Errorf("failed to transfer task: %w", err)
+	}
+
+	noteAuthor := fromActor
+	if noteAuthor == "" {
+		noteAuthor = toAssignee
+	}
+
+	var noteContent string
+	if currentAssignee != "" && currentAssignee != toAssignee {
+		if note != "" {
+			noteContent = fmt.Sprintf("Transferred task from %q to %q: %s", currentAssignee, toAssignee, note)
+		} else {
+			noteContent = fmt.Sprintf("Transferred task from %q to %q", currentAssignee, toAssignee)
+		}
+	} else {
+		if note != "" {
+			noteContent = fmt.Sprintf("Claimed task as %q: %s", toAssignee, note)
+		} else {
+			noteContent = fmt.Sprintf("Claimed task as %q", toAssignee)
+		}
+	}
+
+	noteID := uuid.New().String()
+	noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
+	if _, err := tx.Exec(noteSQL, noteID, id, noteAuthor, noteContent, now); err != nil {
+		return nil, fmt.Errorf("failed to insert transfer note: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transfer transaction: %w", err)
+	}
+
+	return d.getTaskLocked(d.conn, id)
+}
+
+func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dryRun bool, actor, reason string) ([]domain.StaleTaskCandidate, []string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if threshold <= 0 {
+		threshold = 24 * time.Hour
+	}
+
+	now := time.Now().UTC()
+	cutoff := now.Add(-threshold)
+
+	query := `SELECT id FROM tasks WHERE (status = 'in_progress' OR (status = 'open' AND assignee != ''))`
+	var args []any
+	if scope != "" {
+		query += " AND scope = ?"
+		args = append(args, scope)
+	}
+	if scope == "local" && repoPath != "" {
+		query += " AND repo_path = ?"
+		args = append(args, repoPath)
+	}
+	query += " ORDER BY seq_num ASC"
+
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query ongoing tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var candidateIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			candidateIDs = append(candidateIDs, id)
+		}
+	}
+	_ = rows.Close()
+
+	var candidates []domain.StaleTaskCandidate
+	for _, id := range candidateIDs {
+		t, err := d.getTaskLocked(d.conn, id)
+		if err != nil || t == nil {
+			continue
+		}
+
+		selfActivity := taskActivityTime(t)
+		if !selfActivity.Before(cutoff) {
+			continue
+		}
+
+		var allDepIDs []string
+		allDepIDs = append(allDepIDs, t.DependsOn...)
+		allDepIDs = append(allDepIDs, t.Blocks...)
+
+		depActive := false
+		for _, depID := range allDepIDs {
+			depTask, err := d.getTaskLocked(d.conn, depID)
+			if err != nil || depTask == nil {
+				continue
+			}
+			depActivity := taskActivityTime(depTask)
+			if !depActivity.Before(cutoff) {
+				depActive = true
+				break
+			}
+			if (depTask.Status == domain.StatusDone || depTask.Status == domain.StatusClosed) &&
+				depTask.ClosedAt != nil && !depTask.ClosedAt.Before(cutoff) {
+				depActive = true
+				break
+			}
+		}
+
+		if depActive {
+			continue
+		}
+
+		candidates = append(candidates, domain.StaleTaskCandidate{
+			TaskID:           t.ID,
+			Title:            t.Title,
+			Assignee:         t.Assignee,
+			Status:           t.Status,
+			Priority:         t.Priority,
+			InactiveDuration: now.Sub(selfActivity),
+			LastActivity:     selfActivity,
+		})
+	}
+
+	if dryRun {
+		return candidates, nil, nil
+	}
+
+	var orphanedIDs []string
+	for _, cand := range candidates {
+		orphanReason := reason
+		if orphanReason == "" {
+			orphanReason = fmt.Sprintf("inactivity for %s (threshold: %s)", formatDurationBrief(cand.InactiveDuration), formatDurationBrief(threshold))
+		}
+		if err := d.orphanTaskLocked(cand.TaskID, actor, orphanReason, now); err == nil {
+			orphanedIDs = append(orphanedIDs, cand.TaskID)
+		}
+	}
+
+	return candidates, orphanedIDs, nil
+}
+
+func taskActivityTime(t *domain.Task) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	latest := t.UpdatedAt
+	if latest.IsZero() {
+		latest = t.CreatedAt
+	}
+	for _, n := range t.Notes {
+		if n.CreatedAt.After(latest) {
+			latest = n.CreatedAt
+		}
+	}
+	if t.ClosedAt != nil && t.ClosedAt.After(latest) {
+		latest = *t.ClosedAt
+	}
+	return latest
+}
+
+func formatDurationBrief(d time.Duration) string {
+	if d < time.Minute {
+		return "just now"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	if mins == 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dh%dm", hours, mins)
+}
+
 
 func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	var conditions []string
@@ -421,6 +734,9 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	if filter.Assignee != "" {
 		conditions = append(conditions, "assignee = ?")
 		args = append(args, filter.Assignee)
+	}
+	if filter.OnlyOrphaned {
+		conditions = append(conditions, "EXISTS (SELECT 1 FROM json_each(tasks.tags) WHERE value = 'orphaned')")
 	}
 
 	whereClause := ""

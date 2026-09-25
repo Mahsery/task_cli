@@ -29,6 +29,9 @@ const (
 	ActionAddDependency  Action = "add_dependency"
 	ActionRemoveDependency Action = "remove_dependency"
 	ActionGetDependencies Action = "get_dependencies"
+	ActionOrphanTask     Action = "orphan_task"
+	ActionReapStaleTasks Action = "reap_stale_tasks"
+	ActionTransferTask   Action = "transfer_task"
 )
 
 type Request struct {
@@ -95,6 +98,7 @@ type ListTasksPayload struct {
 	IncludeNotes bool             `json:"include_notes,omitempty"`
 	OnlyReady    bool             `json:"only_ready,omitempty"`
 	OnlyBlocked  bool             `json:"only_blocked,omitempty"`
+	OnlyOrphaned bool             `json:"only_orphaned,omitempty"`
 	DependsOn    string           `json:"depends_on,omitempty"`
 	Blocks       string           `json:"blocks,omitempty"`
 }
@@ -176,3 +180,34 @@ type BackupInfo struct {
 	Size    int64     `json:"size"`
 	ModTime time.Time `json:"mod_time"`
 }
+
+type OrphanTaskPayload struct {
+	ID     string `json:"id"`
+	Actor  string `json:"actor,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type ReapStaleTasksPayload struct {
+	Scope     string        `json:"scope"`
+	RepoPath  string        `json:"repo_path"`
+	Threshold time.Duration `json:"threshold"`
+	DryRun    bool          `json:"dry_run"`
+	Actor     string        `json:"actor,omitempty"`
+	Reason    string        `json:"reason,omitempty"`
+}
+
+type ReapStaleTasksResult struct {
+	Threshold  time.Duration               `json:"threshold"`
+	DryRun     bool                        `json:"dry_run"`
+	Candidates []domain.StaleTaskCandidate `json:"candidates"`
+	Orphaned   []string                    `json:"orphaned"`
+}
+
+type TransferTaskPayload struct {
+	ID          string `json:"id"`
+	NewAssignee string `json:"new_assignee"`
+	Note        string `json:"note,omitempty"`
+	Actor       string `json:"actor,omitempty"`
+	Force       bool   `json:"force,omitempty"`
+}
+

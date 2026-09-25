@@ -265,6 +265,7 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		IncludeNotes: filter.IncludeNotes,
 		OnlyReady:    filter.OnlyReady,
 		OnlyBlocked:  filter.OnlyBlocked,
+		OnlyOrphaned: filter.OnlyOrphaned,
 		DependsOn:    filter.DependsOn,
 		Blocks:       filter.Blocks,
 	}
@@ -277,6 +278,68 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		return nil, err
 	}
 	return tasks, nil
+}
+
+func (c *Client) OrphanTask(id, actor, reason string) (*domain.Task, error) {
+	p := protocol.OrphanTaskPayload{
+		ID:     id,
+		Actor:  actor,
+		Reason: reason,
+	}
+	resp, err := c.call(protocol.ActionOrphanTask, p)
+	if err != nil {
+		return nil, err
+	}
+	var task domain.Task
+	if err := json.Unmarshal(resp.Data, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (c *Client) TransferTask(id, actor, newAssignee, note string, force bool) (*domain.Task, error) {
+	p := protocol.TransferTaskPayload{
+		ID:          id,
+		NewAssignee: newAssignee,
+		Note:        note,
+		Actor:       actor,
+		Force:       force,
+	}
+	resp, err := c.call(protocol.ActionTransferTask, p)
+	if err != nil {
+		return nil, err
+	}
+	var task domain.Task
+	if err := json.Unmarshal(resp.Data, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (c *Client) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dryRun bool, actor, reason string) (*protocol.ReapStaleTasksResult, error) {
+	if scope == "" {
+		scope = c.Scope
+	}
+	if repoPath == "" {
+		repoPath = c.RepoPath
+	}
+	p := protocol.ReapStaleTasksPayload{
+		Scope:     scope,
+		RepoPath:  repoPath,
+		Threshold: threshold,
+		DryRun:    dryRun,
+		Actor:     actor,
+		Reason:    reason,
+	}
+	resp, err := c.call(protocol.ActionReapStaleTasks, p)
+	if err != nil {
+		return nil, err
+	}
+	var res protocol.ReapStaleTasksResult
+	if err := json.Unmarshal(resp.Data, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
 }
 
 func (c *Client) DeleteTask(id string) error {

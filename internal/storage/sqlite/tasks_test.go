@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"task_cli/internal/domain"
 )
@@ -901,3 +902,211 @@ func TestTaskCheckBlockedAndFilters(t *testing.T) {
 		t.Fatalf("expected T-2 to be in OnlyReady after T-1 is done")
 	}
 }
+
+func TestOrphanTask(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	t1, err := db.CreateTask("local", "/repo/test", "Task to orphan", "", domain.StatusInProgress, domain.PriorityNormal, []string{"feature"}, "Alice", "bob")
+	if err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
+
+	orphaned, err := db.OrphanTask(t1.ID, "reviewer", "unresponsive for 3 days")
+	if err != nil {
+		t.Fatalf("failed to orphan task: %v", err)
+	}
+
+	if orphaned.Assignee != "" {
+		t.Errorf("expected assignee to be empty, got %q", orphaned.Assignee)
+	}
+	if orphaned.Status != domain.StatusOpen {
+		t.Errorf("expected status open, got %s", orphaned.Status)
+	}
+
+	hasOrphanTag := false
+	for _, tag := range orphaned.Tags {
+		if tag == "orphaned" {
+			hasOrphanTag = true
+			break
+		}
+	}
+	if !hasOrphanTag {
+		t.Errorf("expected 'orphaned' tag in tags %v", orphaned.Tags)
+	}
+
+	// Verify note was added
+	if len(orphaned.Notes) == 0 {
+		t.Fatalf("expected audit note to be recorded")
+	}
+	lastNote := orphaned.Notes[len(orphaned.Notes)-1]
+	if lastNote.Author != "reviewer" {
+		t.Errorf("expected note author 'reviewer', got %q", lastNote.Author)
+	}
+}
+
+func TestTransferTask(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	t1, err := db.CreateTask("local", "/repo/test", "Task to transfer", "", domain.StatusInProgress, domain.PriorityHigh, []string{"orphaned", "backend"}, "Alice", "bob")
+	if err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
+
+	transferred, err := db.TransferTask(t1.ID, "carol", "charlie", "Taking over database part", false)
+	if err != nil {
+		t.Fatalf("failed to transfer task: %v", err)
+	}
+
+	if transferred.Assignee != "charlie" {
+		t.Errorf("expected assignee charlie, got %s", transferred.Assignee)
+	}
+	if transferred.Status != domain.StatusInProgress {
+		t.Errorf("expected status in_progress, got %s", transferred.Status)
+	}
+
+	// Verify 'orphaned' tag was stripped
+	for _, tag := range transferred.Tags {
+		if tag == "orphaned" {
+			t.Errorf("'orphaned' tag should have been removed on transfer, got %v", transferred.Tags)
+		}
+	}
+
+	// Verify note
+	lastNote := transferred.Notes[len(transferred.Notes)-1]
+	if lastNote.Author != "carol" {
+		t.Errorf("expected note author carol, got %s", lastNote.Author)
+	}
+}
+
+func TestClaimTask_RemovesOrphanTag(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	t1, err := db.CreateTask("local", "/repo/test", "Orphaned task to claim", "", domain.StatusOpen, domain.PriorityNormal, []string{"orphaned", "api"}, "Alice", "")
+	if err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
+
+	claimed, err := db.ClaimTask(t1.ID, "david", false)
+	if err != nil {
+		t.Fatalf("failed to claim task: %v", err)
+	}
+
+	if claimed.Assignee != "david" {
+		t.Errorf("expected assignee david, got %s", claimed.Assignee)
+	}
+	for _, tag := range claimed.Tags {
+		if tag == "orphaned" {
+			t.Errorf("'orphaned' tag should have been removed on claim, got %v", claimed.Tags)
+		}
+	}
+}
+
+func TestReapStaleTasks_WithDependencies(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// 1. Task A: Inactive > 24h, no dependencies -> SHOULD be reaped
+	tA, err := db.CreateTask("local", "/repo/test", "Task A", "", domain.StatusInProgress, domain.PriorityNormal, []string{}, "Alice", "worker-a")
+	if err != nil {
+		t.Fatalf("failed to create task A: %v", err)
+	}
+	// Artificially age Task A in SQLite
+	oldTime := "2026-09-20 10:00:00"
+	_, _ = db.conn.Exec("UPDATE tasks SET updated_at = ?, created_at = ? WHERE id = ?", oldTime, oldTime, tA.ID)
+
+	// 2. Task B: Inactive > 24h, depends on Task C. Task C was updated recently -> SHOULD NOT be reaped
+	tC, err := db.CreateTask("local", "/repo/test", "Task C", "", domain.StatusInProgress, domain.PriorityNormal, []string{}, "Alice", "worker-c")
+	if err != nil {
+		t.Fatalf("failed to create task C: %v", err)
+	}
+	tB, err := db.CreateTask("local", "/repo/test", "Task B", "", domain.StatusInProgress, domain.PriorityNormal, []string{}, "Alice", "worker-b", tC.ID)
+	if err != nil {
+		t.Fatalf("failed to create task B: %v", err)
+	}
+	_, _ = db.conn.Exec("UPDATE tasks SET updated_at = ?, created_at = ? WHERE id = ?", oldTime, oldTime, tB.ID)
+
+	// 3. Task D: Inactive > 24h, depends on Task E. Task E was closed recently -> SHOULD NOT be reaped
+	tE, err := db.CreateTask("local", "/repo/test", "Task E", "", domain.StatusDone, domain.PriorityNormal, []string{}, "Alice", "worker-e")
+	if err != nil {
+		t.Fatalf("failed to create task E: %v", err)
+	}
+	tD, err := db.CreateTask("local", "/repo/test", "Task D", "", domain.StatusInProgress, domain.PriorityNormal, []string{}, "Alice", "worker-d", tE.ID)
+	if err != nil {
+		t.Fatalf("failed to create task D: %v", err)
+	}
+	_, _ = db.conn.Exec("UPDATE tasks SET updated_at = ?, created_at = ? WHERE id = ?", oldTime, oldTime, tD.ID)
+
+	// 4. Task F: Inactive > 24h, depends on Task G. Task G also inactive > 24h -> SHOULD be reaped
+	tG, err := db.CreateTask("local", "/repo/test", "Task G", "", domain.StatusOpen, domain.PriorityNormal, []string{}, "Alice", "worker-g")
+	if err != nil {
+		t.Fatalf("failed to create task G: %v", err)
+	}
+	_, _ = db.conn.Exec("UPDATE tasks SET updated_at = ?, created_at = ? WHERE id = ?", oldTime, oldTime, tG.ID)
+
+	tF, err := db.CreateTask("local", "/repo/test", "Task F", "", domain.StatusInProgress, domain.PriorityNormal, []string{}, "Alice", "worker-f", tG.ID)
+	if err != nil {
+		t.Fatalf("failed to create task F: %v", err)
+	}
+	_, _ = db.conn.Exec("UPDATE tasks SET updated_at = ?, created_at = ? WHERE id = ?", oldTime, oldTime, tF.ID)
+
+	// Test dry-run first
+	cands, orphaned, err := db.ReapStaleTasks("local", "/repo/test", 24*time.Hour, true, "system", "")
+	if err != nil {
+		t.Fatalf("ReapStaleTasks dry-run failed: %v", err)
+	}
+	if len(orphaned) != 0 {
+		t.Errorf("expected 0 orphaned in dry-run, got %d", len(orphaned))
+	}
+
+	candMap := make(map[string]bool)
+	for _, c := range cands {
+		candMap[c.TaskID] = true
+	}
+
+	if !candMap[tA.ID] {
+		t.Errorf("expected Task A to be a stale candidate")
+	}
+	if candMap[tB.ID] {
+		t.Errorf("Task B should NOT be stale because prerequisite Task C was recently active")
+	}
+	if candMap[tD.ID] {
+		t.Errorf("Task D should NOT be stale because prerequisite Task E was recently closed")
+	}
+	if !candMap[tF.ID] {
+		t.Errorf("expected Task F to be stale because prerequisite Task G is also inactive")
+	}
+
+	// Test real reap
+	_, realOrphaned, err := db.ReapStaleTasks("local", "/repo/test", 24*time.Hour, false, "system", "inactive test")
+	if err != nil {
+		t.Fatalf("ReapStaleTasks real run failed: %v", err)
+	}
+
+	realMap := make(map[string]bool)
+	for _, id := range realOrphaned {
+		realMap[id] = true
+	}
+
+	if !realMap[tA.ID] {
+		t.Errorf("expected Task A to be orphaned")
+	}
+	if !realMap[tF.ID] {
+		t.Errorf("expected Task F to be orphaned")
+	}
+
+	// Verify Task A in DB: assignee dropped, status open, tagged orphaned
+	afterA, err := db.GetTask(tA.ID)
+	if err != nil {
+		t.Fatalf("failed to get task A: %v", err)
+	}
+	if afterA.Assignee != "" {
+		t.Errorf("expected assignee to be empty, got %q", afterA.Assignee)
+	}
+	if afterA.Status != domain.StatusOpen {
+		t.Errorf("expected status open, got %s", afterA.Status)
+	}
+}
+
