@@ -391,6 +391,56 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 		resp.Data = data
 		return resp
 
+	case protocol.ActionArchiveTask:
+		var p protocol.ArchiveTaskPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		task, err := db.ArchiveTask(p.ID, p.Actor, p.Reason)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+
+		s.pubsub.Publish(protocol.Event{
+			Type:      protocol.EventTaskUpdated,
+			Timestamp: time.Now(),
+			Task:      task,
+			Message:   fmt.Sprintf("⊘ %s archived", task.ID),
+		})
+
+		data, _ := json.Marshal(task)
+		resp.Data = data
+		return resp
+
+	case protocol.ActionUnarchiveTask:
+		var p protocol.UnarchiveTaskPayload
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		task, err := db.UnarchiveTask(p.ID, p.Actor, p.Reason)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+
+		s.pubsub.Publish(protocol.Event{
+			Type:      protocol.EventTaskUpdated,
+			Timestamp: time.Now(),
+			Task:      task,
+			Message:   fmt.Sprintf("↺ %s unarchived", task.ID),
+		})
+
+		data, _ := json.Marshal(task)
+		resp.Data = data
+		return resp
+
 	case protocol.ActionReapStaleTasks:
 		var p protocol.ReapStaleTasksPayload
 		if err := json.Unmarshal(req.Payload, &p); err != nil {
@@ -436,21 +486,23 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			return errorResp(req.ID, err.Error())
 		}
 		filter := domain.TaskFilter{
-			Scope:        p.Scope,
-			RepoPath:     p.RepoPath,
-			Status:       p.Status,
-			Priority:     p.Priority,
-			Tag:          p.Tag,
-			Assignee:     p.Assignee,
-			Search:       p.Search,
-			Sort:         p.Sort,
-			Limit:        p.Limit,
-			IncludeNotes: p.IncludeNotes,
-			OnlyReady:    p.OnlyReady,
-			OnlyBlocked:  p.OnlyBlocked,
-			OnlyOrphaned: p.OnlyOrphaned,
-			DependsOn:    p.DependsOn,
-			Blocks:       p.Blocks,
+			Scope:           p.Scope,
+			RepoPath:        p.RepoPath,
+			Status:          p.Status,
+			Priority:        p.Priority,
+			Tag:             p.Tag,
+			Assignee:        p.Assignee,
+			Search:          p.Search,
+			Sort:            p.Sort,
+			Limit:           p.Limit,
+			IncludeNotes:    p.IncludeNotes,
+			OnlyReady:       p.OnlyReady,
+			OnlyBlocked:     p.OnlyBlocked,
+			OnlyOrphaned:    p.OnlyOrphaned,
+			IncludeArchived: p.IncludeArchived,
+			OnlyArchived:    p.OnlyArchived,
+			DependsOn:       p.DependsOn,
+			Blocks:          p.Blocks,
 		}
 		tasks, err := db.ListTasks(filter)
 		if err != nil {

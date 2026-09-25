@@ -16,6 +16,7 @@ var (
 	orphanDryRun    bool
 	orphanAll       bool
 	orphanList      bool
+	orphanBackport  bool
 )
 
 var orphanCmd = &cobra.Command{
@@ -87,7 +88,12 @@ When a task is orphaned:
 			return runOrphanList(threshold, actor)
 		}
 
-		// 3. Reap stale tasks
+		// 3. Backport historical stale tasks
+		if orphanBackport {
+			return runOrphanBackport(threshold, orphanDryRun, actor, orphanMessage)
+		}
+
+		// 4. Reap stale tasks
 		if orphanAll {
 			return runOrphanReap(threshold, orphanDryRun, actor, orphanMessage)
 		}
@@ -95,6 +101,60 @@ When a task is orphaned:
 		// If no argument and neither flag was passed, display help
 		return cmd.Help()
 	},
+}
+
+func runOrphanBackport(threshold time.Duration, dryRun bool, actor, reason string) error {
+	res, err := taskClient.ReapStaleTasks(scope, repoRoot, threshold, dryRun, actor, reason)
+	if err != nil {
+		return err
+	}
+
+	if jsonFlag {
+		return outputJSON(res)
+	}
+
+	if dryRun {
+		if len(res.Candidates) == 0 {
+			fmt.Printf("✓ No historical stale tasks found older than %s.\n", threshold)
+			return nil
+		}
+		fmt.Printf("[DRY RUN] Found %d historical stale task(s) older than %s:\n", len(res.Candidates), threshold)
+		for _, c := range res.Candidates {
+			if c.Assignee != "" {
+				fmt.Printf("  • %-6s [%-11s] (assigned to %q, inactive for %s) %s\n",
+					c.TaskID, c.Status, c.Assignee, formatAge(c.LastActivity), c.Title)
+			} else {
+				fmt.Printf("  • %-6s [%-11s] (unassigned, inactive for %s) %s\n",
+					c.TaskID, c.Status, formatAge(c.LastActivity), c.Title)
+			}
+		}
+		fmt.Println("\nRun 'tk orphan backport' (or 'tk orphan --backport') to tag matching open tasks as orphaned.")
+		return nil
+	}
+
+	if len(res.Orphaned) == 0 {
+		fmt.Printf("✓ No historical stale tasks found older than %s.\n", threshold)
+		return nil
+	}
+
+	fmt.Printf("✓ Backported and marked %d stale task(s) as orphaned (threshold: %s):\n", len(res.Orphaned), threshold)
+	orphanedSet := make(map[string]bool)
+	for _, id := range res.Orphaned {
+		orphanedSet[id] = true
+	}
+	for _, c := range res.Candidates {
+		if !orphanedSet[c.TaskID] {
+			continue
+		}
+		if c.Assignee != "" {
+			fmt.Printf("  • %-6s (dropped assignee %q, inactive for %s): %s\n",
+				c.TaskID, c.Assignee, formatAge(c.LastActivity), c.Title)
+		} else {
+			fmt.Printf("  • %-6s (unassigned, inactive for %s): %s\n",
+				c.TaskID, formatAge(c.LastActivity), c.Title)
+		}
+	}
+	return nil
 }
 
 func runOrphanReap(threshold time.Duration, dryRun bool, actor, reason string) error {
@@ -114,8 +174,13 @@ func runOrphanReap(threshold time.Duration, dryRun bool, actor, reason string) e
 		}
 		fmt.Printf("[DRY RUN] Found %d stale task(s) inactive for > %s:\n", len(res.Candidates), threshold)
 		for _, c := range res.Candidates {
-			fmt.Printf("  • %-6s [%-11s] (assigned to %q, inactive for %s) %s\n",
-				c.TaskID, c.Status, c.Assignee, formatAge(c.LastActivity), c.Title)
+			if c.Assignee != "" {
+				fmt.Printf("  • %-6s [%-11s] (assigned to %q, inactive for %s) %s\n",
+					c.TaskID, c.Status, c.Assignee, formatAge(c.LastActivity), c.Title)
+			} else {
+				fmt.Printf("  • %-6s [%-11s] (unassigned, inactive for %s) %s\n",
+					c.TaskID, c.Status, formatAge(c.LastActivity), c.Title)
+			}
 		}
 		fmt.Println("\nRun 'tk orphan --all' (or 'tk orphan reap') to drop assignees and return to open backlog.")
 		return nil
@@ -127,9 +192,21 @@ func runOrphanReap(threshold time.Duration, dryRun bool, actor, reason string) e
 	}
 
 	fmt.Printf("✓ Orphaned %d stale task(s) (threshold: %s):\n", len(res.Orphaned), threshold)
+	orphanedSet := make(map[string]bool)
+	for _, id := range res.Orphaned {
+		orphanedSet[id] = true
+	}
 	for _, c := range res.Candidates {
-		fmt.Printf("  • %-6s (dropped assignee %q, inactive for %s): %s\n",
-			c.TaskID, c.Assignee, formatAge(c.LastActivity), c.Title)
+		if !orphanedSet[c.TaskID] {
+			continue
+		}
+		if c.Assignee != "" {
+			fmt.Printf("  • %-6s (dropped assignee %q, inactive for %s): %s\n",
+				c.TaskID, c.Assignee, formatAge(c.LastActivity), c.Title)
+		} else {
+			fmt.Printf("  • %-6s (unassigned, inactive for %s): %s\n",
+				c.TaskID, formatAge(c.LastActivity), c.Title)
+		}
 	}
 	return nil
 }
@@ -177,13 +254,62 @@ func runOrphanList(threshold time.Duration, actor string) error {
 	if len(staleRes.Candidates) > 0 {
 		fmt.Printf("Stale Candidate Tasks (inactive > %s, unworked: %d):\n", threshold, len(staleRes.Candidates))
 		for _, c := range staleRes.Candidates {
-			fmt.Printf("  %-6s [%-11s] (assigned: %q, inactive: %s)  %s\n",
-				c.TaskID, c.Status, c.Assignee, formatAge(c.LastActivity), c.Title)
+			if c.Assignee != "" {
+				fmt.Printf("  %-6s [%-11s] (assigned: %q, inactive: %s)  %s\n",
+					c.TaskID, c.Status, c.Assignee, formatAge(c.LastActivity), c.Title)
+			} else {
+				fmt.Printf("  %-6s [%-11s] (unassigned, inactive: %s)  %s\n",
+					c.TaskID, c.Status, formatAge(c.LastActivity), c.Title)
+			}
 		}
 		fmt.Println("\nRun 'tk orphan --all' to reap stale candidates.")
 	}
 
 	return nil
+}
+
+var orphanBackportCmd = &cobra.Command{
+	Use:   "backport [flags]",
+	Short: "Scan historical tasks and tag abandoned/stale open tasks as orphaned",
+	Long: `Scans all historical tasks in the repository created before --older-than (default: 1h),
+and tags abandoned or stale open tasks (including unassigned tasks with zero activity) as 'orphaned'.`,
+	Example: `  # Preview historical stale open tasks older than 1 hour
+  tk orphan backport --dry-run
+
+  # Tag historical stale open tasks older than 1 hour as orphaned
+  tk orphan backport
+
+  # Custom inactivity threshold with custom reason
+  tk orphan backport --older-than 24h -m "Backporting legacy tasks"
+
+  # Or using flag on tk orphan:
+  tk orphan --backport --dry-run
+  tk orphan --backport --older-than 24h`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := taskClient.Connect(); err != nil {
+			return fmt.Errorf("failed to connect to daemon: %w", err)
+		}
+		defer taskClient.Close()
+
+		actor := cfg.Actor
+		if orphanActor != "" {
+			actor = orphanActor
+		}
+		if actor == "" {
+			actor = "anonymous"
+		}
+
+		threshold := 1 * time.Hour
+		if orphanOlderThan != "" {
+			d, err := time.ParseDuration(orphanOlderThan)
+			if err != nil {
+				return fmt.Errorf("invalid --older-than duration %q: %w (e.g. 30m, 1h, 4h, 24h)", orphanOlderThan, err)
+			}
+			threshold = d
+		}
+
+		return runOrphanBackport(threshold, orphanDryRun, actor, orphanMessage)
+	},
 }
 
 var orphanReapCmd = &cobra.Command{
@@ -263,16 +389,23 @@ func init() {
 	orphanCmd.Flags().BoolVar(&orphanDryRun, "dry-run", false, "Preview matching tasks without modifying them")
 	orphanCmd.Flags().BoolVar(&orphanAll, "all", false, "Reap all stale tasks matching inactivity threshold")
 	orphanCmd.Flags().BoolVarP(&orphanList, "list", "l", false, "List currently orphaned tasks and stale candidates")
+	orphanCmd.Flags().BoolVar(&orphanBackport, "backport", false, "Scan historical tasks and tag stale/abandoned open tasks as orphaned")
 
 	orphanReapCmd.Flags().StringVar(&orphanOlderThan, "older-than", "1h", "Inactivity duration threshold (e.g. 30m, 1h, 4h, 24h)")
 	orphanReapCmd.Flags().StringVarP(&orphanMessage, "message", "m", "", "Audit note or reason for orphaning")
 	orphanReapCmd.Flags().StringVar(&orphanActor, "actor", "", "Explicit actor identity")
 	orphanReapCmd.Flags().BoolVar(&orphanDryRun, "dry-run", false, "Preview matching tasks without modifying them")
 
+	orphanBackportCmd.Flags().StringVar(&orphanOlderThan, "older-than", "1h", "Inactivity duration threshold (e.g. 30m, 1h, 4h, 24h)")
+	orphanBackportCmd.Flags().StringVarP(&orphanMessage, "message", "m", "", "Audit note or reason for orphaning")
+	orphanBackportCmd.Flags().StringVar(&orphanActor, "actor", "", "Explicit actor identity")
+	orphanBackportCmd.Flags().BoolVar(&orphanDryRun, "dry-run", false, "Preview matching tasks without modifying them")
+
 	orphanListCmd.Flags().StringVar(&orphanOlderThan, "older-than", "1h", "Inactivity duration threshold (e.g. 30m, 1h, 4h, 24h)")
 	orphanListCmd.Flags().StringVar(&orphanActor, "actor", "", "Explicit actor identity")
 
 	orphanCmd.AddCommand(orphanReapCmd)
+	orphanCmd.AddCommand(orphanBackportCmd)
 	orphanCmd.AddCommand(orphanListCmd)
 
 	RootCmd.AddCommand(orphanCmd)

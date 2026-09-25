@@ -80,7 +80,7 @@ Running 'tk' without arguments in an interactive terminal launches the TUI.`,
 		defer taskClient.Close()
 
 		model := tui.NewModel(taskClient, cfg.Editor, scope, repoRoot)
-		p := tea.NewProgram(model, tea.WithAltScreen())
+		p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		_, err := p.Run()
 		return err
 	},
@@ -107,6 +107,9 @@ func init() {
 	RootCmd.AddCommand(watchCmd)
 	RootCmd.AddCommand(daemonCmd)
 	RootCmd.AddCommand(backupCmd)
+	RootCmd.AddCommand(archiveCmd)
+	RootCmd.AddCommand(unarchiveCmd)
+	RootCmd.AddCommand(statusCmd)
 }
 
 func Execute() {

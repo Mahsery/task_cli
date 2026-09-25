@@ -62,7 +62,7 @@ func (d *DB) Checkpoint(mode string) error {
 	return err
 }
 
-const CurrentSchemaVersion = 2
+const CurrentSchemaVersion = 3
 
 func (d *DB) migrate() error {
 	var userVersion int
@@ -90,6 +90,32 @@ func (d *DB) migrate() error {
 		}
 	}
 
+	// Schema v3 migration: ensure archived_at column and index exist for pre-existing databases before schema exec
+	if userVersion < 3 && tableCount > 0 {
+		var hasArchivedAt bool
+		cols, err := d.conn.Query("PRAGMA table_info(tasks);")
+		if err == nil {
+			for cols.Next() {
+				var cid int
+				var name, ctype string
+				var notnull, pk int
+				var dflt sql.NullString
+				if err := cols.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err == nil && name == "archived_at" {
+					hasArchivedAt = true
+				}
+			}
+			cols.Close()
+		}
+		if !hasArchivedAt {
+			if _, err := d.conn.Exec("ALTER TABLE tasks ADD COLUMN archived_at DATETIME;"); err != nil {
+				return fmt.Errorf("migration to v3 failed (add archived_at): %w", err)
+			}
+		}
+		if _, err := d.conn.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at);"); err != nil {
+			return fmt.Errorf("migration to v3 failed (create index idx_tasks_archived): %w", err)
+		}
+	}
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,
@@ -106,6 +132,7 @@ func (d *DB) migrate() error {
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
 		closed_at DATETIME,
+		archived_at DATETIME,
 		commit_sha TEXT NOT NULL DEFAULT '',
 		commit_msg TEXT NOT NULL DEFAULT '',
 		diff_stat TEXT NOT NULL DEFAULT '',
@@ -116,6 +143,7 @@ func (d *DB) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_tasks_scope_repo_seq ON tasks(scope, repo_path, seq_num DESC);
 	CREATE INDEX IF NOT EXISTS idx_tasks_global_seq ON tasks(scope, seq_num DESC);
 	CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at);
 
 	CREATE TABLE IF NOT EXISTS task_notes (
 		id TEXT PRIMARY KEY,

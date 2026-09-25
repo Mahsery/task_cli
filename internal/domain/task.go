@@ -18,6 +18,7 @@ const (
 	StatusInProgress Status = "in_progress"
 	StatusDone       Status = "done"
 	StatusClosed     Status = "closed"
+	StatusArchived   Status = "archived"
 )
 
 func ParseStatus(s string) (Status, error) {
@@ -30,8 +31,10 @@ func ParseStatus(s string) (Status, error) {
 		return StatusDone, nil
 	case "closed", "c":
 		return StatusClosed, nil
+	case "archived", "archive", "arc":
+		return StatusArchived, nil
 	default:
-		return StatusOpen, fmt.Errorf("invalid status %q (allowed: open, in_progress, done, closed)", s)
+		return StatusOpen, fmt.Errorf("invalid status %q (allowed: open, in_progress, done, closed, archived)", s)
 	}
 }
 
@@ -80,6 +83,7 @@ type Task struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	ClosedAt    *time.Time `json:"closed_at,omitempty"`
+	ArchivedAt  *time.Time `json:"archived_at,omitempty"`
 
 	// Git integration (Linux kernel style)
 	CommitSHA   string     `json:"commit_sha,omitempty"`
@@ -96,6 +100,22 @@ type Task struct {
 	Notes []TaskNote `json:"notes,omitempty"`
 }
 
+func (t *Task) IsArchived() bool {
+	return t != nil && (t.ArchivedAt != nil || t.Status == StatusArchived)
+}
+
+func (t *Task) IsOrphaned() bool {
+	if t == nil {
+		return false
+	}
+	for _, tag := range t.Tags {
+		if tag == "orphaned" {
+			return true
+		}
+	}
+	return t.Status == StatusOpen && strings.TrimSpace(t.Assignee) == "" && time.Since(t.CreatedAt) > time.Hour && !t.IsArchived()
+}
+
 type TaskDependency struct {
 	TaskID      string    `json:"task_id"`
 	DependsOnID string    `json:"depends_on_id"`
@@ -103,22 +123,24 @@ type TaskDependency struct {
 }
 
 type TaskFilter struct {
-	Scope        string
-	RepoPath     string
-	Status       *Status
-	Priority     *Priority
-	Tag          string
-	Assignee     string
-	Search       string
-	Sort         string
-	Limit        int
-	OmitNotes    bool
-	IncludeNotes bool
-	OnlyReady    bool   // Return tasks with status open and 0 unfinished blockers
-	OnlyBlocked  bool   // Return tasks that have unfinished blockers
-	OnlyOrphaned bool   // Return tasks that are tagged orphaned
-	DependsOn    string // Filter by prerequisite task ID
-	Blocks       string // Filter by downstream task ID
+	Scope           string
+	RepoPath        string
+	Status          *Status
+	Priority        *Priority
+	Tag             string
+	Assignee        string
+	Search          string
+	Sort            string
+	Limit           int
+	OmitNotes       bool
+	IncludeNotes    bool
+	OnlyReady       bool   // Return tasks with status open and 0 unfinished blockers
+	OnlyBlocked     bool   // Return tasks that have unfinished blockers
+	OnlyOrphaned    bool   // Return tasks that are tagged orphaned
+	IncludeArchived bool   // Return both active and archived tasks
+	OnlyArchived    bool   // Return only archived tasks
+	DependsOn       string // Filter by prerequisite task ID
+	Blocks          string // Filter by downstream task ID
 }
 
 type StaleTaskCandidate struct {

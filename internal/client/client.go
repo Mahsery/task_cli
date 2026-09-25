@@ -253,21 +253,23 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		repoPath = c.RepoPath
 	}
 	p := protocol.ListTasksPayload{
-		Scope:        scope,
-		RepoPath:     repoPath,
-		Status:       filter.Status,
-		Priority:     filter.Priority,
-		Tag:          filter.Tag,
-		Assignee:     filter.Assignee,
-		Search:       filter.Search,
-		Sort:         filter.Sort,
-		Limit:        filter.Limit,
-		IncludeNotes: filter.IncludeNotes,
-		OnlyReady:    filter.OnlyReady,
-		OnlyBlocked:  filter.OnlyBlocked,
-		OnlyOrphaned: filter.OnlyOrphaned,
-		DependsOn:    filter.DependsOn,
-		Blocks:       filter.Blocks,
+		Scope:           scope,
+		RepoPath:        repoPath,
+		Status:          filter.Status,
+		Priority:        filter.Priority,
+		Tag:             filter.Tag,
+		Assignee:        filter.Assignee,
+		Search:          filter.Search,
+		Sort:            filter.Sort,
+		Limit:           filter.Limit,
+		IncludeNotes:    filter.IncludeNotes,
+		OnlyReady:       filter.OnlyReady,
+		OnlyBlocked:     filter.OnlyBlocked,
+		OnlyOrphaned:    filter.OnlyOrphaned,
+		IncludeArchived: filter.IncludeArchived,
+		OnlyArchived:    filter.OnlyArchived,
+		DependsOn:       filter.DependsOn,
+		Blocks:          filter.Blocks,
 	}
 	resp, err := c.call(protocol.ActionListTasks, p)
 	if err != nil {
@@ -278,6 +280,40 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		return nil, err
 	}
 	return tasks, nil
+}
+
+func (c *Client) ArchiveTask(id, actor, reason string) (*domain.Task, error) {
+	p := protocol.ArchiveTaskPayload{
+		ID:     id,
+		Actor:  actor,
+		Reason: reason,
+	}
+	resp, err := c.call(protocol.ActionArchiveTask, p)
+	if err != nil {
+		return nil, err
+	}
+	var task domain.Task
+	if err := json.Unmarshal(resp.Data, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (c *Client) UnarchiveTask(id, actor, reason string) (*domain.Task, error) {
+	p := protocol.UnarchiveTaskPayload{
+		ID:     id,
+		Actor:  actor,
+		Reason: reason,
+	}
+	resp, err := c.call(protocol.ActionUnarchiveTask, p)
+	if err != nil {
+		return nil, err
+	}
+	var task domain.Task
+	if err := json.Unmarshal(resp.Data, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
 }
 
 func (c *Client) OrphanTask(id, actor, reason string) (*domain.Task, error) {
@@ -340,6 +376,14 @@ func (c *Client) ReapStaleTasks(scope, repoPath string, threshold time.Duration,
 		return nil, err
 	}
 	return &res, nil
+}
+
+func (c *Client) FindStaleTasks(scope, repoPath string, threshold time.Duration) ([]domain.StaleTaskCandidate, error) {
+	res, err := c.ReapStaleTasks(scope, repoPath, threshold, true, "", "")
+	if err != nil {
+		return nil, err
+	}
+	return res.Candidates, nil
 }
 
 func (c *Client) DeleteTask(id string) error {

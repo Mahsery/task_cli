@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1109,4 +1110,339 @@ func TestReapStaleTasks_WithDependencies(t *testing.T) {
 		t.Errorf("expected status open, got %s", afterA.Status)
 	}
 }
+
+func TestArchiveAndUnarchiveTask(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// 1. Create a task
+	task, err := db.CreateTask("local", "/repo/test", "Archive Me", "desc", domain.StatusOpen, domain.PriorityNormal, []string{"test"}, "author", "")
+	if err != nil {
+		t.Fatalf("CreateTask failed: %v", err)
+	}
+
+	// 2. Archive task
+	archived, err := db.ArchiveTask(task.ID, "agent-archiver", "completed milestone")
+	if err != nil {
+		t.Fatalf("ArchiveTask failed: %v", err)
+	}
+	if !archived.IsArchived() {
+		t.Errorf("expected task to be archived")
+	}
+	if archived.Status != domain.StatusArchived {
+		t.Errorf("expected status %s, got %s", domain.StatusArchived, archived.Status)
+	}
+	if archived.ArchivedAt == nil {
+		t.Fatalf("expected ArchivedAt to be set")
+	}
+	// Check audit note
+	if len(archived.Notes) == 0 {
+		t.Fatalf("expected audit note to be added")
+	}
+	lastNote := archived.Notes[len(archived.Notes)-1]
+	if lastNote.Author != "agent-archiver" {
+		t.Errorf("expected note author 'agent-archiver', got %s", lastNote.Author)
+	}
+	if !strings.Contains(lastNote.Content, "Archived task: completed milestone") {
+		t.Errorf("unexpected note content: %q", lastNote.Content)
+	}
+
+	// 3. Archiving already archived task should return error
+	_, err = db.ArchiveTask(task.ID, "agent-archiver", "again")
+	if err == nil {
+		t.Errorf("expected error archiving already archived task")
+	}
+
+	// 4. Unarchive task
+	unarchived, err := db.UnarchiveTask(task.ID, "agent-archiver", "resuming work")
+	if err != nil {
+		t.Fatalf("UnarchiveTask failed: %v", err)
+	}
+	if unarchived.IsArchived() {
+		t.Errorf("expected task to not be archived after unarchive")
+	}
+	if unarchived.ArchivedAt != nil {
+		t.Errorf("expected ArchivedAt to be nil after unarchive")
+	}
+	if unarchived.Status != domain.StatusOpen {
+		t.Errorf("expected status open after unarchive, got %s", unarchived.Status)
+	}
+	// Check unarchive note
+	lastNote = unarchived.Notes[len(unarchived.Notes)-1]
+	if !strings.Contains(lastNote.Content, "Unarchived task: resuming work") {
+		t.Errorf("unexpected unarchive note content: %q", lastNote.Content)
+	}
+
+	// 5. Unarchiving non-archived task should return error
+	_, err = db.UnarchiveTask(task.ID, "agent-archiver", "again")
+	if err == nil {
+		t.Errorf("expected error unarchiving non-archived task")
+	}
+
+	// 6. Test unarchiving a task that had assignee -> status becomes in_progress
+	t2, err := db.CreateTask("local", "/repo/test", "Assigned Task", "desc", domain.StatusInProgress, domain.PriorityNormal, nil, "author", "bob")
+	if err != nil {
+		t.Fatalf("CreateTask t2 failed: %v", err)
+	}
+	_, err = db.ArchiveTask(t2.ID, "bob", "pause")
+	if err != nil {
+		t.Fatalf("ArchiveTask t2 failed: %v", err)
+	}
+	unarchived2, err := db.UnarchiveTask(t2.ID, "bob", "resume")
+	if err != nil {
+		t.Fatalf("UnarchiveTask t2 failed: %v", err)
+	}
+	if unarchived2.Status != domain.StatusInProgress {
+		t.Errorf("expected status in_progress for unarchived assigned task, got %s", unarchived2.Status)
+	}
+}
+
+func TestListTasks_ArchiveFiltering(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	tActive, err := db.CreateTask("local", "/repo/test", "Active Task", "", domain.StatusOpen, domain.PriorityNormal, nil, "author", "")
+	if err != nil {
+		t.Fatalf("CreateTask active failed: %v", err)
+	}
+	tToArchive, err := db.CreateTask("local", "/repo/test", "To Archive", "", domain.StatusOpen, domain.PriorityNormal, nil, "author", "")
+	if err != nil {
+		t.Fatalf("CreateTask to archive failed: %v", err)
+	}
+
+	_, err = db.ArchiveTask(tToArchive.ID, "system", "done sprint")
+	if err != nil {
+		t.Fatalf("ArchiveTask failed: %v", err)
+	}
+
+	// Default: should NOT include archived tasks
+	tasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test"})
+	if err != nil {
+		t.Fatalf("ListTasks default failed: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != tActive.ID {
+		t.Errorf("expected only active task (len 1), got %d tasks", len(tasks))
+	}
+
+	// OnlyArchived: should return only tToArchive
+	archivedTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", OnlyArchived: true})
+	if err != nil {
+		t.Fatalf("ListTasks OnlyArchived failed: %v", err)
+	}
+	if len(archivedTasks) != 1 || archivedTasks[0].ID != tToArchive.ID {
+		t.Errorf("expected only archived task (len 1), got %d tasks", len(archivedTasks))
+	}
+
+	// IncludeArchived: should return both
+	allTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", IncludeArchived: true})
+	if err != nil {
+		t.Fatalf("ListTasks IncludeArchived failed: %v", err)
+	}
+	if len(allTasks) != 2 {
+		t.Errorf("expected 2 tasks with IncludeArchived, got %d", len(allTasks))
+	}
+}
+
+func TestSchemaMigration_V3(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tk-mig-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "mig.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	var version int
+	if err := db.conn.QueryRow("PRAGMA user_version;").Scan(&version); err != nil {
+		t.Fatalf("PRAGMA user_version failed: %v", err)
+	}
+	if version != 3 {
+		t.Errorf("expected user_version 3, got %d", version)
+	}
+
+	// Verify idx_tasks_archived exists
+	var indexCount int
+	err = db.conn.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_tasks_archived';").Scan(&indexCount)
+	if err != nil {
+		t.Fatalf("query index failed: %v", err)
+	}
+	if indexCount == 0 {
+		t.Errorf("expected index idx_tasks_archived to exist")
+	}
+}
+
+func TestFindAndReapStaleTasks_UnassignedAndArchived(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// 1. Unassigned task inactive > 4 hours
+	tUnassigned, err := db.CreateTask("local", "/repo/test", "Unassigned Old Task", "desc", domain.StatusOpen, domain.PriorityNormal, []string{}, "Author", "")
+	if err != nil {
+		t.Fatalf("failed to create tUnassigned: %v", err)
+	}
+	oldTime := time.Now().UTC().Add(-4 * time.Hour).Format("2006-01-02 15:04:05")
+	_, _ = db.conn.Exec("UPDATE tasks SET updated_at = ?, created_at = ? WHERE id = ?", oldTime, oldTime, tUnassigned.ID)
+
+	// 2. Unassigned task created recently (should NOT be candidate)
+	tRecent, err := db.CreateTask("local", "/repo/test", "Unassigned Recent Task", "desc", domain.StatusOpen, domain.PriorityNormal, []string{}, "Author", "")
+	if err != nil {
+		t.Fatalf("failed to create tRecent: %v", err)
+	}
+
+	// 3. Assigned task inactive > 4 hours
+	tAssigned, err := db.CreateTask("local", "/repo/test", "Assigned Old Task", "desc", domain.StatusInProgress, domain.PriorityNormal, []string{}, "Author", "worker-1")
+	if err != nil {
+		t.Fatalf("failed to create tAssigned: %v", err)
+	}
+	_, _ = db.conn.Exec("UPDATE tasks SET updated_at = ?, created_at = ? WHERE id = ?", oldTime, oldTime, tAssigned.ID)
+
+	// 4. Archived task created long ago (should NOT be candidate)
+	tArchived, err := db.CreateTask("local", "/repo/test", "Archived Old Task", "desc", domain.StatusOpen, domain.PriorityNormal, []string{}, "Author", "")
+	if err != nil {
+		t.Fatalf("failed to create tArchived: %v", err)
+	}
+	_, _ = db.conn.Exec("UPDATE tasks SET updated_at = ?, created_at = ?, archived_at = ? WHERE id = ?", oldTime, oldTime, oldTime, tArchived.ID)
+
+	// 5. Test FindStaleTasks
+	threshold := 1 * time.Hour
+	candidates, err := db.FindStaleTasks("local", "/repo/test", threshold)
+	if err != nil {
+		t.Fatalf("FindStaleTasks failed: %v", err)
+	}
+
+	candMap := make(map[string]domain.StaleTaskCandidate)
+	for _, c := range candidates {
+		candMap[c.TaskID] = c
+	}
+
+	// Verify tUnassigned is detected
+	cUnassigned, ok := candMap[tUnassigned.ID]
+	if !ok {
+		t.Errorf("expected unassigned task %s to be detected as stale candidate", tUnassigned.ID)
+	} else {
+		if cUnassigned.Assignee != "" {
+			t.Errorf("expected empty assignee, got %q", cUnassigned.Assignee)
+		}
+		if cUnassigned.InactiveDuration < 3*time.Hour {
+			t.Errorf("expected InactiveDuration > 3h, got %v", cUnassigned.InactiveDuration)
+		}
+	}
+
+	// Verify tAssigned is detected
+	cAssigned, ok := candMap[tAssigned.ID]
+	if !ok {
+		t.Errorf("expected assigned task %s to be detected as stale candidate", tAssigned.ID)
+	} else {
+		if cAssigned.Assignee != "worker-1" {
+			t.Errorf("expected assignee worker-1, got %q", cAssigned.Assignee)
+		}
+	}
+
+	// Verify tRecent is NOT detected
+	if _, ok := candMap[tRecent.ID]; ok {
+		t.Errorf("recent task %s should not be detected as stale candidate", tRecent.ID)
+	}
+
+	// Verify tArchived is NOT detected
+	if _, ok := candMap[tArchived.ID]; ok {
+		t.Errorf("archived task %s should not be detected as stale candidate", tArchived.ID)
+	}
+
+	// 6. Test ReapStaleTasks with dry-run
+	candsDry, reapedDry, err := db.ReapStaleTasks("local", "/repo/test", threshold, true, "reaper", "")
+	if err != nil {
+		t.Fatalf("ReapStaleTasks dry-run failed: %v", err)
+	}
+	if len(reapedDry) != 0 {
+		t.Errorf("expected 0 reaped in dry-run, got %d", len(reapedDry))
+	}
+	if len(candsDry) != len(candidates) {
+		t.Errorf("expected %d candidates in dry-run, got %d", len(candidates), len(candsDry))
+	}
+
+	// 7. Test ReapStaleTasks real run
+	_, reapedIDs, err := db.ReapStaleTasks("local", "/repo/test", threshold, false, "reaper", "")
+	if err != nil {
+		t.Fatalf("ReapStaleTasks real run failed: %v", err)
+	}
+
+	reapedMap := make(map[string]bool)
+	for _, id := range reapedIDs {
+		reapedMap[id] = true
+	}
+
+	if !reapedMap[tUnassigned.ID] {
+		t.Errorf("expected %s to be reaped", tUnassigned.ID)
+	}
+	if !reapedMap[tAssigned.ID] {
+		t.Errorf("expected %s to be reaped", tAssigned.ID)
+	}
+
+	// Verify tUnassigned state in DB
+	afterUnassigned, err := db.GetTask(tUnassigned.ID)
+	if err != nil {
+		t.Fatalf("failed to get task: %v", err)
+	}
+	if afterUnassigned.Status != domain.StatusOpen {
+		t.Errorf("expected status open, got %s", afterUnassigned.Status)
+	}
+	if afterUnassigned.Assignee != "" {
+		t.Errorf("expected empty assignee, got %q", afterUnassigned.Assignee)
+	}
+	hasOrphanTag := false
+	for _, tag := range afterUnassigned.Tags {
+		if tag == "orphaned" {
+			hasOrphanTag = true
+			break
+		}
+	}
+	if !hasOrphanTag {
+		t.Errorf("expected tag 'orphaned' on task %s", afterUnassigned.ID)
+	}
+	// Verify audit note format: Task marked orphaned: inactive for %s since creation (threshold: %s)
+	if len(afterUnassigned.Notes) == 0 {
+		t.Fatalf("expected audit note on unassigned reaped task")
+	}
+	lastNote := afterUnassigned.Notes[len(afterUnassigned.Notes)-1]
+	if !strings.HasPrefix(lastNote.Content, "Task marked orphaned: inactive for ") || !strings.Contains(lastNote.Content, "since creation (threshold: ") {
+		t.Errorf("unexpected audit note format: %q", lastNote.Content)
+	}
+
+	// Verify tAssigned state in DB
+	afterAssigned, err := db.GetTask(tAssigned.ID)
+	if err != nil {
+		t.Fatalf("failed to get task: %v", err)
+	}
+	if afterAssigned.Status != domain.StatusOpen {
+		t.Errorf("expected status open, got %s", afterAssigned.Status)
+	}
+	if afterAssigned.Assignee != "" {
+		t.Errorf("expected empty assignee, got %q", afterAssigned.Assignee)
+	}
+	if len(afterAssigned.Notes) == 0 {
+		t.Fatalf("expected audit note on assigned reaped task")
+	}
+	lastAssignedNote := afterAssigned.Notes[len(afterAssigned.Notes)-1]
+	if !strings.Contains(lastAssignedNote.Content, "dropped assignee \"worker-1\"") {
+		t.Errorf("expected dropped assignee in note, got %q", lastAssignedNote.Content)
+	}
+
+	// 8. Re-running FindStaleTasks should NOT return the already-orphaned tasks
+	candsAfter, err := db.FindStaleTasks("local", "/repo/test", threshold)
+	if err != nil {
+		t.Fatalf("FindStaleTasks after reap failed: %v", err)
+	}
+	for _, c := range candsAfter {
+		if c.TaskID == tUnassigned.ID || c.TaskID == tAssigned.ID {
+			t.Errorf("reaped task %s should not be a stale candidate after being orphaned", c.TaskID)
+		}
+	}
+}
+
+
 

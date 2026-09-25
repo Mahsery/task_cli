@@ -58,19 +58,22 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 	taskID := fmt.Sprintf("%s-%d", prefix, nextSeq)
 	now := time.Now().UTC()
 
-	var closedAt *time.Time
+	var closedAt, archivedAt *time.Time
 	if status == domain.StatusDone || status == domain.StatusClosed {
 		closedAt = &now
+	}
+	if status == domain.StatusArchived {
+		archivedAt = &now
 	}
 
 	insertSQL := `
 	INSERT INTO tasks (
-		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at, archived_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err = tx.Exec(insertSQL,
-		taskID, scope, repoPath, nextSeq, title, description, string(status), string(priority), string(tagsJSON), author, assignee, now, now, closedAt,
+		taskID, scope, repoPath, nextSeq, title, description, string(status), string(priority), string(tagsJSON), author, assignee, now, now, closedAt, archivedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert task: %w", err)
@@ -108,30 +111,22 @@ type queryRower interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 }
 
-func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
-	query := `
-	SELECT id, scope, repo_path, title, description, status, priority, tags, author, assignee,
-	       created_at, updated_at, closed_at, commit_sha, commit_msg, diff_stat, diff_content
-	FROM tasks WHERE id = ?
-	`
+type rowScanner interface {
+	Scan(dest ...any) error
+}
 
-	row := q.QueryRow(query, id)
-
-	var task domain.Task
+func scanTask(s rowScanner, task *domain.Task) error {
 	var statusStr, priorityStr, tagsJSON string
-	var closedAt sql.NullTime
+	var closedAt, archivedAt sql.NullTime
 
-	err := row.Scan(
+	err := s.Scan(
 		&task.ID, &task.Scope, &task.RepoPath, &task.Title, &task.Description,
 		&statusStr, &priorityStr, &tagsJSON, &task.Author, &task.Assignee,
-		&task.CreatedAt, &task.UpdatedAt, &closedAt,
+		&task.CreatedAt, &task.UpdatedAt, &closedAt, &archivedAt,
 		&task.CommitSHA, &task.CommitMsg, &task.DiffStat, &task.DiffContent,
 	)
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("task %q not found", id)
-	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to query task: %w", err)
+		return err
 	}
 
 	task.Status = domain.Status(statusStr)
@@ -139,9 +134,33 @@ func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
 	if closedAt.Valid {
 		task.ClosedAt = &closedAt.Time
 	}
+	if archivedAt.Valid {
+		task.ArchivedAt = &archivedAt.Time
+	}
 
-	if err := json.Unmarshal([]byte(tagsJSON), &task.Tags); err != nil {
+	if tagsJSON == "[]" || tagsJSON == "" {
 		task.Tags = []string{}
+	} else if err := json.Unmarshal([]byte(tagsJSON), &task.Tags); err != nil {
+		task.Tags = []string{}
+	}
+	return nil
+}
+
+func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
+	query := `
+	SELECT id, scope, repo_path, title, description, status, priority, tags, author, assignee,
+	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, diff_content
+	FROM tasks WHERE id = ?
+	`
+
+	row := q.QueryRow(query, id)
+
+	var task domain.Task
+	if err := scanTask(row, &task); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("task %q not found", id)
+		}
+		return nil, fmt.Errorf("failed to query task: %w", err)
 	}
 
 	// Fetch notes
@@ -257,6 +276,13 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 			args = append(args, now)
 		} else {
 			updates = append(updates, "closed_at = NULL")
+		}
+
+		if *status == domain.StatusArchived {
+			updates = append(updates, "archived_at = ?")
+			args = append(args, now)
+		} else {
+			updates = append(updates, "archived_at = NULL")
 		}
 	}
 	if priority != nil {
@@ -429,7 +455,7 @@ func (d *DB) orphanTaskLocked(id string, actor, reason string, now time.Time) er
 
 	hasOrphanTag := false
 	for _, tag := range tags {
-		if tag == "orphaned" {
+		if strings.EqualFold(tag, "orphaned") {
 			hasOrphanTag = true
 			break
 		}
@@ -457,7 +483,11 @@ func (d *DB) orphanTaskLocked(id string, actor, reason string, now time.Time) er
 		if currentAssignee != "" {
 			noteContent = fmt.Sprintf("Task orphaned: %s (dropped assignee %q, reset status to %s)", reason, currentAssignee, newStatus)
 		} else {
-			noteContent = fmt.Sprintf("Task orphaned: %s (status reset to %s)", reason, newStatus)
+			if strings.HasPrefix(reason, "inactive for ") {
+				noteContent = fmt.Sprintf("Task marked orphaned: %s", reason)
+			} else {
+				noteContent = fmt.Sprintf("Task orphaned: %s (status reset to %s)", reason, newStatus)
+			}
 		}
 	} else {
 		if currentAssignee != "" {
@@ -567,10 +597,133 @@ func (d *DB) TransferTask(id string, fromActor, toAssignee, note string, force b
 	return d.getTaskLocked(d.conn, id)
 }
 
-func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dryRun bool, actor, reason string) ([]domain.StaleTaskCandidate, []string, error) {
+func (d *DB) ArchiveTask(id, actor, reason string) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentStatus string
+	var archivedAt sql.NullTime
+	query := "SELECT status, archived_at FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentStatus, &archivedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("task %s not found", id)
+		}
+		return nil, fmt.Errorf("failed to query task: %w", err)
+	}
+
+	if archivedAt.Valid || currentStatus == string(domain.StatusArchived) {
+		return nil, fmt.Errorf("task %s is already archived", id)
+	}
+
+	now := time.Now().UTC()
+	updateSQL := "UPDATE tasks SET status = ?, archived_at = ?, updated_at = ? WHERE id = ?"
+	if _, err := tx.Exec(updateSQL, string(domain.StatusArchived), now, now, id); err != nil {
+		return nil, fmt.Errorf("failed to archive task: %w", err)
+	}
+
+	noteAuthor := strings.TrimSpace(actor)
+	if noteAuthor == "" {
+		noteAuthor = "system"
+	}
+
+	var noteContent string
+	reason = strings.TrimSpace(reason)
+	if reason != "" {
+		noteContent = fmt.Sprintf("Archived task: %s", reason)
+	} else {
+		noteContent = "Archived task"
+	}
+
+	noteID := uuid.New().String()
+	noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
+	if _, err := tx.Exec(noteSQL, noteID, id, noteAuthor, noteContent, now); err != nil {
+		return nil, fmt.Errorf("failed to insert archive note: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit archive transaction: %w", err)
+	}
+
+	return d.getTaskLocked(d.conn, id)
+}
+
+func (d *DB) UnarchiveTask(id, actor, reason string) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	var currentStatus, assignee string
+	var archivedAt, closedAt sql.NullTime
+	query := "SELECT status, archived_at, closed_at, assignee FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentStatus, &archivedAt, &closedAt, &assignee); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("task %s not found", id)
+		}
+		return nil, fmt.Errorf("failed to query task: %w", err)
+	}
+
+	if !archivedAt.Valid && currentStatus != string(domain.StatusArchived) {
+		return nil, fmt.Errorf("task %s is not archived", id)
+	}
+
+	now := time.Now().UTC()
+	newStatus := domain.StatusOpen
+	if closedAt.Valid {
+		newStatus = domain.StatusDone
+	} else if strings.TrimSpace(assignee) != "" {
+		newStatus = domain.StatusInProgress
+	}
+
+	updateSQL := "UPDATE tasks SET status = ?, archived_at = NULL, updated_at = ? WHERE id = ?"
+	if _, err := tx.Exec(updateSQL, string(newStatus), now, id); err != nil {
+		return nil, fmt.Errorf("failed to unarchive task: %w", err)
+	}
+
+	noteAuthor := strings.TrimSpace(actor)
+	if noteAuthor == "" {
+		noteAuthor = "system"
+	}
+
+	var noteContent string
+	reason = strings.TrimSpace(reason)
+	if reason != "" {
+		noteContent = fmt.Sprintf("Unarchived task: %s", reason)
+	} else {
+		noteContent = "Unarchived task"
+	}
+
+	noteID := uuid.New().String()
+	noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
+	if _, err := tx.Exec(noteSQL, noteID, id, noteAuthor, noteContent, now); err != nil {
+		return nil, fmt.Errorf("failed to insert unarchive note: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit unarchive transaction: %w", err)
+	}
+
+	return d.getTaskLocked(d.conn, id)
+}
+
+func (d *DB) FindStaleTasks(scope, repoPath string, threshold time.Duration) ([]domain.StaleTaskCandidate, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.findStaleTasksLocked(scope, repoPath, threshold)
+}
+
+func (d *DB) findStaleTasksLocked(scope, repoPath string, threshold time.Duration) ([]domain.StaleTaskCandidate, error) {
 	if threshold <= 0 {
 		threshold = 1 * time.Hour
 	}
@@ -578,7 +731,7 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 	now := time.Now().UTC()
 	cutoff := now.Add(-threshold)
 
-	query := `SELECT id FROM tasks WHERE (status = 'in_progress' OR (status = 'open' AND assignee != ''))`
+	query := `SELECT id FROM tasks WHERE status IN ('open', 'in_progress') AND (archived_at IS NULL AND status != 'archived')`
 	var args []any
 	if scope != "" {
 		query += " AND scope = ?"
@@ -592,7 +745,7 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 
 	rows, err := d.conn.Query(query, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to query ongoing tasks: %w", err)
+		return nil, fmt.Errorf("failed to query tasks: %w", err)
 	}
 	defer rows.Close()
 
@@ -612,7 +765,15 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 			continue
 		}
 
+		// Skip unassigned tasks that already have the 'orphaned' tag
+		if t.Assignee == "" && hasTag(t.Tags, "orphaned") {
+			continue
+		}
+
 		selfActivity := taskActivityTime(t)
+		if selfActivity.IsZero() {
+			selfActivity = t.CreatedAt
+		}
 		if !selfActivity.Before(cutoff) {
 			continue
 		}
@@ -643,26 +804,48 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 			continue
 		}
 
+		inactiveDur := now.Sub(selfActivity)
+		if t.Assignee == "" && (t.UpdatedAt.IsZero() || t.UpdatedAt.Equal(t.CreatedAt)) && len(t.Notes) == 0 {
+			inactiveDur = now.Sub(t.CreatedAt)
+		}
+
 		candidates = append(candidates, domain.StaleTaskCandidate{
 			TaskID:           t.ID,
 			Title:            t.Title,
 			Assignee:         t.Assignee,
 			Status:           t.Status,
 			Priority:         t.Priority,
-			InactiveDuration: now.Sub(selfActivity),
+			InactiveDuration: inactiveDur,
 			LastActivity:     selfActivity,
 		})
+	}
+
+	return candidates, nil
+}
+
+func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dryRun bool, actor, reason string) ([]domain.StaleTaskCandidate, []string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	candidates, err := d.findStaleTasksLocked(scope, repoPath, threshold)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	if dryRun {
 		return candidates, nil, nil
 	}
 
+	now := time.Now().UTC()
 	var orphanedIDs []string
 	for _, cand := range candidates {
 		orphanReason := reason
 		if orphanReason == "" {
-			orphanReason = fmt.Sprintf("inactivity for %s (threshold: %s)", formatDurationBrief(cand.InactiveDuration), formatDurationBrief(threshold))
+			if cand.Assignee == "" {
+				orphanReason = fmt.Sprintf("inactive for %s since creation (threshold: %s)", formatDurationBrief(cand.InactiveDuration), formatDurationBrief(threshold))
+			} else {
+				orphanReason = fmt.Sprintf("inactivity for %s (threshold: %s)", formatDurationBrief(cand.InactiveDuration), formatDurationBrief(threshold))
+			}
 		}
 		if err := d.orphanTaskLocked(cand.TaskID, actor, orphanReason, now); err == nil {
 			orphanedIDs = append(orphanedIDs, cand.TaskID)
@@ -670,6 +853,15 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 	}
 
 	return candidates, orphanedIDs, nil
+}
+
+func hasTag(tags []string, target string) bool {
+	for _, t := range tags {
+		if strings.EqualFold(t, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func taskActivityTime(t *domain.Task) time.Time {
@@ -738,6 +930,11 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	if filter.OnlyOrphaned {
 		conditions = append(conditions, "EXISTS (SELECT 1 FROM json_each(tasks.tags) WHERE value = 'orphaned')")
 	}
+	if filter.OnlyArchived {
+		conditions = append(conditions, "(tasks.archived_at IS NOT NULL OR tasks.status = 'archived')")
+	} else if !filter.IncludeArchived {
+		conditions = append(conditions, "tasks.archived_at IS NULL AND tasks.status != 'archived'")
+	}
 
 	whereClause := ""
 	if len(conditions) > 0 {
@@ -788,7 +985,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 
 	query := fmt.Sprintf(`
 	SELECT id, scope, repo_path, title, description, status, priority, tags, author, assignee,
-	       created_at, updated_at, closed_at, commit_sha, commit_msg, diff_stat, '' as diff_content
+	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, '' as diff_content
 	FROM tasks %s
 	%s %s
 	`, whereClause, orderClause, limitClause)
@@ -802,28 +999,8 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	var tasks []*domain.Task
 	for rows.Next() {
 		var task domain.Task
-		var statusStr, priorityStr, tagsJSON string
-		var closedAt sql.NullTime
-
-		err := rows.Scan(
-			&task.ID, &task.Scope, &task.RepoPath, &task.Title, &task.Description,
-			&statusStr, &priorityStr, &tagsJSON, &task.Author, &task.Assignee,
-			&task.CreatedAt, &task.UpdatedAt, &closedAt,
-			&task.CommitSHA, &task.CommitMsg, &task.DiffStat, &task.DiffContent,
-		)
-		if err != nil {
+		if err := scanTask(rows, &task); err != nil {
 			return nil, err
-		}
-
-		task.Status = domain.Status(statusStr)
-		task.Priority = domain.Priority(priorityStr)
-		if closedAt.Valid {
-			task.ClosedAt = &closedAt.Time
-		}
-		if tagsJSON == "[]" || tagsJSON == "" {
-			task.Tags = []string{}
-		} else if err := json.Unmarshal([]byte(tagsJSON), &task.Tags); err != nil {
-			task.Tags = []string{}
 		}
 		task.Notes = []domain.TaskNote{}
 		tasks = append(tasks, &task)
@@ -1060,9 +1237,12 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		tagsJSON = []byte("[]")
 	}
 
-	var closedAt any
+	var closedAt, archivedAt any
 	if task.ClosedAt != nil {
 		closedAt = *task.ClosedAt
+	}
+	if task.ArchivedAt != nil {
+		archivedAt = *task.ArchivedAt
 	}
 
 	var seqNum int
@@ -1077,9 +1257,9 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 
 	insertSQL := `
 	INSERT INTO tasks (
-		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at,
+		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at, archived_at,
 		commit_sha, commit_msg, diff_stat, diff_content
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		scope = excluded.scope,
 		repo_path = excluded.repo_path,
@@ -1094,6 +1274,7 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		created_at = excluded.created_at,
 		updated_at = excluded.updated_at,
 		closed_at = excluded.closed_at,
+		archived_at = excluded.archived_at,
 		commit_sha = excluded.commit_sha,
 		commit_msg = excluded.commit_msg,
 		diff_stat = excluded.diff_stat,
@@ -1102,7 +1283,7 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 	_, err = tx.Exec(insertSQL,
 		task.ID, task.Scope, task.RepoPath, seqNum, task.Title, task.Description,
 		string(task.Status), string(task.Priority), string(tagsJSON), task.Author, task.Assignee,
-		task.CreatedAt, task.UpdatedAt, closedAt,
+		task.CreatedAt, task.UpdatedAt, closedAt, archivedAt,
 		task.CommitSHA, task.CommitMsg, task.DiffStat, task.DiffContent,
 	)
 	if err != nil {

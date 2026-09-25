@@ -51,13 +51,17 @@ const (
 	UndoStatusChange UndoKind = iota
 	UndoClaim
 	UndoDelete
+	UndoTag
+	UndoArchive
 )
 
 type TaskUndoSnapshot struct {
-	Task             *domain.Task
-	PreviousStatus   domain.Status
-	PreviousAssignee string
-	PreviousClosedAt *time.Time
+	Task               *domain.Task
+	PreviousStatus     domain.Status
+	PreviousAssignee   string
+	PreviousClosedAt   *time.Time
+	PreviousArchivedAt *time.Time
+	PreviousTags       []string
 }
 
 type UndoAction struct {
@@ -92,9 +96,15 @@ type Model struct {
 	undoStack          []UndoAction
 	treeViewMode       bool
 	splitOffset        int
+	isDraggingSplit    bool
 	isLinking          bool
 	linkInput          string
 	linkTaskID         string
+	chordBuffer        string
+	isTagging          bool
+	tagInput           string
+	tagTaskID          string
+	showArchived       bool
 }
 
 type TreeRow struct {
@@ -139,10 +149,14 @@ func (m Model) fetchTaskDetailCmd(id string) tea.Cmd {
 
 func (m Model) fetchTasksCmd() tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		filter := domain.TaskFilter{
-			Scope:    m.scope,
-			RepoPath: m.repoPath,
-			Search:   m.filterText,
+			Scope:           m.scope,
+			RepoPath:        m.repoPath,
+			Search:          m.filterText,
+			IncludeArchived: m.showArchived,
 		}
 		tasks, err := m.client.ListTasks(filter)
 		if err != nil {
@@ -582,11 +596,18 @@ func (m Model) buildUndoAction(dlg *ConfirmDialog) UndoAction {
 				tCopy := *t.ClosedAt
 				prevClosed = &tCopy
 			}
+			var prevArchived *time.Time
+			if t.ArchivedAt != nil {
+				tCopy := *t.ArchivedAt
+				prevArchived = &tCopy
+			}
 			snapshots = append(snapshots, TaskUndoSnapshot{
-				Task:             fullTask,
-				PreviousStatus:   t.Status,
-				PreviousAssignee: t.Assignee,
-				PreviousClosedAt: prevClosed,
+				Task:               fullTask,
+				PreviousStatus:     t.Status,
+				PreviousAssignee:   t.Assignee,
+				PreviousClosedAt:   prevClosed,
+				PreviousArchivedAt: prevArchived,
+				PreviousTags:       append([]string(nil), t.Tags...),
 			})
 		}
 	}
@@ -677,6 +698,9 @@ func (m Model) executeConfirmedDialog(dlg *ConfirmDialog) (tea.Model, tea.Cmd) {
 
 func (m Model) executeUndoCmd(undo UndoAction) tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		switch undo.Kind {
 		case UndoStatusChange:
 			for _, snap := range undo.Snapshots {
@@ -711,11 +735,40 @@ func (m Model) executeUndoCmd(undo UndoAction) tea.Cmd {
 					return errMsg(fmt.Errorf("failed to restore %s: %w", snap.Task.ID, err))
 				}
 			}
+		case UndoTag:
+			for _, snap := range undo.Snapshots {
+				note := "Undo: reverted tags"
+				prevTags := snap.PreviousTags
+				_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+					ID:      snap.Task.ID,
+					Tags:    &prevTags,
+					AddNote: &note,
+				})
+				if err != nil {
+					return errMsg(fmt.Errorf("failed to restore tags on %s: %w", snap.Task.ID, err))
+				}
+			}
+		case UndoArchive:
+			for _, snap := range undo.Snapshots {
+				note := "Undo: reverted archive state"
+				prevStatus := snap.PreviousStatus
+				prevAssignee := snap.PreviousAssignee
+				_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+					ID:       snap.Task.ID,
+					Status:   &prevStatus,
+					Assignee: &prevAssignee,
+					AddNote:  &note,
+				})
+				if err != nil {
+					return errMsg(fmt.Errorf("failed to undo archive for %s: %w", snap.Task.ID, err))
+				}
+			}
 		}
 		tasks, err := m.client.ListTasks(domain.TaskFilter{
-			Scope:    m.scope,
-			RepoPath: m.repoPath,
-			Search:   m.filterText,
+			Scope:           m.scope,
+			RepoPath:        m.repoPath,
+			Search:          m.filterText,
+			IncludeArchived: m.showArchived,
 		})
 		if err != nil {
 			return errMsg(err)
@@ -810,6 +863,128 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = fmt.Sprintf("Error: %v", msg)
 		return m, nil
 
+	case tea.MouseMsg:
+		if !m.isSplitView() {
+			if msg.Button == tea.MouseButtonWheelUp {
+				if m.cursor > 0 {
+					m.cursor--
+					if m.cursor < m.scrollOffset {
+						m.scrollOffset = m.cursor
+					}
+				}
+			} else if msg.Button == tea.MouseButtonWheelDown {
+				maxRows := m.getMaxRows()
+				displayCount := len(m.tasks)
+				if m.treeViewMode {
+					displayCount = len(m.getTreeRows())
+				}
+				if m.cursor < displayCount-1 {
+					m.cursor++
+					if m.cursor >= m.scrollOffset+maxRows {
+						m.scrollOffset = m.cursor - maxRows + 1
+					}
+				}
+			}
+			return m, nil
+		}
+
+		detailWidth, _ := m.getDetailDimensions()
+		tableWidth := m.width - detailWidth - 1
+
+		switch msg.Action {
+		case tea.MouseActionPress:
+			if msg.Button == tea.MouseButtonLeft {
+				// Click on or near the central divider bar to start dragging
+				if msg.X >= tableWidth-1 && msg.X <= tableWidth+1 {
+					m.isDraggingSplit = true
+					return m, nil
+				}
+				// Click left of divider: focus list pane and select clicked task if on task row
+				if msg.X < tableWidth {
+					m.activePane = PaneList
+					row := msg.Y - 3
+					if row >= 0 {
+						targetIdx := m.scrollOffset + row
+						displayCount := len(m.tasks)
+						if m.treeViewMode {
+							displayCount = len(m.getTreeRows())
+						}
+						if targetIdx < displayCount {
+							m.cursor = targetIdx
+						}
+					}
+					return m, nil
+				}
+				// Click right of divider: focus details pane
+				if msg.X > tableWidth {
+					m.activePane = PaneDetail
+					return m, nil
+				}
+			}
+
+		case tea.MouseActionMotion:
+			if m.isDraggingSplit {
+				basePercent := 48
+				if m.treeViewMode {
+					basePercent = 56
+				}
+				baseTableWidth := m.width * basePercent / 100
+				targetTableWidth := msg.X
+				minTableWidth := 38
+				maxTableWidth := m.width - 25 - 1
+				if targetTableWidth < minTableWidth {
+					targetTableWidth = minTableWidth
+				}
+				if targetTableWidth > maxTableWidth {
+					targetTableWidth = maxTableWidth
+				}
+				m.splitOffset = targetTableWidth - baseTableWidth
+				return m, nil
+			}
+
+		case tea.MouseActionRelease:
+			m.isDraggingSplit = false
+			return m, nil
+		}
+
+		// Mouse wheel scrolling in split view
+		if msg.Button == tea.MouseButtonWheelUp {
+			if msg.X <= tableWidth {
+				if m.cursor > 0 {
+					m.cursor--
+					if m.cursor < m.scrollOffset {
+						m.scrollOffset = m.cursor
+					}
+				}
+			} else {
+				if m.detailScrollOffset > 0 {
+					m.detailScrollOffset--
+				}
+			}
+			return m, nil
+		} else if msg.Button == tea.MouseButtonWheelDown {
+			if msg.X <= tableWidth {
+				maxRows := m.getMaxRows()
+				displayCount := len(m.tasks)
+				if m.treeViewMode {
+					displayCount = len(m.getTreeRows())
+				}
+				if m.cursor < displayCount-1 {
+					m.cursor++
+					if m.cursor >= m.scrollOffset+maxRows {
+						m.scrollOffset = m.cursor - maxRows + 1
+					}
+				}
+			} else {
+				maxOffset := m.maxDetailScrollOffset()
+				if m.detailScrollOffset < maxOffset {
+					m.detailScrollOffset++
+				}
+			}
+			return m, nil
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if dlg := m.activeConfirmDialog(); dlg != nil {
 			k := msg.String()
@@ -891,6 +1066,136 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		if m.isTagging {
+			switch msg.String() {
+			case "enter":
+				m.isTagging = false
+				tag := strings.TrimSpace(m.tagInput)
+				if tag != "" {
+					if m.tagTaskID != "" {
+						targetID := m.tagTaskID
+						cur := m.currentTask()
+						if cur != nil && cur.ID == targetID {
+							prevTags := append([]string(nil), cur.Tags...)
+							exists := false
+							for _, t := range cur.Tags {
+								if t == tag {
+									exists = true
+									break
+								}
+							}
+							var newTags []string
+							if exists {
+								for _, t := range cur.Tags {
+									if t != tag {
+										newTags = append(newTags, t)
+									}
+								}
+								m.statusMsg = fmt.Sprintf("Removed tag %q from %s (press 'u' to undo)", tag, targetID)
+							} else {
+								newTags = append(cur.Tags, tag)
+								m.statusMsg = fmt.Sprintf("Tagged %s with %q (press 'u' to undo)", targetID, tag)
+							}
+							cur.Tags = newTags
+
+							undo := UndoAction{
+								Kind:        UndoTag,
+								Description: fmt.Sprintf("Tag change on %s", targetID),
+								Snapshots: []TaskUndoSnapshot{
+									{
+										Task:         cur,
+										PreviousTags: prevTags,
+									},
+								},
+							}
+							m.undoStack = append(m.undoStack, undo)
+							if len(m.undoStack) > 50 {
+								m.undoStack = m.undoStack[len(m.undoStack)-50:]
+							}
+							return m, m.updateTaskTagsCmd(targetID, newTags)
+						}
+					} else if len(m.selected) > 0 {
+						ids := m.getSelectedIDs()
+						var snapshots []TaskUndoSnapshot
+						for _, id := range ids {
+							for _, t := range m.tasks {
+								if t.ID == id {
+									prevTags := append([]string(nil), t.Tags...)
+									snapshots = append(snapshots, TaskUndoSnapshot{
+										Task:         t,
+										PreviousTags: prevTags,
+									})
+									exists := false
+									for _, exTag := range t.Tags {
+										if exTag == tag {
+											exists = true
+											break
+										}
+									}
+									if !exists {
+										t.Tags = append(t.Tags, tag)
+									}
+									break
+								}
+							}
+						}
+						undo := UndoAction{
+							Kind:        UndoTag,
+							Description: fmt.Sprintf("Tag %q on %d tasks", tag, len(ids)),
+							Snapshots:   snapshots,
+						}
+						m.undoStack = append(m.undoStack, undo)
+						if len(m.undoStack) > 50 {
+							m.undoStack = m.undoStack[len(m.undoStack)-50:]
+						}
+						m.statusMsg = fmt.Sprintf("Tagged %d tasks with %q (press 'u' to undo)", len(ids), tag)
+						return m, m.batchTagCmd(ids, tag)
+					}
+				}
+				m.statusMsg = "Tagging cancelled"
+				return m, nil
+
+			case "esc":
+				m.isTagging = false
+				m.statusMsg = "Tagging cancelled"
+				return m, nil
+
+			case "backspace":
+				runes := []rune(m.tagInput)
+				if len(runes) > 0 {
+					m.tagInput = string(runes[:len(runes)-1])
+				}
+				return m, nil
+
+			default:
+				if len(msg.Runes) > 0 {
+					m.tagInput += string(msg.Runes)
+				}
+				return m, nil
+			}
+		}
+
+		// Vim Movement Chords: Accumulate numeric prefix in normal navigation mode
+		kStr := msg.String()
+		if len(kStr) == 1 && kStr[0] >= '0' && kStr[0] <= '9' {
+			if kStr[0] != '0' || m.chordBuffer != "" {
+				m.chordBuffer += kStr
+				return m, nil
+			}
+		}
+
+		if (kStr == "esc" || kStr == "c") && m.chordBuffer != "" {
+			m.chordBuffer = ""
+			m.statusMsg = "Chord cancelled"
+			return m, nil
+		}
+
+		var chordCount int
+		if m.chordBuffer != "" {
+			fmt.Sscanf(m.chordBuffer, "%d", &chordCount)
+			m.chordBuffer = ""
+		}
+
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -902,24 +1207,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.detailScrollOffset > maxOffset {
 					m.detailScrollOffset = maxOffset
 				}
-				m.statusMsg = "Focused Details pane (j/k to scroll content)"
+				m.statusMsg = "Details focused"
 			} else {
 				m.activePane = PaneList
-				m.statusMsg = "Focused Tasks list (j/k to select task)"
+				m.statusMsg = "Tasks focused"
 			}
 			return m, nil
 
 		case "shift+tab":
 			if m.activePane == PaneDetail {
 				m.activePane = PaneList
-				m.statusMsg = "Focused Tasks list (j/k to select task)"
+				m.statusMsg = "Tasks focused"
 			} else {
 				m.activePane = PaneDetail
 				maxOffset := m.maxDetailScrollOffset()
 				if m.detailScrollOffset > maxOffset {
 					m.detailScrollOffset = maxOffset
 				}
-				m.statusMsg = "Focused Details pane (j/k to scroll content)"
+				m.statusMsg = "Details focused"
 			}
 			return m, nil
 
@@ -930,57 +1235,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.detailScrollOffset > maxOffset {
 					m.detailScrollOffset = maxOffset
 				}
-				m.statusMsg = "Focused Details pane (j/k to scroll content)"
+				m.statusMsg = "Details focused"
 				return m, nil
 			}
 
 		case "h", "left":
 			if m.activePane == PaneDetail {
 				m.activePane = PaneList
-				m.statusMsg = "Focused Tasks list (j/k to select task)"
+				m.statusMsg = "Tasks focused"
 				return m, nil
 			}
 
 		case ">", ".", "alt+right", "alt+l":
 			if m.isSplitView() {
 				m.splitOffset += 4
-				detailW, _ := m.getDetailDimensions()
-				tableW := m.width - detailW - 1
-				m.statusMsg = fmt.Sprintf("Split resized: %d cols table / %d cols detail (reset with '=')", tableW, detailW)
 			}
 			return m, nil
 
 		case "<", ",", "alt+left", "alt+h":
 			if m.isSplitView() {
 				m.splitOffset -= 4
-				detailW, _ := m.getDetailDimensions()
-				tableW := m.width - detailW - 1
-				m.statusMsg = fmt.Sprintf("Split resized: %d cols table / %d cols detail (reset with '=')", tableW, detailW)
 			}
 			return m, nil
 
 		case "=":
 			if m.isSplitView() {
 				m.splitOffset = 0
-				detailW, _ := m.getDetailDimensions()
-				tableW := m.width - detailW - 1
-				m.statusMsg = fmt.Sprintf("Split reset: %d cols table / %d cols detail", tableW, detailW)
 			}
 			return m, nil
 
 		case "up", "k":
+			step := 1
+			if chordCount > 0 {
+				step = chordCount
+			}
 			if m.activePane == PaneDetail {
-				maxOffset := m.maxDetailScrollOffset()
-				if m.detailScrollOffset > maxOffset {
-					m.detailScrollOffset = maxOffset
-				}
-				if m.detailScrollOffset > 0 {
-					m.detailScrollOffset--
+				m.detailScrollOffset -= step
+				if m.detailScrollOffset < 0 {
+					m.detailScrollOffset = 0
 				}
 				return m, nil
 			}
-			if m.cursor > 0 {
-				m.cursor--
+			if len(m.tasks) > 0 {
+				m.cursor -= step
+				if m.cursor < 0 {
+					m.cursor = 0
+				}
 				if m.cursor < m.scrollOffset {
 					m.scrollOffset = m.cursor
 				}
@@ -988,15 +1288,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "down", "j":
+			step := 1
+			if chordCount > 0 {
+				step = chordCount
+			}
 			if m.activePane == PaneDetail {
 				maxOffset := m.maxDetailScrollOffset()
-				if m.detailScrollOffset < maxOffset {
-					m.detailScrollOffset++
+				m.detailScrollOffset += step
+				if m.detailScrollOffset > maxOffset {
+					m.detailScrollOffset = maxOffset
 				}
 				return m, nil
 			}
-			if m.cursor < len(m.tasks)-1 {
-				m.cursor++
+			if len(m.tasks) > 0 {
+				m.cursor += step
+				if m.cursor >= len(m.tasks) {
+					m.cursor = len(m.tasks) - 1
+				}
 				if m.cursor >= m.scrollOffset+maxRows {
 					m.scrollOffset = m.cursor - maxRows + 1
 				}
@@ -1014,11 +1322,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "G", "end":
 			if m.activePane == PaneDetail {
-				m.detailScrollOffset = m.maxDetailScrollOffset()
+				if chordCount > 0 {
+					m.detailScrollOffset = chordCount - 1
+					maxOffset := m.maxDetailScrollOffset()
+					if m.detailScrollOffset > maxOffset {
+						m.detailScrollOffset = maxOffset
+					}
+					if m.detailScrollOffset < 0 {
+						m.detailScrollOffset = 0
+					}
+				} else {
+					m.detailScrollOffset = m.maxDetailScrollOffset()
+				}
 				return m, nil
 			}
 			if len(m.tasks) > 0 {
-				m.cursor = len(m.tasks) - 1
+				if chordCount > 0 {
+					target := chordCount - 1
+					if target >= len(m.tasks) {
+						target = len(m.tasks) - 1
+					}
+					if target < 0 {
+						target = 0
+					}
+					m.cursor = target
+				} else {
+					m.cursor = len(m.tasks) - 1
+				}
+				if m.cursor < m.scrollOffset {
+					m.scrollOffset = m.cursor
+				}
 				if m.cursor >= m.scrollOffset+maxRows {
 					m.scrollOffset = m.cursor - maxRows + 1
 				}
@@ -1026,16 +1359,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "J", "ctrl+d", "]", "pgdown":
+			times := 1
+			if chordCount > 0 {
+				times = chordCount
+			}
 			if m.activePane == PaneDetail {
 				maxOffset := m.maxDetailScrollOffset()
-				m.detailScrollOffset += 6
+				m.detailScrollOffset += 6 * times
 				if m.detailScrollOffset > maxOffset {
 					m.detailScrollOffset = maxOffset
 				}
 				return m, nil
 			}
 			if len(m.tasks) > 0 {
-				step := maxRows / 2
+				step := (maxRows / 2) * times
 				if step < 1 {
 					step = 1
 				}
@@ -1050,20 +1387,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "K", "ctrl+u", "[", "pgup":
+			times := 1
+			if chordCount > 0 {
+				times = chordCount
+			}
 			if m.activePane == PaneDetail {
-				if m.detailScrollOffset > 6 {
-					m.detailScrollOffset -= 6
-				} else {
+				m.detailScrollOffset -= 6 * times
+				if m.detailScrollOffset < 0 {
 					m.detailScrollOffset = 0
-				}
-				maxOffset := m.maxDetailScrollOffset()
-				if m.detailScrollOffset > maxOffset {
-					m.detailScrollOffset = maxOffset
 				}
 				return m, nil
 			}
 			if len(m.tasks) > 0 {
-				step := maxRows / 2
+				step := (maxRows / 2) * times
 				if step < 1 {
 					step = 1
 				}
@@ -1130,7 +1466,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc", "c":
 			if m.activePane == PaneDetail {
 				m.activePane = PaneList
-				m.statusMsg = "Focused Tasks list"
+				m.statusMsg = "Tasks focused"
 				return m, nil
 			}
 			if len(m.selected) > 0 {
@@ -1232,8 +1568,123 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					IsBatch:        false,
 					TargetAssignee: actor,
 				}
-				return m, nil
 			}
+			return m, nil
+
+		case "ctrl+a", "alt+a":
+			m.showArchived = !m.showArchived
+			if m.showArchived {
+				m.statusMsg = "Archived tasks visible"
+			} else {
+				m.statusMsg = "Archived tasks hidden"
+			}
+			return m, m.fetchTasksCmd()
+
+		case "A", "O":
+			if len(m.selected) > 0 {
+				ids := m.getSelectedIDs()
+				anyUnarchived := false
+				for _, id := range ids {
+					for _, t := range m.tasks {
+						if t.ID == id && !t.IsArchived() {
+							anyUnarchived = true
+							break
+						}
+					}
+					if anyUnarchived {
+						break
+					}
+				}
+				targetArchive := anyUnarchived
+				var snapshots []TaskUndoSnapshot
+				now := time.Now()
+				for _, id := range ids {
+					for _, t := range m.tasks {
+						if t.ID == id {
+							var prevArchived *time.Time
+							if t.ArchivedAt != nil {
+								c := *t.ArchivedAt
+								prevArchived = &c
+							}
+							snapshots = append(snapshots, TaskUndoSnapshot{
+								Task:               t,
+								PreviousStatus:     t.Status,
+								PreviousAssignee:   t.Assignee,
+								PreviousClosedAt:   t.ClosedAt,
+								PreviousArchivedAt: prevArchived,
+								PreviousTags:       append([]string(nil), t.Tags...),
+							})
+							if targetArchive {
+								t.ArchivedAt = &now
+								t.Status = domain.StatusArchived
+							} else {
+								t.ArchivedAt = nil
+								t.Status = domain.StatusOpen
+							}
+							break
+						}
+					}
+				}
+				actionDesc := "Archived"
+				if !targetArchive {
+					actionDesc = "Unarchived"
+				}
+				undo := UndoAction{
+					Kind:        UndoArchive,
+					Description: fmt.Sprintf("%s %d tasks", actionDesc, len(ids)),
+					Snapshots:   snapshots,
+				}
+				m.undoStack = append(m.undoStack, undo)
+				if len(m.undoStack) > 50 {
+					m.undoStack = m.undoStack[len(m.undoStack)-50:]
+				}
+				m.statusMsg = fmt.Sprintf("%s %d tasks (press 'u' to undo)", actionDesc, len(ids))
+				return m, m.batchArchiveCmd(ids, targetArchive)
+			}
+			cur := m.currentTask()
+			if cur != nil {
+				now := time.Now()
+				var prevArchived *time.Time
+				if cur.ArchivedAt != nil {
+					c := *cur.ArchivedAt
+					prevArchived = &c
+				}
+				undo := UndoAction{
+					Kind: UndoArchive,
+					Snapshots: []TaskUndoSnapshot{
+						{
+							Task:               cur,
+							PreviousStatus:     cur.Status,
+							PreviousAssignee:   cur.Assignee,
+							PreviousClosedAt:   cur.ClosedAt,
+							PreviousArchivedAt: prevArchived,
+							PreviousTags:       append([]string(nil), cur.Tags...),
+						},
+					},
+				}
+				if cur.IsArchived() {
+					undo.Description = fmt.Sprintf("Unarchived %s", cur.ID)
+					m.undoStack = append(m.undoStack, undo)
+					if len(m.undoStack) > 50 {
+						m.undoStack = m.undoStack[len(m.undoStack)-50:]
+					}
+					cur.ArchivedAt = nil
+					cur.Status = domain.StatusOpen
+					m.statusMsg = fmt.Sprintf("Unarchived %s (press 'u' to undo)", cur.ID)
+					return m, m.unarchiveTaskCmd(cur.ID)
+				} else {
+					undo.Description = fmt.Sprintf("Archived %s", cur.ID)
+					m.undoStack = append(m.undoStack, undo)
+					if len(m.undoStack) > 50 {
+						m.undoStack = m.undoStack[len(m.undoStack)-50:]
+					}
+					cur.ArchivedAt = &now
+					cur.Status = domain.StatusArchived
+					m.statusMsg = fmt.Sprintf("Archived %s (press 'u' to undo)", cur.ID)
+					return m, m.archiveTaskCmd(cur.ID)
+				}
+			}
+			return m, nil
 
 		case "t":
 			m.treeViewMode = !m.treeViewMode
@@ -1285,31 +1736,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cur := m.currentTask()
 			if cur != nil {
 				if cur.Status == domain.StatusDone || cur.Status == domain.StatusClosed {
-					m.confirmDialog = &ConfirmDialog{
-						Kind:         ConfirmReopen,
-						Title:        "CONFIRM REOPEN TASK",
-						Prompt:       fmt.Sprintf("Reopen task %s to IN_PROGRESS?", cur.ID),
-						Details:      []string{fmt.Sprintf("%s: %s", cur.ID, cur.Title)},
-						TargetIDs:    []string{cur.ID},
-						IsBatch:      false,
-						TargetStatus: domain.StatusInProgress,
+					undo := UndoAction{
+						Kind:        UndoStatusChange,
+						Description: fmt.Sprintf("Reopened %s", cur.ID),
+						Snapshots: []TaskUndoSnapshot{
+							{
+								Task:             cur,
+								PreviousStatus:   cur.Status,
+								PreviousAssignee: cur.Assignee,
+								PreviousClosedAt: cur.ClosedAt,
+								PreviousTags:     append([]string(nil), cur.Tags...),
+							},
+						},
 					}
-					return m, nil
+					m.undoStack = append(m.undoStack, undo)
+					if len(m.undoStack) > 50 {
+						m.undoStack = m.undoStack[len(m.undoStack)-50:]
+					}
+					cur.Status = domain.StatusOpen
+					m.statusMsg = fmt.Sprintf("Reopened %s (press 'u' to undo)", cur.ID)
+					return m, m.reopenTaskCmd(cur.ID)
 				}
 				if cur.IsBlocked {
 					m.statusMsg = fmt.Sprintf("⚠️ Cannot mark %s DONE: blocked by unfinished prerequisite(s): %s", cur.ID, strings.Join(cur.BlockedBy, ", "))
 					return m, nil
 				}
-				m.confirmDialog = &ConfirmDialog{
-					Kind:         ConfirmDone,
-					Title:        "CONFIRM TASK DONE",
-					Prompt:       fmt.Sprintf("Mark task %s as DONE?", cur.ID),
-					Details:      []string{fmt.Sprintf("%s: %s", cur.ID, cur.Title)},
-					TargetIDs:    []string{cur.ID},
-					IsBatch:      false,
-					TargetStatus: domain.StatusDone,
+				undo := UndoAction{
+					Kind:        UndoStatusChange,
+					Description: fmt.Sprintf("Marked %s as DONE", cur.ID),
+					Snapshots: []TaskUndoSnapshot{
+						{
+							Task:             cur,
+							PreviousStatus:   cur.Status,
+							PreviousAssignee: cur.Assignee,
+							PreviousClosedAt: cur.ClosedAt,
+							PreviousTags:     append([]string(nil), cur.Tags...),
+						},
+					},
 				}
-				return m, nil
+				m.undoStack = append(m.undoStack, undo)
+				if len(m.undoStack) > 50 {
+					m.undoStack = m.undoStack[len(m.undoStack)-50:]
+				}
+				cur.Status = domain.StatusDone
+				m.statusMsg = fmt.Sprintf("Marked %s as DONE (press 'u' to undo)", cur.ID)
+				return m, m.markDoneCmd(cur.ID)
 			}
 
 		case "s":
@@ -1326,25 +1797,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-				t := m.tasks[m.cursor]
+			cur := m.currentTask()
+			if cur != nil {
 				newStatus := domain.StatusInProgress
-				if t.Status == domain.StatusInProgress {
+				if cur.Status == domain.StatusInProgress {
 					newStatus = domain.StatusOpen
-				} else if t.Status == domain.StatusDone || t.Status == domain.StatusClosed {
+				} else if cur.Status == domain.StatusDone || cur.Status == domain.StatusClosed {
 					newStatus = domain.StatusInProgress
 				}
-				m.confirmDialog = &ConfirmDialog{
-					Kind:         ConfirmStatus,
-					Title:        "CONFIRM STATUS CHANGE",
-					Prompt:       fmt.Sprintf("Change status of %s to %s?", t.ID, strings.ToUpper(string(newStatus))),
-					Details:      []string{fmt.Sprintf("%s: %s (current: %s)", t.ID, t.Title, t.Status)},
-					TargetIDs:    []string{t.ID},
-					IsBatch:      false,
-					TargetStatus: newStatus,
+				undo := UndoAction{
+					Kind:        UndoStatusChange,
+					Description: fmt.Sprintf("Status change on %s", cur.ID),
+					Snapshots: []TaskUndoSnapshot{
+						{
+							Task:             cur,
+							PreviousStatus:   cur.Status,
+							PreviousAssignee: cur.Assignee,
+							PreviousClosedAt: cur.ClosedAt,
+							PreviousTags:     append([]string(nil), cur.Tags...),
+						},
+					},
 				}
+				m.undoStack = append(m.undoStack, undo)
+				if len(m.undoStack) > 50 {
+					m.undoStack = m.undoStack[len(m.undoStack)-50:]
+				}
+				cur.Status = newStatus
+				m.statusMsg = fmt.Sprintf("Updated %s status to %s (press 'u' to undo)", cur.ID, newStatus)
+				return m, m.updateStatusCmd(cur.ID, newStatus)
+			}
+
+		case "m", "T":
+			if len(m.selected) > 0 {
+				m.isTagging = true
+				m.tagInput = ""
+				m.tagTaskID = ""
+				m.statusMsg = fmt.Sprintf("Tagging %d selected tasks (enter tag name)", len(m.selected))
 				return m, nil
 			}
+			cur := m.currentTask()
+			if cur != nil {
+				m.isTagging = true
+				m.tagInput = ""
+				m.tagTaskID = cur.ID
+				m.statusMsg = fmt.Sprintf("Tagging %s (enter tag name)", cur.ID)
+			}
+			return m, nil
 
 		case "u":
 			if len(m.undoStack) == 0 {
@@ -1354,6 +1852,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			lastUndo := m.undoStack[len(m.undoStack)-1]
 			m.undoStack = m.undoStack[:len(m.undoStack)-1]
 			m.statusMsg = fmt.Sprintf("Undid: %s", lastUndo.Description)
+
+			// In-memory restoration for immediate responsiveness
+			switch lastUndo.Kind {
+			case UndoStatusChange:
+				for _, snap := range lastUndo.Snapshots {
+					if snap.Task != nil {
+						snap.Task.Status = snap.PreviousStatus
+					}
+					for _, t := range m.tasks {
+						if snap.Task != nil && t.ID == snap.Task.ID {
+							t.Status = snap.PreviousStatus
+						}
+					}
+				}
+			case UndoClaim:
+				for _, snap := range lastUndo.Snapshots {
+					if snap.Task != nil {
+						snap.Task.Assignee = snap.PreviousAssignee
+						snap.Task.Status = snap.PreviousStatus
+					}
+					for _, t := range m.tasks {
+						if snap.Task != nil && t.ID == snap.Task.ID {
+							t.Assignee = snap.PreviousAssignee
+							t.Status = snap.PreviousStatus
+						}
+					}
+				}
+			case UndoTag:
+				for _, snap := range lastUndo.Snapshots {
+					if snap.Task != nil {
+						snap.Task.Tags = append([]string(nil), snap.PreviousTags...)
+					}
+					for _, t := range m.tasks {
+						if snap.Task != nil && t.ID == snap.Task.ID {
+							t.Tags = append([]string(nil), snap.PreviousTags...)
+						}
+					}
+				}
+			case UndoArchive:
+				for _, snap := range lastUndo.Snapshots {
+					if snap.Task != nil {
+						snap.Task.ArchivedAt = snap.PreviousArchivedAt
+						snap.Task.Status = snap.PreviousStatus
+					}
+					for _, t := range m.tasks {
+						if snap.Task != nil && t.ID == snap.Task.ID {
+							t.ArchivedAt = snap.PreviousArchivedAt
+							t.Status = snap.PreviousStatus
+						}
+					}
+				}
+			}
+
 			return m, m.executeUndoCmd(lastUndo)
 
 		case "n":
@@ -1464,6 +2015,9 @@ func (m Model) deleteTaskCmd(taskID string) tea.Cmd {
 
 func (m Model) reopenTaskCmd(taskID string) tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		st := domain.StatusOpen
 		note := "Reopened task"
 		_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
@@ -1480,6 +2034,9 @@ func (m Model) reopenTaskCmd(taskID string) tea.Cmd {
 
 func (m Model) updateStatusCmd(taskID string, newStatus domain.Status) tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
 			ID:     taskID,
 			Status: &newStatus,
@@ -1493,6 +2050,9 @@ func (m Model) updateStatusCmd(taskID string, newStatus domain.Status) tea.Cmd {
 
 func (m Model) markDoneCmd(taskID string) tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		// Attempt to grab latest git commit if local
 		var sha, msg, stat, diff string
 		if m.scope == "local" && m.repoPath != "" {
@@ -1521,6 +2081,9 @@ func (m Model) markDoneCmd(taskID string) tea.Cmd {
 
 func (m Model) claimTaskCmd(taskID string) tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		actor := m.client.Actor()
 		if actor == "" {
 			actor = git.GetAuthor()
@@ -1528,6 +2091,43 @@ func (m Model) claimTaskCmd(taskID string) tea.Cmd {
 		_, err := m.client.ClaimTask(taskID, actor, false)
 		if err != nil {
 			return errMsg(err)
+		}
+		filter := domain.TaskFilter{
+			Scope:    m.scope,
+			RepoPath: m.repoPath,
+			Search:   m.filterText,
+		}
+		tasks, _ := m.client.ListTasks(filter)
+		return reloadMsg(tasks)
+	}
+}
+
+func (m Model) updateTaskTagsCmd(taskID string, tags []string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+			ID:   taskID,
+			Tags: &tags,
+		})
+		if err != nil {
+			return errMsg(err)
+		}
+		return m.fetchTasksCmd()()
+	}
+}
+
+func (m Model) batchTagCmd(ids []string, tag string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		for _, id := range ids {
+			_, _ = m.client.UpdateTask(protocol.UpdateTaskPayload{
+				ID:      id,
+				AddTags: []string{tag},
+			})
 		}
 		filter := domain.TaskFilter{
 			Scope:    m.scope,
@@ -1551,6 +2151,9 @@ func (m Model) getSelectedIDs() []string {
 
 func (m Model) batchDoneCmd(ids []string) tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		var sha, msg, stat, diff string
 		if m.scope == "local" && m.repoPath != "" {
 			if commit, err := git.GetLatestCommit(m.repoPath); err == nil {
@@ -1585,6 +2188,9 @@ func (m Model) batchDoneCmd(ids []string) tea.Cmd {
 
 func (m Model) batchStatusCmd(ids []string) tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		allInProg := true
 		for _, id := range ids {
 			for _, t := range m.tasks {
@@ -1620,6 +2226,9 @@ func (m Model) batchStatusCmd(ids []string) tea.Cmd {
 
 func (m Model) batchClaimCmd(ids []string) tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		actor := m.client.Actor()
 		if actor == "" {
 			actor = git.GetAuthor()
@@ -1639,13 +2248,92 @@ func (m Model) batchClaimCmd(ids []string) tea.Cmd {
 
 func (m Model) batchDeleteCmd(ids []string) tea.Cmd {
 	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
 		for _, id := range ids {
 			_ = m.client.DeleteTask(id)
 		}
 		filter := domain.TaskFilter{
-			Scope:    m.scope,
-			RepoPath: m.repoPath,
-			Search:   m.filterText,
+			Scope:           m.scope,
+			RepoPath:        m.repoPath,
+			Search:          m.filterText,
+			IncludeArchived: m.showArchived,
+		}
+		tasks, _ := m.client.ListTasks(filter)
+		return reloadMsg(tasks)
+	}
+}
+
+func (m Model) archiveTaskCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		actor := m.client.Actor()
+		if actor == "" {
+			actor = git.GetAuthor()
+		}
+		_, err := m.client.ArchiveTask(taskID, actor, "Archived via TUI")
+		if err != nil {
+			return errMsg(err)
+		}
+		filter := domain.TaskFilter{
+			Scope:           m.scope,
+			RepoPath:        m.repoPath,
+			Search:          m.filterText,
+			IncludeArchived: m.showArchived,
+		}
+		tasks, _ := m.client.ListTasks(filter)
+		return reloadMsg(tasks)
+	}
+}
+
+func (m Model) unarchiveTaskCmd(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		actor := m.client.Actor()
+		if actor == "" {
+			actor = git.GetAuthor()
+		}
+		_, err := m.client.UnarchiveTask(taskID, actor, "Unarchived via TUI")
+		if err != nil {
+			return errMsg(err)
+		}
+		filter := domain.TaskFilter{
+			Scope:           m.scope,
+			RepoPath:        m.repoPath,
+			Search:          m.filterText,
+			IncludeArchived: m.showArchived,
+		}
+		tasks, _ := m.client.ListTasks(filter)
+		return reloadMsg(tasks)
+	}
+}
+
+func (m Model) batchArchiveCmd(ids []string, archive bool) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		actor := m.client.Actor()
+		if actor == "" {
+			actor = git.GetAuthor()
+		}
+		for _, id := range ids {
+			if archive {
+				_, _ = m.client.ArchiveTask(id, actor, "Archived via TUI batch")
+			} else {
+				_, _ = m.client.UnarchiveTask(id, actor, "Unarchived via TUI batch")
+			}
+		}
+		filter := domain.TaskFilter{
+			Scope:           m.scope,
+			RepoPath:        m.repoPath,
+			Search:          m.filterText,
+			IncludeArchived: m.showArchived,
 		}
 		tasks, _ := m.client.ListTasks(filter)
 		return reloadMsg(tasks)
@@ -1704,8 +2392,29 @@ func (m Model) View() string {
 	theme := m.theme
 
 	// 1. Header
-	openCount, progCount, doneCount := 0, 0, 0
+	openCount, progCount, doneCount, orphanCount, archivedCount := 0, 0, 0, 0, 0
 	for _, t := range m.tasks {
+		if t.IsArchived() {
+			archivedCount++
+			continue
+		}
+
+		// A task is orphaned if: t.IsOrphaned() or has tag 'orphaned' (and !t.IsArchived()).
+		isOrphan := false
+		if t.IsOrphaned() {
+			isOrphan = true
+		} else {
+			for _, tag := range t.Tags {
+				if strings.EqualFold(tag, "orphaned") {
+					isOrphan = true
+					break
+				}
+			}
+		}
+		if isOrphan {
+			orphanCount++
+		}
+
 		switch t.Status {
 		case domain.StatusOpen:
 			openCount++
@@ -1724,14 +2433,28 @@ func (m Model) View() string {
 		scopeBadge = theme.ScopeLocal.Render("[local]")
 	}
 
-	countsLabel := fmt.Sprintf("%s │ %s │ %s",
+	var orphanLabel string
+	if orphanCount > 0 {
+		orphanLabel = theme.CountOrphaned.Render(fmt.Sprintf("%d Orphaned", orphanCount))
+	} else {
+		orphanLabel = theme.CountOrphanedZero.Render("0 Orphaned")
+	}
+
+	countsLabel := fmt.Sprintf("%s │ %s │ %s │ %s",
 		theme.CountOpen.Render(fmt.Sprintf("%d Open", openCount)),
 		theme.CountProg.Render(fmt.Sprintf("%d Active", progCount)),
 		theme.CountDone.Render(fmt.Sprintf("%d Done", doneCount)),
+		orphanLabel,
 	)
+	if m.showArchived || archivedCount > 0 {
+		countsLabel += fmt.Sprintf(" │ %s", theme.CountArchived.Render(fmt.Sprintf("%d Archived", archivedCount)))
+	}
 	modeBadge := ""
 	if m.treeViewMode {
 		modeBadge = "  ─  " + theme.ModalTitle.Render("[TREE MODE (t)]")
+	}
+	if m.showArchived {
+		modeBadge += "  ─  " + theme.ArchiveBadge.Render("[ARCHIVE VIEW]")
 	}
 	headerText := fmt.Sprintf("%s %s%s  ─  %s", titleStyle.Render("tk: task_cli"), scopeBadge, modeBadge, countsLabel)
 	if m.isSearch {
@@ -1752,6 +2475,9 @@ func (m Model) View() string {
 	}
 	if m.isLinking {
 		return m.overlayModalString(rawView, m.renderLinkModal(width, height))
+	}
+	if m.isTagging {
+		return m.overlayModalString(rawView, m.renderTagModal(width, height))
 	}
 	return rawView
 }
@@ -2454,6 +3180,52 @@ func (m Model) renderLinkModal(termWidth, termHeight int) string {
 	return theme.ModalBox.Width(boxWidth).Render(inner)
 }
 
+func (m Model) renderTagModal(termWidth, termHeight int) string {
+	theme := m.theme
+	boxWidth := 56
+	if termWidth > 0 && termWidth-6 < boxWidth {
+		boxWidth = termWidth - 6
+	}
+	if boxWidth < 36 {
+		boxWidth = 36
+	}
+
+	contentWidth := boxWidth - 4
+	var lines []string
+
+	titleStr := theme.ModalTitle.Render(" QUICK TAG TASK ")
+	lines = append(lines, titleStr)
+	lines = append(lines, "")
+
+	var promptStr string
+	if m.tagTaskID != "" {
+		promptStr = fmt.Sprintf("Add or toggle tag for task %s:", m.tagTaskID)
+	} else {
+		promptStr = fmt.Sprintf("Add tag for %d selected tasks:", len(m.selected))
+	}
+	for _, pw := range wrapText(promptStr, contentWidth, "") {
+		lines = append(lines, theme.ModalPrompt.Render(pw))
+	}
+	lines = append(lines, "")
+
+	inputStr := fmt.Sprintf("  Tag: %s_", m.tagInput)
+	lines = append(lines, theme.SearchPrompt.Render(inputStr))
+	lines = append(lines, "")
+
+	hint := "Type tag name to add (or toggle off if already present)."
+	for _, hw := range wrapText(hint, contentWidth, "") {
+		lines = append(lines, theme.ModalDesc.Render(hw))
+	}
+	lines = append(lines, "")
+
+	confirmKey := theme.ModalKey.Render("[Enter]") + " " + theme.ModalPrompt.Render("Apply")
+	cancelKey := theme.ModalCancel.Render("[Esc]") + " " + theme.ModalPrompt.Render("Cancel")
+	lines = append(lines, fmt.Sprintf("%s    %s", confirmKey, cancelKey))
+
+	inner := strings.Join(lines, "\n")
+	return theme.ModalBox.Width(boxWidth).Render(inner)
+}
+
 func (m Model) overlayModal(bg string, dlg *ConfirmDialog) string {
 	width := m.width
 	if width <= 0 {
@@ -2558,252 +3330,213 @@ func (m Model) renderFooter(width int) string {
 		return theme.FooterKey.Render("["+k+"]") + " " + theme.FooterDesc.Render(action)
 	}
 
+	chordBadge := ""
+	if m.chordBuffer != "" {
+		chordBadge = theme.BatchBadge.Render(fmt.Sprintf("Chord: %s", m.chordBuffer))
+	}
+
 	undoKey := ""
 	if len(m.undoStack) > 0 {
 		undoKey = theme.ModalKey.Render("[u] Undo")
 	}
 
+	maxContentWidth := width - 2
+	if maxContentWidth < 10 {
+		maxContentWidth = width
+	}
+
+	var prefixParts []string
+	if chordBadge != "" {
+		prefixParts = append(prefixParts, chordBadge)
+	}
+	if m.statusMsg != "" {
+		maxStatusLen := 20
+		if width < 80 {
+			maxStatusLen = 12
+		}
+		prefixParts = append(prefixParts, theme.FooterStatus.Render("["+truncateToWidth(m.statusMsg, maxStatusLen)+"]"))
+	}
+
+	prefix := ""
+	if len(prefixParts) > 0 {
+		prefix = strings.Join(prefixParts, " ") + "  "
+	}
+
+	var candidateKeys []string
+
 	if len(m.selected) > 0 {
 		selCount := len(m.selected)
-		selBadge := theme.BatchBadge.Render(fmt.Sprintf("%d selected", selCount))
-		var keys []string
-		if width >= 115 {
-			keys = []string{
-				selBadge,
-				theme.CountDone.Render(fmt.Sprintf("[d] Done (%d)", selCount)),
-				theme.CountProg.Render(fmt.Sprintf("[s] Status (%d)", selCount)),
-				theme.CountOpen.Render(fmt.Sprintf("[a] Claim (%d)", selCount)),
-				theme.DiffSub.Render(fmt.Sprintf("[x] Del (%d)", selCount)),
-			}
-			if undoKey != "" {
-				keys = append(keys, undoKey)
-			}
-			keys = append(keys,
-				key("Space", "Toggle"),
-				key("V", "All"),
-				theme.FilterIndicator.Render("[Esc] Clear"),
-				theme.Age.Render("[q] Quit"),
-			)
-		} else if width >= 80 {
-			keys = []string{
-				selBadge,
-				theme.CountDone.Render(fmt.Sprintf("[d] Done(%d)", selCount)),
-				theme.CountProg.Render(fmt.Sprintf("[s] Status(%d)", selCount)),
-				theme.DiffSub.Render(fmt.Sprintf("[x] Del(%d)", selCount)),
-			}
-			if undoKey != "" {
-				keys = append(keys, undoKey)
-			}
-			keys = append(keys,
-				key("Space", "Tgl"),
-				theme.FilterIndicator.Render("[Esc]"),
-				theme.Age.Render("[q]"),
-			)
-		} else {
-			keys = []string{
-				selBadge,
-				theme.CountDone.Render(fmt.Sprintf("[d](%d)", selCount)),
-				theme.DiffSub.Render(fmt.Sprintf("[x](%d)", selCount)),
-			}
-			if undoKey != "" {
-				keys = append(keys, undoKey)
-			}
-			keys = append(keys,
-				theme.FilterIndicator.Render("[Esc]"),
-				theme.Age.Render("[q]"),
-			)
+		selBadge := theme.BatchBadge.Render(fmt.Sprintf("%d sel", selCount))
+		candidateKeys = []string{
+			selBadge,
+			theme.CountDone.Render(fmt.Sprintf("[d] Done(%d)", selCount)),
+			theme.CountProg.Render(fmt.Sprintf("[s] Prog(%d)", selCount)),
+			theme.CountOpen.Render(fmt.Sprintf("[a] Claim(%d)", selCount)),
+			theme.CountArchived.Render(fmt.Sprintf("[A] Arc(%d)", selCount)),
+			theme.DiffSub.Render(fmt.Sprintf("[x] Del(%d)", selCount)),
 		}
-		footerText := strings.Join(keys, "  ")
-		if m.statusMsg != "" {
-			footerText = theme.FooterStatus.Render("["+m.statusMsg+"]") + "  " + footerText
-		}
-		return theme.FooterBg.Width(width).Render(footerText)
-	}
-
-	doneLabel := theme.CountProg.Render("[d] Done")
-	statusLabel := theme.CountOpen.Render("[s] In Prog")
-	if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-		switch m.tasks[m.cursor].Status {
-		case domain.StatusDone, domain.StatusClosed:
-			doneLabel = theme.CountDone.Render("[d] Reopen")
-			statusLabel = theme.CountProg.Render("[s] In Prog")
-		case domain.StatusInProgress:
-			doneLabel = theme.CountProg.Render("[d] Done")
-			statusLabel = theme.CountOpen.Render("[s] Open")
-		default: // open
-			doneLabel = theme.CountDone.Render("[d] Done")
-			statusLabel = theme.CountProg.Render("[s] In Prog")
-		}
-	}
-
-	treeLabel := key("t", "Tree")
-	if m.treeViewMode {
-		treeLabel = theme.ModalKey.Render("[t] List")
-	}
-	linkLabel := key("L", "Link")
-	splitLabel := ""
-	if m.isSplitView() {
-		splitLabel = key("<>", "Split")
-	}
-
-	if m.activePane == PaneDetail {
-		var keys []string
-		if width >= 115 {
-			keys = []string{
-				theme.BatchBadge.Render("DETAILS PANE"),
-				key("j/k", "Scroll"),
-				key("Ctrl+D/U", "Page"),
-				key("g/G", "Top/Bottom"),
-				key("Tab/h", "Tasks List"),
-			}
-			if splitLabel != "" {
-				keys = append(keys, splitLabel)
-			}
-			keys = append(keys,
-				key("Enter", "Diff"),
-				linkLabel,
-				doneLabel,
-				statusLabel,
-				theme.DiffSub.Render("[x] Del"),
-			)
-			if undoKey != "" {
-				keys = append(keys, undoKey)
-			}
-			keys = append(keys, theme.Age.Render("[q] Quit"))
-		} else if width >= 80 {
-			keys = []string{
-				theme.BatchBadge.Render("DETAILS"),
-				key("j/k", "Scroll"),
-				key("Tab", "Tasks"),
-			}
-			if splitLabel != "" {
-				keys = append(keys, splitLabel)
-			}
-			keys = append(keys,
-				key("Enter", "Diff"),
-				linkLabel,
-				doneLabel,
-				statusLabel,
-			)
-			if undoKey != "" {
-				keys = append(keys, undoKey)
-			}
-			keys = append(keys, theme.Age.Render("[q]"))
-		} else {
-			keys = []string{
-				theme.BatchBadge.Render("DET"),
-				key("j/k", "Scroll"),
-				key("Tab", "Back"),
-			}
-			if undoKey != "" {
-				keys = append(keys, undoKey)
-			}
-			keys = append(keys, theme.Age.Render("[q]"))
-		}
-		footerText := strings.Join(keys, "  ")
-		if m.statusMsg != "" {
-			footerText = theme.FooterStatus.Render("["+m.statusMsg+"]") + "  " + footerText
-		}
-		return theme.FooterBg.Width(width).Render(footerText)
-	}
-
-	var keys []string
-	if width >= 120 {
-		keys = []string{
-			key("j/k", "Move"),
-			key("Tab/l", "Details"),
-		}
-		if splitLabel != "" {
-			keys = append(keys, splitLabel)
-		}
-		keys = append(keys,
-			treeLabel,
-			linkLabel,
-			key("Space", "Sel"),
-			key("n", "New"),
-			key("e", "Edit"),
-			key("a", "Claim"),
-			doneLabel,
-			statusLabel,
-			theme.DiffSub.Render("[x]")+" "+theme.FooterDesc.Render("Del"),
-		)
 		if undoKey != "" {
-			keys = append(keys, undoKey)
+			candidateKeys = append(candidateKeys, undoKey)
 		}
-		keys = append(keys,
-			key("Enter", "Diff"),
-			key("/", "Search"),
-			theme.FilterIndicator.Render("[Esc]")+" "+theme.FooterDesc.Render("Clear"),
-			key("S", "Scope"),
-			key("r", "Refresh"),
+		candidateKeys = append(candidateKeys,
+			key("m", fmt.Sprintf("Tag(%d)", selCount)),
+			key("Space", "Sel"),
+			theme.FilterIndicator.Render("[Esc] Clear"),
 			theme.Age.Render("[q] Quit"),
 		)
-	} else if width >= 90 {
-		keys = []string{
-			key("j/k", "Move"),
-			key("Tab/l", "Details"),
+	} else if m.activePane == PaneDetail {
+		curTask := m.currentTask()
+		doneLabel := theme.CountProg.Render("[d] Done")
+		statusLabel := theme.CountOpen.Render("[s] Prog")
+		archiveLabel := theme.CountArchived.Render("[A] Arc")
+		if curTask != nil {
+			if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
+				doneLabel = theme.CountDone.Render("[d] Reopen")
+			}
+			if curTask.Status == domain.StatusInProgress {
+				statusLabel = theme.CountOpen.Render("[s] Open")
+			}
+			if curTask.IsArchived() {
+				archiveLabel = theme.CountArchived.Render("[A] Unarc")
+			}
 		}
-		if splitLabel != "" {
-			keys = append(keys, splitLabel)
+		candidateKeys = []string{
+			theme.BatchBadge.Render("DET"),
+			key("j/k", "Scroll"),
+			key("Tab", "Tasks"),
 		}
-		keys = append(keys,
-			treeLabel,
-			linkLabel,
-			key("Space", "Sel"),
-			key("n", "New"),
-			key("e", "Edit"),
-			key("a", "Claim"),
+		if m.isSplitView() {
+			candidateKeys = append(candidateKeys, key("<>", "Split"))
+		}
+		candidateKeys = append(candidateKeys,
+			key("Enter", "Diff"),
 			doneLabel,
 			statusLabel,
+			archiveLabel,
 			theme.DiffSub.Render("[x] Del"),
 		)
 		if undoKey != "" {
-			keys = append(keys, undoKey)
+			candidateKeys = append(candidateKeys, undoKey)
 		}
-		keys = append(keys,
-			key("Enter", "Diff"),
-			key("/", "Search"),
-			key("S", "Scope"),
-			theme.Age.Render("[q] Quit"),
-		)
-	} else if width >= 70 {
-		keys = []string{
-			key("j/k", "Nav"),
-			key("n", "New"),
-			key("e", "Edit"),
-			key("a", "Claim"),
-			doneLabel,
-			key("x", "Del"),
-		}
-		if undoKey != "" {
-			keys = append(keys, undoKey)
-		}
-		keys = append(keys,
-			key("/", "Find"),
+		candidateKeys = append(candidateKeys,
+			key("L", "Link"),
+			key("m", "Tag"),
 			theme.Age.Render("[q] Quit"),
 		)
 	} else {
-		// Ultra-compact footer for narrow/split terminal panes (< 70 cols)
-		keys = []string{
-			key("j/k", "Nav"),
-			key("a", "Claim"),
-			doneLabel,
-			key("x", "Del"),
+		// List Pane (Normal mode)
+		curTask := m.currentTask()
+		doneLabel := theme.CountProg.Render("[d] Done")
+		statusLabel := theme.CountOpen.Render("[s] Prog")
+		archiveLabel := theme.CountArchived.Render("[A] Arc")
+		if curTask != nil {
+			if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
+				doneLabel = theme.CountDone.Render("[d] Reopen")
+			}
+			if curTask.Status == domain.StatusInProgress {
+				statusLabel = theme.CountOpen.Render("[s] Open")
+			}
+			if curTask.IsArchived() {
+				archiveLabel = theme.CountArchived.Render("[A] Unarc")
+			}
 		}
-		if undoKey != "" {
-			keys = append(keys, undoKey)
+
+		treeLabel := key("t", "Tree")
+		if m.treeViewMode {
+			treeLabel = theme.ModalKey.Render("[t] List")
 		}
-		keys = append(keys,
-			key("/", "Find"),
-			theme.Age.Render("[q]"),
-		)
+
+		if width >= 120 {
+			candidateKeys = []string{
+				key("j/k", "Nav"),
+				key("Tab", "Det"),
+			}
+			if m.isSplitView() {
+				candidateKeys = append(candidateKeys, key("<>", "Split"))
+			}
+			candidateKeys = append(candidateKeys,
+				treeLabel,
+				key("L", "Link"),
+				key("Space", "Sel"),
+				key("n", "New"),
+				key("e", "Edit"),
+				key("a", "Claim"),
+				doneLabel,
+				statusLabel,
+				archiveLabel,
+				theme.DiffSub.Render("[x] Del"),
+			)
+			if undoKey != "" {
+				candidateKeys = append(candidateKeys, undoKey)
+			}
+			candidateKeys = append(candidateKeys,
+				key("/", "Find"),
+				theme.Age.Render("[q] Quit"),
+			)
+		} else if width >= 80 {
+			candidateKeys = []string{
+				key("j/k", "Nav"),
+				key("Tab", "Det"),
+				key("Space", "Sel"),
+				key("n", "New"),
+				key("e", "Edit"),
+				key("a", "Claim"),
+				doneLabel,
+				statusLabel,
+				archiveLabel,
+				theme.DiffSub.Render("[x] Del"),
+			}
+			if undoKey != "" {
+				candidateKeys = append(candidateKeys, undoKey)
+			}
+			candidateKeys = append(candidateKeys,
+				key("/", "Find"),
+				theme.Age.Render("[q] Quit"),
+			)
+		} else {
+			// Ultra-compact footer for narrow screens (< 80 cols)
+			candidateKeys = []string{
+				key("j/k", "Nav"),
+				key("a", "Claim"),
+				doneLabel,
+				archiveLabel,
+				theme.DiffSub.Render("[x] Del"),
+			}
+			if undoKey != "" {
+				candidateKeys = append(candidateKeys, undoKey)
+			}
+			candidateKeys = append(candidateKeys,
+				key("/", "Find"),
+				theme.Age.Render("[q]"),
+			)
+		}
 	}
 
-	footerText := strings.Join(keys, "  ")
-	if m.statusMsg != "" {
-		footerText = theme.FooterStatus.Render("["+m.statusMsg+"]") + "  " + footerText
+	currentWidth := lipgloss.Width(prefix)
+	var activeKeys []string
+	for _, k := range candidateKeys {
+		kW := lipgloss.Width(k)
+		sepW := 0
+		if len(activeKeys) > 0 {
+			sepW = 2
+		}
+		if currentWidth+sepW+kW <= maxContentWidth {
+			activeKeys = append(activeKeys, k)
+			currentWidth += sepW + kW
+		} else {
+			break
+		}
 	}
-	return theme.FooterBg.Width(width).Render(footerText)
+
+	line := prefix + strings.Join(activeKeys, "  ")
+	if lipgloss.Width(line) > maxContentWidth {
+		line = truncateToWidth(line, maxContentWidth)
+	}
+	rendered := theme.FooterBg.Width(width).Render(line)
+	if strings.Contains(rendered, "\n") {
+		rendered = strings.Split(rendered, "\n")[0]
+	}
+	return rendered
 }
 
 func timeAgo(t time.Time) string {

@@ -48,6 +48,10 @@ type Theme struct {
 	CountOpen        lipgloss.Style
 	CountProg        lipgloss.Style
 	CountDone        lipgloss.Style
+	CountOrphaned    lipgloss.Style
+	CountOrphanedZero lipgloss.Style
+	CountArchived    lipgloss.Style
+	ArchiveBadge     lipgloss.Style
 	SearchPrompt     lipgloss.Style
 	FilterIndicator  lipgloss.Style
 	ColHeader        lipgloss.Style
@@ -118,6 +122,23 @@ func NewKanagawaTheme() Theme {
 		CountDone: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color(DragonGreen)),
+
+		CountOrphaned: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(SurimiOrange)),
+
+		CountOrphanedZero: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(DragonGray3)),
+
+		CountArchived: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(DragonYellow)),
+
+		ArchiveBadge: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(DragonBlack0)).
+			Background(lipgloss.Color(SurimiOrange)).
+			Padding(0, 1),
 
 		SearchPrompt: lipgloss.NewStyle().
 			Bold(true).
@@ -282,6 +303,8 @@ func StatusStyle(s domain.Status) lipgloss.Style {
 		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(DragonGreen))
 	case domain.StatusClosed:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(FujiGray))
+	case domain.StatusArchived:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(DragonGray3))
 	default:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(DragonWhite))
 	}

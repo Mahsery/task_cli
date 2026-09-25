@@ -342,8 +342,8 @@ func TestTUIDualPaneNavigation(t *testing.T) {
 	if m.activePane != PaneDetail {
 		t.Errorf("Expected activePane to be PaneDetail after Tab, got %v", m.activePane)
 	}
-	if !strings.Contains(m.statusMsg, "Details pane") {
-		t.Errorf("Expected statusMsg to mention Details pane, got %q", m.statusMsg)
+	if !strings.Contains(m.statusMsg, "Details") {
+		t.Errorf("Expected statusMsg to mention Details, got %q", m.statusMsg)
 	}
 
 	// 3. Tab toggles back to PaneList
@@ -632,41 +632,38 @@ func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
 		t.Errorf("Expected statusMsg 'Action cancelled', got %q", m.statusMsg)
 	}
 
-	// 2. Test 'd' (Done) on open task opens ConfirmDone dialog
+	// 2. Test 'd' (Done) on open task is immediate without confirmation modal
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
-	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmDone {
-		t.Fatalf("Expected confirmDialog of kind ConfirmDone, got %+v", m.confirmDialog)
-	}
-	// Cancel with esc
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = updated.(Model)
 	if m.confirmDialog != nil {
-		t.Errorf("Expected confirmDialog to be nil after esc, got %+v", m.confirmDialog)
+		t.Fatalf("Expected NO confirmDialog for single-key 'd', got %+v", m.confirmDialog)
+	}
+	if m.tasks[0].Status != domain.StatusDone {
+		t.Errorf("Expected T-1 status to be Done immediately, got %s", m.tasks[0].Status)
 	}
 
-	// 2b. Move to T-3 (Done task) and test 'd' triggers ConfirmReopen
+	// 2b. Move to T-3 (Done task) and test 'd' reopens immediately without modal
 	m.cursor = 2
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(Model)
-	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmReopen {
-		t.Fatalf("Expected confirmDialog of kind ConfirmReopen on done task, got %+v", m.confirmDialog)
+	if m.confirmDialog != nil {
+		t.Fatalf("Expected NO confirmDialog for single-key 'd' reopen, got %+v", m.confirmDialog)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	m = updated.(Model)
+	if m.tasks[2].Status != domain.StatusOpen {
+		t.Errorf("Expected T-3 status to be Open immediately, got %s", m.tasks[2].Status)
+	}
 
-	// 3. Test 's' (Status toggle) opens ConfirmStatus dialog
+	// 3. Test 's' (Status toggle) is immediate without confirmation modal
 	m.cursor = 0
+	m.tasks[0].Status = domain.StatusOpen
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	m = updated.(Model)
-	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmStatus {
-		t.Fatalf("Expected confirmDialog of kind ConfirmStatus, got %+v", m.confirmDialog)
+	if m.confirmDialog != nil {
+		t.Fatalf("Expected NO confirmDialog for single-key 's', got %+v", m.confirmDialog)
 	}
-	if m.confirmDialog.TargetStatus != domain.StatusInProgress {
-		t.Errorf("Expected target status InProgress, got %s", m.confirmDialog.TargetStatus)
+	if m.tasks[0].Status != domain.StatusInProgress {
+		t.Errorf("Expected target status InProgress immediately, got %s", m.tasks[0].Status)
 	}
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	m = updated.(Model)
 
 	// 4. Test 'a' (Claim) opens ConfirmClaim dialog
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
@@ -1092,8 +1089,8 @@ func TestTUISplitResizingKeys(t *testing.T) {
 	if tableW1 <= tableWInit {
 		t.Fatalf("expected table width %d to be greater than initial %d", tableW1, tableWInit)
 	}
-	if !strings.Contains(m.statusMsg, "Split resized") {
-		t.Fatalf("expected 'Split resized' status, got %q", m.statusMsg)
+	if m.statusMsg != "" {
+		t.Fatalf("expected statusMsg to be empty on split resize, got %q", m.statusMsg)
 	}
 
 	// 2. Press '.' to widen further
@@ -1119,6 +1116,94 @@ func TestTUISplitResizingKeys(t *testing.T) {
 	detWReset, _ := m.getDetailDimensions()
 	if detWReset != detWInit {
 		t.Fatalf("expected detail width %d to match initial %d after reset", detWReset, detWInit)
+	}
+}
+
+func TestTUIMouseSplitDragging(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task 1", Status: domain.StatusOpen, Priority: domain.PriorityNormal, CreatedAt: time.Now()},
+		{ID: "T-2", Title: "Task 2", Status: domain.StatusOpen, Priority: domain.PriorityNormal, CreatedAt: time.Now()},
+	}
+
+	m := Model{
+		tasks:      tasks,
+		cursor:     0,
+		width:      120,
+		height:     30,
+		theme:      NewKanagawaTheme(),
+		activePane: PaneList,
+	}
+
+	detW, _ := m.getDetailDimensions()
+	tableW := 120 - detW - 1 // divider is at tableW
+
+	// 1. Mouse press on divider (tableW)
+	up, _ := m.Update(tea.MouseMsg{
+		X:      tableW,
+		Y:      10,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	m = up.(Model)
+	if !m.isDraggingSplit {
+		t.Fatalf("expected isDraggingSplit to be true after pressing divider")
+	}
+
+	// 2. Drag divider to X = tableW + 15
+	targetX := tableW + 15
+	up, _ = m.Update(tea.MouseMsg{
+		X:      targetX,
+		Y:      10,
+		Action: tea.MouseActionMotion,
+		Button: tea.MouseButtonLeft,
+	})
+	m = up.(Model)
+	detWDragged, _ := m.getDetailDimensions()
+	tableWDragged := 120 - detWDragged - 1
+	if tableWDragged != targetX {
+		t.Fatalf("expected dragged table width %d to match targetX %d", tableWDragged, targetX)
+	}
+	if m.statusMsg != "" {
+		t.Fatalf("expected statusMsg to be empty on split drag, got %q", m.statusMsg)
+	}
+
+	// 3. Mouse release
+	up, _ = m.Update(tea.MouseMsg{
+		X:      targetX,
+		Y:      10,
+		Action: tea.MouseActionRelease,
+		Button: tea.MouseButtonLeft,
+	})
+	m = up.(Model)
+	if m.isDraggingSplit {
+		t.Fatalf("expected isDraggingSplit to be false after release")
+	}
+
+	// 4. Click left to focus list and select task 2 (row 1, Y = 4)
+	up, _ = m.Update(tea.MouseMsg{
+		X:      10,
+		Y:      4,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	m = up.(Model)
+	if m.activePane != PaneList {
+		t.Fatalf("expected activePane to be PaneList after clicking left pane")
+	}
+	if m.cursor != 1 {
+		t.Fatalf("expected cursor to be 1 after clicking second task, got %d", m.cursor)
+	}
+
+	// 5. Click right to focus detail pane
+	up, _ = m.Update(tea.MouseMsg{
+		X:      tableWDragged + 10,
+		Y:      10,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	m = up.(Model)
+	if m.activePane != PaneDetail {
+		t.Fatalf("expected activePane to be PaneDetail after clicking right pane")
 	}
 }
 
@@ -1165,6 +1250,216 @@ func TestTUIDeepTreeViewNoCorruptRunesAndAlignment(t *testing.T) {
 	// 4. Verify footer contains [<>] Split hint
 	if !strings.Contains(viewOut, "Split") {
 		t.Fatalf("rendered footer missing [<>] Split hint:\n%s", viewOut)
+	}
+}
+
+func TestTUIVimMovementChords(t *testing.T) {
+	// Create 30 tasks to test 15-line movements
+	var tasks []*domain.Task
+	for i := 1; i <= 30; i++ {
+		tasks = append(tasks, &domain.Task{
+			ID:       fmt.Sprintf("T-%d", i),
+			Title:    fmt.Sprintf("Task Number %d", i),
+			Status:   domain.StatusOpen,
+			Priority: domain.PriorityNormal,
+		})
+	}
+
+	m := Model{
+		tasks:     tasks,
+		cursor:    0,
+		width:     120,
+		height:    30,
+		theme:     NewKanagawaTheme(),
+		undoStack: make([]UndoAction, 0),
+	}
+
+	// 1. Vim chord '15': check active chord buffer is displayed in footer
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m = updated.(Model)
+	if m.chordBuffer != "1" {
+		t.Fatalf("Expected chordBuffer '1', got %q", m.chordBuffer)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	m = updated.(Model)
+	if m.chordBuffer != "15" {
+		t.Fatalf("Expected chordBuffer '15', got %q", m.chordBuffer)
+	}
+
+	footer := m.renderFooter(m.width)
+	if !strings.Contains(footer, "Chord: 15") {
+		t.Errorf("Expected footer to display 'Chord: 15', got:\n%s", footer)
+	}
+
+	// 2. Press 'j': Vim chord 15j jumps down 15 lines from cursor 0 -> cursor 15
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = updated.(Model)
+	if m.cursor != 15 {
+		t.Fatalf("Expected cursor 15 after '15j', got %d", m.cursor)
+	}
+	if m.chordBuffer != "" {
+		t.Errorf("Expected chordBuffer to be reset after movement, got %q", m.chordBuffer)
+	}
+
+	// 3. Press '15k': Vim chord 15k jumps up 15 lines from cursor 15 -> cursor 0
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
+	m = updated.(Model)
+	if m.cursor != 0 {
+		t.Fatalf("Expected cursor 0 after '15k', got %d", m.cursor)
+	}
+	if m.chordBuffer != "" {
+		t.Errorf("Expected chordBuffer to be reset after movement, got %q", m.chordBuffer)
+	}
+
+	// 4. Test 15G: 1-indexed jump to line 15 (index 14)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = updated.(Model)
+	if m.cursor != 14 {
+		t.Fatalf("Expected cursor 14 (line 15) after '15G', got %d", m.cursor)
+	}
+
+	// 5. Test G without chord jumps to last line (index 29)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	m = updated.(Model)
+	if m.cursor != 29 {
+		t.Fatalf("Expected cursor 29 (last line) after 'G', got %d", m.cursor)
+	}
+
+	// 6. Test g jumps to top (line 0)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = updated.(Model)
+	if m.cursor != 0 {
+		t.Fatalf("Expected cursor 0 after 'g', got %d", m.cursor)
+	}
+
+	// 7. Test Esc cancels chord
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	m = updated.(Model)
+	if m.chordBuffer != "25" {
+		t.Fatalf("Expected chordBuffer '25', got %q", m.chordBuffer)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.chordBuffer != "" {
+		t.Fatalf("Expected chordBuffer to be empty after Esc, got %q", m.chordBuffer)
+	}
+	if m.statusMsg != "Chord cancelled" {
+		t.Errorf("Expected statusMsg 'Chord cancelled', got %q", m.statusMsg)
+	}
+}
+
+func TestTUISingleKeyActionsAndUndo(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal, Tags: []string{"backend"}},
+		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress, Priority: domain.PriorityHigh},
+	}
+
+	m := Model{
+		tasks:     tasks,
+		cursor:    0,
+		width:     120,
+		height:    30,
+		theme:     NewKanagawaTheme(),
+		undoStack: make([]UndoAction, 0),
+	}
+
+	// 1. Single-key 'd' transitions task to DONE immediately without confirmation modal
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = updated.(Model)
+	if m.confirmDialog != nil {
+		t.Fatalf("Expected NO confirmation modal on pressing 'd', got %+v", m.confirmDialog)
+	}
+	if m.tasks[0].Status != domain.StatusDone {
+		t.Fatalf("Expected task status to be DONE immediately, got %s", m.tasks[0].Status)
+	}
+	if len(m.undoStack) != 1 {
+		t.Fatalf("Expected 1 undo action recorded, got %d", len(m.undoStack))
+	}
+
+	// 2. Undo 'u' reverts single-key 'd' action back to Open
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	m = updated.(Model)
+	if m.tasks[0].Status != domain.StatusOpen {
+		t.Fatalf("Expected task status reverted to OPEN via 'u', got %s", m.tasks[0].Status)
+	}
+	if len(m.undoStack) != 0 {
+		t.Fatalf("Expected empty undoStack after undo, got %d", len(m.undoStack))
+	}
+
+	// 3. Single-key 's' transitions task to IN_PROGRESS immediately without confirmation modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = updated.(Model)
+	if m.confirmDialog != nil {
+		t.Fatalf("Expected NO confirmation modal on pressing 's', got %+v", m.confirmDialog)
+	}
+	if m.tasks[0].Status != domain.StatusInProgress {
+		t.Fatalf("Expected task status to be IN_PROGRESS immediately, got %s", m.tasks[0].Status)
+	}
+	if len(m.undoStack) != 1 {
+		t.Fatalf("Expected 1 undo action recorded for 's', got %d", len(m.undoStack))
+	}
+
+	// 4. Undo 'u' reverts 's' action back to Open
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	m = updated.(Model)
+	if m.tasks[0].Status != domain.StatusOpen {
+		t.Fatalf("Expected task status reverted to OPEN via 'u', got %s", m.tasks[0].Status)
+	}
+	if len(m.undoStack) != 0 {
+		t.Fatalf("Expected empty undoStack after undo, got %d", len(m.undoStack))
+	}
+
+	// 5. Test Quick Tagging with single-key 'm'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
+	m = updated.(Model)
+	if !m.isTagging {
+		t.Fatalf("Expected isTagging to be true after pressing 'm'")
+	}
+	// Type tag "urgent"
+	for _, r := range "urgent" {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = updated.(Model)
+	}
+	// Press Enter to apply tag
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.isTagging {
+		t.Fatalf("Expected isTagging to be false after Enter")
+	}
+	hasTag := false
+	for _, tag := range m.tasks[0].Tags {
+		if tag == "urgent" {
+			hasTag = true
+			break
+		}
+	}
+	if !hasTag {
+		t.Fatalf("Expected task T-1 to have tag 'urgent', got %v", m.tasks[0].Tags)
+	}
+
+	// 6. Undo 'u' reverts quick tag
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	m = updated.(Model)
+	hasTag = false
+	for _, tag := range m.tasks[0].Tags {
+		if tag == "urgent" {
+			hasTag = true
+			break
+		}
+	}
+	if hasTag {
+		t.Fatalf("Expected tag 'urgent' to be reverted via 'u', got %v", m.tasks[0].Tags)
 	}
 }
 

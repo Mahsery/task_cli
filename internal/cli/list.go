@@ -25,6 +25,7 @@ var (
 	listDependsOn string
 	listBlocks    string
 	listOrphaned  bool
+	listArchived  bool
 )
 
 var listCmd = &cobra.Command{
@@ -52,18 +53,20 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 		}
 
 		filter := domain.TaskFilter{
-			Scope:        scope,
-			RepoPath:     repoRoot,
-			Tag:          tagFilter,
-			Assignee:     listAssignee,
-			Search:       listSearch,
-			Sort:         listSort,
-			Limit:        listLimit,
-			OnlyReady:    listReady,
-			OnlyBlocked:  listBlocked,
-			OnlyOrphaned: listOrphaned,
-			DependsOn:    listDependsOn,
-			Blocks:       listBlocks,
+			Scope:           scope,
+			RepoPath:        repoRoot,
+			Tag:             tagFilter,
+			Assignee:        listAssignee,
+			Search:          listSearch,
+			Sort:            listSort,
+			Limit:           listLimit,
+			OnlyReady:       listReady,
+			OnlyBlocked:     listBlocked,
+			OnlyOrphaned:    listOrphaned,
+			OnlyArchived:    listArchived,
+			IncludeArchived: listArchived,
+			DependsOn:       listDependsOn,
+			Blocks:          listBlocks,
 		}
 
 		if listStatus != "" {
@@ -97,6 +100,10 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 			scopeDesc := "local git repository"
 			if scope == "global" {
 				scopeDesc = "global scope"
+			}
+			if listArchived {
+				fmt.Printf("No archived tasks found in %s.\n", scopeDesc)
+				return nil
 			}
 			fmt.Printf("No tasks found in %s.\n\n", scopeDesc)
 			fmt.Println("Get started:")
@@ -140,6 +147,7 @@ func init() {
 	listCmd.Flags().StringVar(&listDependsOn, "depends-on", "", "Alias for --after")
 	listCmd.Flags().StringVar(&listBlocks, "blocks", "", "Show tasks that are prerequisite blockers for the specified task ID")
 	listCmd.Flags().BoolVar(&listOrphaned, "orphaned", false, "Show only tasks marked as orphaned")
+	listCmd.Flags().BoolVar(&listArchived, "archived", false, "Show archived tasks")
 }
 
 func formatAge(t time.Time) string {

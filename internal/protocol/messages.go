@@ -32,6 +32,8 @@ const (
 	ActionOrphanTask     Action = "orphan_task"
 	ActionReapStaleTasks Action = "reap_stale_tasks"
 	ActionTransferTask   Action = "transfer_task"
+	ActionArchiveTask    Action = "task.archive"
+	ActionUnarchiveTask  Action = "task.unarchive"
 )
 
 type Request struct {
@@ -86,21 +88,23 @@ type GetTaskPayload struct {
 }
 
 type ListTasksPayload struct {
-	Scope        string           `json:"scope"`
-	RepoPath     string           `json:"repo_path"`
-	Status       *domain.Status   `json:"status,omitempty"`
-	Priority     *domain.Priority `json:"priority,omitempty"`
-	Tag          string           `json:"tag,omitempty"`
-	Assignee     string           `json:"assignee,omitempty"`
-	Search       string           `json:"search,omitempty"`
-	Sort         string           `json:"sort,omitempty"`
-	Limit        int              `json:"limit,omitempty"`
-	IncludeNotes bool             `json:"include_notes,omitempty"`
-	OnlyReady    bool             `json:"only_ready,omitempty"`
-	OnlyBlocked  bool             `json:"only_blocked,omitempty"`
-	OnlyOrphaned bool             `json:"only_orphaned,omitempty"`
-	DependsOn    string           `json:"depends_on,omitempty"`
-	Blocks       string           `json:"blocks,omitempty"`
+	Scope           string           `json:"scope"`
+	RepoPath        string           `json:"repo_path"`
+	Status          *domain.Status   `json:"status,omitempty"`
+	Priority        *domain.Priority `json:"priority,omitempty"`
+	Tag             string           `json:"tag,omitempty"`
+	Assignee        string           `json:"assignee,omitempty"`
+	Search          string           `json:"search,omitempty"`
+	Sort            string           `json:"sort,omitempty"`
+	Limit           int              `json:"limit,omitempty"`
+	IncludeNotes    bool             `json:"include_notes,omitempty"`
+	OnlyReady       bool             `json:"only_ready,omitempty"`
+	OnlyBlocked     bool             `json:"only_blocked,omitempty"`
+	OnlyOrphaned    bool             `json:"only_orphaned,omitempty"`
+	IncludeArchived bool             `json:"include_archived,omitempty"`
+	OnlyArchived    bool             `json:"only_archived,omitempty"`
+	DependsOn       string           `json:"depends_on,omitempty"`
+	Blocks          string           `json:"blocks,omitempty"`
 }
 
 type DeleteTaskPayload struct {
@@ -209,5 +213,17 @@ type TransferTaskPayload struct {
 	Note        string `json:"note,omitempty"`
 	Actor       string `json:"actor,omitempty"`
 	Force       bool   `json:"force,omitempty"`
+}
+
+type ArchiveTaskPayload struct {
+	ID     string `json:"id"`
+	Actor  string `json:"actor,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type UnarchiveTaskPayload struct {
+	ID     string `json:"id"`
+	Actor  string `json:"actor,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 

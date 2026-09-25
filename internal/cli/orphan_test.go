@@ -15,7 +15,7 @@ func TestOrphanCommandRegistration(t *testing.T) {
 		t.Errorf("expected command name orphan, got %s", cmd.Name())
 	}
 
-	flags := []string{"older-than", "message", "actor", "dry-run", "all", "list"}
+	flags := []string{"older-than", "message", "actor", "dry-run", "all", "list", "backport"}
 	for _, f := range flags {
 		if cmd.Flags().Lookup(f) == nil {
 			t.Errorf("expected --%s flag on orphan command", f)
@@ -45,10 +45,48 @@ func TestOrphanCommandRegistration(t *testing.T) {
 		t.Errorf("expected 'orphan list' subcommand, got %v", listCmdSub)
 	}
 
+	backportCmdSub, _, err := RootCmd.Find([]string{"orphan", "backport"})
+	if err != nil || backportCmdSub == nil || backportCmdSub.Name() != "backport" {
+		t.Errorf("expected 'orphan backport' subcommand, got %v", backportCmdSub)
+	}
+
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	if err := cmd.Help(); err != nil {
 		t.Fatalf("failed to render orphan help: %v", err)
+	}
+}
+
+func TestOrphanBackportCommand(t *testing.T) {
+	cmd, _, err := RootCmd.Find([]string{"orphan", "backport"})
+	if err != nil || cmd == nil {
+		t.Fatalf("orphan backport command not registered: %v", err)
+	}
+
+	if cmd.Name() != "backport" {
+		t.Errorf("expected command name backport, got %s", cmd.Name())
+	}
+
+	flags := []string{"older-than", "message", "actor", "dry-run"}
+	for _, f := range flags {
+		if cmd.Flags().Lookup(f) == nil {
+			t.Errorf("expected --%s flag on orphan backport command", f)
+		}
+	}
+
+	olderThanFlag := cmd.Flags().Lookup("older-than")
+	if olderThanFlag == nil || olderThanFlag.DefValue != "1h" {
+		t.Errorf("expected --older-than default '1h', got %v", olderThanFlag)
+	}
+
+	if cmd.Flags().ShorthandLookup("m") == nil {
+		t.Error("expected -m shorthand on orphan backport command")
+	}
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	if err := cmd.Help(); err != nil {
+		t.Fatalf("failed to render orphan backport help: %v", err)
 	}
 }
 
