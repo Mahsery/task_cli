@@ -179,10 +179,11 @@ type BackupVerifyPayload struct {
 }
 
 type BackupInfo struct {
-	Name    string    `json:"name"`
-	Path    string    `json:"path"`
-	Size    int64     `json:"size"`
-	ModTime time.Time `json:"mod_time"`
+	Name     string    `json:"name"`
+	Path     string    `json:"path"`
+	Size     int64     `json:"size"`
+	ModTime  time.Time `json:"mod_time"`
+	Location string    `json:"location,omitempty"` // "local" or "central"
 }
 
 type OrphanTaskPayload struct {

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -81,4 +83,19 @@ func (c *Config) GlobalDBPath() string {
 
 func (c *Config) LocalDBPath(repoRoot string) string {
 	return filepath.Join(repoRoot, ".tasks", "tasks.db")
+}
+
+// CentralBackupDir returns the repository-scoped or global backup directory in the central user data store.
+func (c *Config) CentralBackupDir(repoPath string) string {
+	if repoPath == "" {
+		return filepath.Join(c.GlobalDir, "backups", "global")
+	}
+	clean := filepath.Clean(repoPath)
+	base := filepath.Base(clean)
+	if base == "" || base == "/" || base == "." {
+		base = "root"
+	}
+	h := sha256.Sum256([]byte(clean))
+	slug := fmt.Sprintf("%s-%x", base, h[:6])
+	return filepath.Join(c.GlobalDir, "backups", "repos", slug)
 }

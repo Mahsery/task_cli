@@ -104,9 +104,11 @@ tk
 | `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit] [-f/--force]` | Mark task done; enforces prerequisite completion check (override with `-f`) | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 -f` |
 | `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
 | `tk delete` | `rm` | `<id> [-y/--yes] [--force]` | Remove a task to the tombstone archive (prompts unless `-y` or `--force`) | `tk delete T-1`<br>`tk delete -y T-1`<br>`tk rm --force G-4` |
-| `tk restore` | `undo-delete` | `<id> [-l/--list]` | Restore deleted task from tombstone archive or list recoverable tasks | `tk restore T-1`<br>`tk restore -l` |
-| `tk backup` | — | `[list\|create\|verify\|restore] [-l] [-f]` | Manage atomic SQLite snapshots and disaster recovery | `tk backup -l`<br>`tk backup create`<br>`tk backup verify` |
+| `tk restore` | `undo-delete` | `<id> [-l/--list] [--db] [-f]` | Restore deleted task from tombstone archive, or restore database with `--db` | `tk restore T-1`<br>`tk restore -l`<br>`tk restore --db latest -f` |
+| `tk backup` | `db` | `[list\|create\|verify\|restore] [-l] [-f]` | Manage atomic SQLite snapshots, central backup vault, and disaster recovery | `tk backup -l`<br>`tk backup create`<br>`tk db restore latest -f` |
 | `tk watch` | — | `[--json]` | Stream real-time task lifecycle events from socket daemon | `tk watch`<br>`tk watch --json \| jq .` |
+| `tk daemon start` | — | `[--socket path] [--tcp addr]` | Launch daemon process in the background (detached session) | `tk daemon start` |
+| `tk daemon restart` | — | `[--socket path] [--tcp addr]` | Restart background daemon process | `tk daemon restart` |
 | `tk daemon run` | — | `[--socket path] [--tcp addr]` | Run daemon process in foreground (debugging / headless / remote) | `tk daemon run --tcp 127.0.0.1:4567` |
 | `tk daemon status` | — | — | Ping daemon health and report active socket path | `tk daemon status` |
 | `tk daemon stop` | — | — | Transmit graceful shutdown signal to running daemon | `tk daemon stop` |

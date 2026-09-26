@@ -119,11 +119,34 @@ tk restore -l
 # Restore an accidentally deleted task with full git diff and notes intact
 tk restore <ID>
 
-# Create an atomic rolling backup snapshot
-tk backup create [optional-name]
+# Restore whole database from latest backup (central vault or local)
+tk restore --db
+tk restore --db latest -f
+tk db restore latest -f
+tk backup restore latest -f
 
-# List available point-in-time snapshots
+# Create an atomic rolling backup snapshot (mirrored in central vault)
+tk backup create [optional-name]
+tk db backup [optional-name]
+
+# List available point-in-time snapshots across local & central vaults
 tk backup -l
+tk db list
+```
+
+### Daemon Management
+```bash
+# Start the daemon in the background (detached session)
+tk daemon start
+
+# Restart running daemon in background
+tk daemon restart
+
+# Gracefully stop background daemon
+tk daemon stop
+
+# Check daemon status and socket connectivity
+tk daemon status
 ```
 
 ### Real-Time Monitoring & Automation
@@ -143,6 +166,8 @@ tk backup -l --json
 ## 3. Storage & Backup Safety Invariants
 
 - Repository tasks are persisted in `.tasks/tasks.db` (WAL mode enabled).
-- Backups and atomic snapshots are stored in `.tasks/backups/`.
+- Backups and atomic snapshots are stored both locally in `.tasks/backups/` and mirrored centrally in `~/.local/share/task_cli/backups/repos/<slug>/`.
+- If `.tasks` is accidentally deleted, the running daemon auto-resurrects it to disk from live memory, or restores from the central backup vault if restarting fresh.
+- `tk restore --db` (or `tk db restore`) safely restores repository state from the central vault at any time.
 - Deleted tasks are archived to `task_tombstones` and can be retrieved using `tk restore <ID>`.
-- Never delete or manually overwrite `.tasks/tasks.db` directly. Always use `tk` CLI commands or `tk backup` for state inspection and recovery.
+- Never delete or manually overwrite `.tasks/tasks.db` directly. Always use `tk` CLI commands, `tk db`, or `tk backup` for state inspection and recovery.

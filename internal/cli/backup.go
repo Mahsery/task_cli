@@ -59,12 +59,19 @@ func runBackupList() error {
 		return nil
 	}
 
-	fmt.Printf("%-32s %-10s %-16s %s\n", "BACKUP NAME", "SIZE", "CREATED", "PATH")
-	fmt.Println(strings.Repeat("─", 88))
-	for _, b := range backups {
+	fmt.Printf("%-32s %-10s %-18s %-10s %s\n", "BACKUP NAME", "SIZE", "CREATED", "LOCATION", "PATH")
+	fmt.Println(strings.Repeat("─", 98))
+	for i, b := range backups {
 		sizeStr := formatFileSize(b.Size)
 		ageStr := formatAge(b.ModTime)
-		fmt.Printf("%-32s %-10s %-16s %s\n", b.Name, sizeStr, ageStr, b.Path)
+		if i == 0 {
+			ageStr += " (latest)"
+		}
+		locStr := b.Location
+		if locStr == "" {
+			locStr = "local"
+		}
+		fmt.Printf("%-32s %-10s %-18s %-10s %s\n", b.Name, sizeStr, ageStr, locStr, b.Path)
 	}
 	return nil
 }
@@ -131,54 +138,114 @@ var backupVerifyCmd = &cobra.Command{
 }
 
 var backupRestoreCmd = &cobra.Command{
-	Use:   "restore <backup-file>",
-	Short: "Restore task database from a backup snapshot",
-	Long:  `Safely overwrite the active database with a verified backup snapshot. In interactive mode, a confirmation prompt is displayed unless --force is supplied.`,
-	Example: `  tk backup restore .tasks/backups/snapshot-20260924-120000.db
-  tk backup restore .tasks/backups/snapshot-20260924-120000.db --force`,
-	Args:  cobra.ExactArgs(1),
+	Use:   "restore [backup-file-or-name|latest]",
+	Short: "Restore task database from a backup snapshot (central or local)",
+	Long: `Safely overwrite the active database with a verified backup snapshot.
+If no argument or 'latest' is given, the most recent snapshot across central and local vaults is restored.
+In interactive mode, a confirmation prompt is displayed unless --force is supplied.`,
+	Example: `  tk backup restore latest
+  tk backup restore latest -f
+  tk backup restore snapshot-20260926-074900.db --force
+  tk backup restore .tasks/backups/snapshot-20260924-120000.db`,
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		backupPath := args[0]
-		if !filepath.IsAbs(backupPath) {
-			abs, err := filepath.Abs(backupPath)
-			if err == nil {
+		target := "latest"
+		if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
+			target = args[0]
+		}
+		return RunBackupRestore(target, backupForceRestore)
+	},
+}
+
+func RunBackupRestore(backupPath string, force bool) error {
+	if backupPath == "" {
+		backupPath = "latest"
+	}
+
+	if !filepath.IsAbs(backupPath) && backupPath != "latest" {
+		abs, err := filepath.Abs(backupPath)
+		if err == nil {
+			if stat, err := os.Stat(abs); err == nil && !stat.IsDir() {
 				backupPath = abs
 			}
 		}
+	}
 
-		if !backupForceRestore {
-			if !IsInteractiveTerminal() {
-				return fmt.Errorf("refusing to restore without confirmation in non-interactive environment (use --force)")
-			}
-			fmt.Printf("WARNING: Restoring will overwrite the current %s database with:\n  %s\n", taskClient.Scope, backupPath)
-			fmt.Print("Proceed with restore? [y/N]: ")
-			reader := bufio.NewReader(os.Stdin)
-			text, err := reader.ReadString('\n')
-			if err != nil {
-				return fmt.Errorf("failed to read response: %w", err)
-			}
-			text = strings.ToLower(strings.TrimSpace(text))
-			if text != "y" && text != "yes" {
-				fmt.Println("Restore cancelled.")
-				return nil
-			}
+	if !force {
+		if !IsInteractiveTerminal() {
+			return fmt.Errorf("refusing to restore without confirmation in non-interactive environment (use --force)")
 		}
-
-		msg, err := taskClient.RestoreBackup(backupPath)
+		targetDesc := backupPath
+		if backupPath == "latest" {
+			targetDesc = "the most recent available snapshot (central or local vault)"
+		}
+		fmt.Printf("WARNING: Restoring will overwrite the current %s database with:\n  %s\n", taskClient.Scope, targetDesc)
+		fmt.Print("Proceed with restore? [y/N]: ")
+		reader := bufio.NewReader(os.Stdin)
+		text, err := reader.ReadString('\n')
 		if err != nil {
-			return fmt.Errorf("failed to restore backup: %w", err)
+			return fmt.Errorf("failed to read response: %w", err)
 		}
-
-		if jsonFlag {
-			return outputJSON(map[string]any{
-				"restored": true,
-				"message":  msg,
-			})
+		text = strings.ToLower(strings.TrimSpace(text))
+		if text != "y" && text != "yes" {
+			fmt.Println("Restore cancelled.")
+			return nil
 		}
+	}
 
-		fmt.Println(msg)
-		return nil
+	msg, err := taskClient.RestoreBackup(backupPath)
+	if err != nil {
+		return fmt.Errorf("failed to restore backup: %w", err)
+	}
+
+	if jsonFlag {
+		return outputJSON(map[string]any{
+			"restored": true,
+			"message":  msg,
+		})
+	}
+
+	fmt.Println(msg)
+	return nil
+}
+
+var dbCmd = &cobra.Command{
+	Use:   "db",
+	Short: "Database management, backups, and disaster recovery (alias for tk backup)",
+	Long:  `Inspect, verify, snapshot, and restore the task database from local and central vaults.`,
+	Example: `  tk db restore latest    # Restore database from newest backup
+  tk db list              # List all available snapshots
+  tk db backup            # Create an atomic snapshot`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runBackupList()
 	},
+}
+
+var dbRestoreCmd = &cobra.Command{
+	Use:   "restore [backup-file-or-name|latest]",
+	Short: "Restore task database from a backup snapshot (alias for tk backup restore)",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  backupRestoreCmd.RunE,
+}
+
+var dbBackupCmd = &cobra.Command{
+	Use:   "backup [name]",
+	Short: "Create an atomic point-in-time backup snapshot (alias for tk backup create)",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  backupCreateCmd.RunE,
+}
+
+var dbListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List available database backups (alias for tk backup list)",
+	RunE:  backupListCmd.RunE,
+}
+
+var dbVerifyCmd = &cobra.Command{
+	Use:   "verify [file]",
+	Short: "Verify SQLite database or backup file integrity (alias for tk backup verify)",
+	Args:  cobra.MaximumNArgs(1),
+	RunE:  backupVerifyCmd.RunE,
 }
 
 func formatFileSize(bytes int64) string {
@@ -199,4 +266,13 @@ func init() {
 	backupCmd.AddCommand(backupCreateCmd)
 	backupCmd.AddCommand(backupVerifyCmd)
 	backupCmd.AddCommand(backupRestoreCmd)
+
+	dbRestoreCmd.Flags().BoolVarP(&backupForceRestore, "force", "f", false, "Force restore without interactive confirmation")
+	dbBackupCmd.Flags().IntVar(&backupMaxSnapshots, "keep", 5, "Number of snapshots to retain before pruning")
+
+	dbCmd.AddCommand(dbListCmd)
+	dbCmd.AddCommand(dbBackupCmd)
+	dbCmd.AddCommand(dbVerifyCmd)
+	dbCmd.AddCommand(dbRestoreCmd)
+	RootCmd.AddCommand(dbCmd)
 }

@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,10 +11,11 @@ import (
 )
 
 type BackupMeta struct {
-	Name    string    `json:"name"`
-	Path    string    `json:"path"`
-	Size    int64     `json:"size"`
-	ModTime time.Time `json:"mod_time"`
+	Name     string    `json:"name"`
+	Path     string    `json:"path"`
+	Size     int64     `json:"size"`
+	ModTime  time.Time `json:"mod_time"`
+	Location string    `json:"location,omitempty"`
 }
 
 // Path returns the filesystem path of the database.
@@ -59,18 +61,32 @@ func (d *DB) backupLocked(targetPath string) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
-	_ = os.Remove(targetPath)
 
-	escaped := strings.ReplaceAll(targetPath, "'", "''")
+	tmpTarget := fmt.Sprintf("%s.tmp-%d", targetPath, time.Now().UnixNano())
+	_ = os.Remove(tmpTarget)
+
+	escaped := strings.ReplaceAll(tmpTarget, "'", "''")
 	query := fmt.Sprintf("VACUUM INTO '%s';", escaped)
 	if _, err := d.conn.Exec(query); err != nil {
+		_ = os.Remove(tmpTarget)
 		return fmt.Errorf("failed to vacuum into %q: %w", targetPath, err)
+	}
+
+	if err := os.Rename(tmpTarget, targetPath); err != nil {
+		_ = os.Remove(tmpTarget)
+		return fmt.Errorf("failed to move snapshot into place: %w", err)
 	}
 	return nil
 }
 
-// CreateRollingBackup creates a named or timestamped backup and prunes snapshots exceeding maxSnapshots.
+// CreateRollingBackup creates a named or timestamped backup in the default backups directory and prunes older snapshots.
 func (d *DB) CreateRollingBackup(name string, maxSnapshots int) (string, error) {
+	backupDir := filepath.Join(filepath.Dir(d.dbPath), "backups")
+	return d.CreateRollingBackupInDir(backupDir, name, maxSnapshots)
+}
+
+// CreateRollingBackupInDir creates a named or timestamped snapshot in the specified directory and prunes older snapshots.
+func (d *DB) CreateRollingBackupInDir(backupDir, name string, maxSnapshots int) (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -78,10 +94,9 @@ func (d *DB) CreateRollingBackup(name string, maxSnapshots int) (string, error) 
 		maxSnapshots = 5
 	}
 
-	backupDir := filepath.Join(filepath.Dir(d.dbPath), "backups")
 	cleaned := filepath.Base(filepath.Clean(strings.TrimSpace(name)))
 	if cleaned == "" || cleaned == "." {
-		cleaned = fmt.Sprintf("backup-%s.db", time.Now().Format("20060102-150405"))
+		cleaned = fmt.Sprintf("backup-%s-%03d.db", time.Now().Format("20060102-150405"), time.Now().Nanosecond()/1e6)
 	}
 	if !strings.HasSuffix(cleaned, ".db") {
 		cleaned += ".db"
@@ -116,12 +131,17 @@ func (d *DB) CreateRollingBackup(name string, maxSnapshots int) (string, error) 
 	return targetPath, nil
 }
 
-// ListBackups returns all available snapshots in the database's backups directory.
+// ListBackups returns all available snapshots in the database's default local backups directory.
 func (d *DB) ListBackups() ([]BackupMeta, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	backupDir := filepath.Join(filepath.Dir(d.dbPath), "backups")
+	return ListBackupsInDir(backupDir, "local")
+}
+
+// ListBackupsInDir scans the specified directory for .db snapshot files and returns their metadata.
+func ListBackupsInDir(backupDir, location string) ([]BackupMeta, error) {
 	entries, err := os.ReadDir(backupDir)
 	if os.IsNotExist(err) {
 		return []BackupMeta{}, nil
@@ -132,7 +152,7 @@ func (d *DB) ListBackups() ([]BackupMeta, error) {
 
 	var backups []BackupMeta
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".db") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".db") || strings.Contains(entry.Name(), ".tmp-") {
 			continue
 		}
 		info, err := entry.Info()
@@ -140,10 +160,11 @@ func (d *DB) ListBackups() ([]BackupMeta, error) {
 			continue
 		}
 		backups = append(backups, BackupMeta{
-			Name:    entry.Name(),
-			Path:    filepath.Join(backupDir, entry.Name()),
-			Size:    info.Size(),
-			ModTime: info.ModTime(),
+			Name:     entry.Name(),
+			Path:     filepath.Join(backupDir, entry.Name()),
+			Size:     info.Size(),
+			ModTime:  info.ModTime(),
+			Location: location,
 		})
 	}
 
@@ -153,3 +174,46 @@ func (d *DB) ListBackups() ([]BackupMeta, error) {
 
 	return backups, nil
 }
+
+// Resurrect safely restores an active in-memory database to disk when its underlying file was unlinked/deleted.
+// It snapshots the live state via VACUUM INTO to a temporary file, closes the old connection to release the deleted inode,
+// atomically renames the temporary file into targetPath, and reopens a fresh connection pointing to the newly created file.
+func (d *DB) Resurrect(targetPath string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	dir := filepath.Dir(targetPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory for resurrect: %w", err)
+	}
+
+	tmpPath := fmt.Sprintf("%s.tmp-resurrect-%d", targetPath, time.Now().UnixNano())
+	if err := d.backupLocked(tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to backup live db to %s: %w", tmpPath, err)
+	}
+
+	// Close old connection pointing to unlinked descriptor
+	_ = d.conn.Close()
+
+	_ = os.Remove(targetPath + "-wal")
+	_ = os.Remove(targetPath + "-shm")
+	_ = os.Remove(targetPath)
+
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to rename resurrect file to %s: %w", targetPath, err)
+	}
+
+	dsn := fmt.Sprintf("%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-16000)&_pragma=mmap_size(67108864)", targetPath)
+	newConn, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("failed to reopen db after resurrect: %w", err)
+	}
+	newConn.SetMaxOpenConns(1)
+
+	d.conn = newConn
+	d.dbPath = targetPath
+	return nil
+}
+

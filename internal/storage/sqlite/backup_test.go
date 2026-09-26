@@ -120,3 +120,57 @@ func TestRollingBackupPruning(t *testing.T) {
 		t.Errorf("expected test-snap-1 and 2 to be pruned, got: %+v", names)
 	}
 }
+
+func TestResurrectUnlinkedDatabase(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// 1. Create a task
+	task, err := db.CreateTask("local", "/repo", "Unlinked DB Task", "Desc", domain.StatusOpen, domain.PriorityHigh, []string{"unlinked"}, "Bob", "")
+	if err != nil {
+		t.Fatalf("create task failed: %v", err)
+	}
+
+	dbPath := db.Path()
+
+	// 2. Unlink/delete the database file from disk while db is still open
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatalf("failed to delete db file: %v", err)
+	}
+	_ = os.Remove(dbPath + "-wal")
+	_ = os.Remove(dbPath + "-shm")
+
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("expected dbPath to not exist on disk")
+	}
+
+	// 3. Resurrect to dbPath
+	if err := db.Resurrect(dbPath); err != nil {
+		t.Fatalf("Resurrect failed: %v", err)
+	}
+
+	// 4. Verify file exists on disk and is non-empty
+	stat, err := os.Stat(dbPath)
+	if err != nil || stat.Size() == 0 {
+		t.Fatalf("expected resurrected db on disk with non-zero size, got stat: %v", err)
+	}
+
+	// 5. Query task via the resurrected db connection
+	fetched, err := db.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("GetTask failed after resurrect: %v", err)
+	}
+	if fetched.Title != "Unlinked DB Task" {
+		t.Errorf("expected title 'Unlinked DB Task', got %q", fetched.Title)
+	}
+
+	// 6. Test writing a new task on the resurrected connection
+	t2, err := db.CreateTask("local", "/repo", "Task After Resurrect", "", domain.StatusOpen, domain.PriorityNormal, nil, "Bob", "")
+	if err != nil {
+		t.Fatalf("CreateTask after resurrect failed: %v", err)
+	}
+	if t2.ID == "" {
+		t.Fatalf("expected valid task ID after resurrect")
+	}
+}
+

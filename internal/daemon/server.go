@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -57,7 +58,32 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 	}
 
 	if db, exists := s.dbs[dbPath]; exists {
+		// Check if file was unlinked/deleted on disk while held open in memory
+		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+			log.Printf("[tkd] Database %s was deleted on disk while active in daemon memory; auto-resurrecting...", dbPath)
+			if rErr := db.Resurrect(dbPath); rErr != nil {
+				log.Printf("[tkd] Failed to resurrect %s: %v", dbPath, rErr)
+			} else {
+				log.Printf("[tkd] Successfully resurrected %s on disk", dbPath)
+				go s.syncCentralBackup(db, repoPath)
+			}
+		}
 		return db, nil
+	}
+
+	// Database is not currently in memory. Check if missing on disk.
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		centralDir := s.cfg.CentralBackupDir(repoPath)
+		latestBackup := findLatestBackupInDir(centralDir)
+		if latestBackup != "" {
+			log.Printf("[tkd] Database %s missing on disk, found central backup %s; auto-restoring...", dbPath, latestBackup)
+			_ = os.MkdirAll(filepath.Dir(dbPath), 0755)
+			if err := copyFile(latestBackup, dbPath); err == nil {
+				log.Printf("[tkd] Successfully auto-restored %s from central backup", dbPath)
+			} else {
+				log.Printf("[tkd] Warning: failed to copy central backup %s to %s: %v", latestBackup, dbPath, err)
+			}
+		}
 	}
 
 	db, err := sqlite.Open(dbPath)
@@ -66,8 +92,46 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 	}
 
 	s.dbs[dbPath] = db
+	go s.syncCentralBackup(db, repoPath)
 	return db, nil
 }
+
+func findLatestBackupInDir(dir string) string {
+	backups, err := sqlite.ListBackupsInDir(dir, "central")
+	if err != nil || len(backups) == 0 {
+		return ""
+	}
+	return backups[0].Path
+}
+
+func (s *Server) syncCentralBackup(db *sqlite.DB, repoPath string) {
+	if db == nil {
+		return
+	}
+	centralDir := s.cfg.CentralBackupDir(repoPath)
+	_ = os.MkdirAll(centralDir, 0755)
+	s.ensureCentralRepoMeta(centralDir, repoPath)
+	_, _ = db.CreateRollingBackupInDir(centralDir, "", 10)
+}
+
+func (s *Server) ensureCentralRepoMeta(centralDir, repoPath string) {
+	if repoPath == "" {
+		return
+	}
+	metaFile := filepath.Join(centralDir, "meta.json")
+	if _, err := os.Stat(metaFile); err == nil {
+		return
+	}
+	meta := map[string]string{
+		"repo_path":  repoPath,
+		"created_at": time.Now().Format(time.RFC3339),
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(metaFile, data, 0644)
+	}
+}
+
 
 func (s *Server) Start() error {
 	// 1. Prepare unix socket
@@ -126,14 +190,23 @@ func (s *Server) maintenanceLoop() {
 			return
 		case <-ticker.C:
 			s.mu.Lock()
-			dbs := make([]*sqlite.DB, 0, len(s.dbs))
-			for _, db := range s.dbs {
-				dbs = append(dbs, db)
+			type dbEntry struct {
+				db       *sqlite.DB
+				repoPath string
+			}
+			var entries []dbEntry
+			for path, db := range s.dbs {
+				repoPath := ""
+				if path != s.cfg.GlobalDBPath() {
+					repoPath = filepath.Dir(filepath.Dir(path))
+				}
+				entries = append(entries, dbEntry{db: db, repoPath: repoPath})
 			}
 			s.mu.Unlock()
 
-			for _, db := range dbs {
-				_ = db.Checkpoint("PASSIVE")
+			for _, e := range entries {
+				_ = e.db.Checkpoint("PASSIVE")
+				s.syncCentralBackup(e.db, e.repoPath)
 			}
 		}
 	}
@@ -227,6 +300,23 @@ func (s *Server) handleConnection(conn net.Conn) {
 }
 
 func (s *Server) dispatch(req protocol.Request) protocol.Response {
+	resp := s.executeDispatch(req)
+	if resp.Success {
+		switch req.Action {
+		case protocol.ActionCreateTask, protocol.ActionUpdateTask, protocol.ActionClaimTask,
+			protocol.ActionDeleteTask, protocol.ActionRestoreTask, protocol.ActionAttachGit,
+			protocol.ActionAddDependency, protocol.ActionRemoveDependency, protocol.ActionOrphanTask,
+			protocol.ActionReapStaleTasks, protocol.ActionTransferTask, protocol.ActionArchiveTask,
+			protocol.ActionUnarchiveTask:
+			if db, err := s.getDB(req.Scope, req.RepoPath); err == nil {
+				go s.syncCentralBackup(db, req.RepoPath)
+			}
+		}
+	}
+	return resp
+}
+
+func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 	resp := protocol.Response{
 		ID:      req.ID,
 		Success: true,
@@ -786,9 +876,18 @@ func (s *Server) handleBackupCreate(req protocol.Request) protocol.Response {
 		return errorResp(req.ID, "failed to create backup: "+err.Error())
 	}
 
+	// Also mirror to central backup vault
+	centralDir := s.cfg.CentralBackupDir(req.RepoPath)
+	_ = os.MkdirAll(centralDir, 0755)
+	s.ensureCentralRepoMeta(centralDir, req.RepoPath)
+	_, cErr := db.CreateRollingBackupInDir(centralDir, p.Name, p.MaxSnapshots)
+	if cErr != nil {
+		log.Printf("[tkd] Warning: failed to create central backup in %s: %v", centralDir, cErr)
+	}
+
 	data, _ := json.Marshal(map[string]string{
 		"path":    targetPath,
-		"message": fmt.Sprintf("✓ Created backup snapshot: %s", targetPath),
+		"message": fmt.Sprintf("✓ Created backup snapshot: %s (mirrored in central vault)", targetPath),
 	})
 	return protocol.Response{
 		ID:      req.ID,
@@ -802,11 +901,29 @@ func (s *Server) handleBackupList(req protocol.Request) protocol.Response {
 	if err != nil {
 		return errorResp(req.ID, err.Error())
 	}
-	backups, err := db.ListBackups()
-	if err != nil {
-		return errorResp(req.ID, "failed to list backups: "+err.Error())
+	localBackups, _ := db.ListBackups()
+
+	centralDir := s.cfg.CentralBackupDir(req.RepoPath)
+	centralBackups, _ := sqlite.ListBackupsInDir(centralDir, "central")
+
+	all := append([]sqlite.BackupMeta{}, localBackups...)
+	all = append(all, centralBackups...)
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].ModTime.After(all[j].ModTime)
+	})
+
+	res := make([]protocol.BackupInfo, 0, len(all))
+	for _, b := range all {
+		res = append(res, protocol.BackupInfo{
+			Name:     b.Name,
+			Path:     b.Path,
+			Size:     b.Size,
+			ModTime:  b.ModTime,
+			Location: b.Location,
+		})
 	}
-	data, _ := json.Marshal(backups)
+
+	data, _ := json.Marshal(res)
 	return protocol.Response{
 		ID:      req.ID,
 		Success: true,
@@ -854,15 +971,51 @@ func (s *Server) handleBackupVerify(req protocol.Request) protocol.Response {
 
 func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	var p protocol.BackupRestorePayload
-	if err := json.Unmarshal(req.Payload, &p); err != nil {
-		return errorResp(req.ID, "invalid payload: "+err.Error())
+	if len(req.Payload) > 0 {
+		_ = json.Unmarshal(req.Payload, &p)
 	}
-	if p.BackupPath == "" {
-		return errorResp(req.ID, "backup_path is required")
+
+	targetBackup := strings.TrimSpace(p.BackupPath)
+	if targetBackup == "" || strings.EqualFold(targetBackup, "latest") {
+		// Find latest across local and central
+		db, err := s.getDB(req.Scope, req.RepoPath)
+		if err != nil {
+			return errorResp(req.ID, err.Error())
+		}
+		localBackups, _ := db.ListBackups()
+		centralDir := s.cfg.CentralBackupDir(req.RepoPath)
+		centralBackups, _ := sqlite.ListBackupsInDir(centralDir, "central")
+		all := append([]sqlite.BackupMeta{}, localBackups...)
+		all = append(all, centralBackups...)
+		if len(all) == 0 {
+			return errorResp(req.ID, "no backup snapshots found to restore")
+		}
+		sort.Slice(all, func(i, j int) bool {
+			return all[i].ModTime.After(all[j].ModTime)
+		})
+		targetBackup = all[0].Path
+	} else if !filepath.IsAbs(targetBackup) {
+		if _, err := os.Stat(targetBackup); err != nil {
+			var localDir string
+			if req.Scope == "global" || req.RepoPath == "" {
+				localDir = filepath.Join(s.cfg.GlobalDir, "backups")
+			} else {
+				localDir = filepath.Join(req.RepoPath, ".tasks", "backups")
+			}
+			localCand := filepath.Join(localDir, targetBackup)
+			if _, err := os.Stat(localCand); err == nil {
+				targetBackup = localCand
+			} else {
+				centralCand := filepath.Join(s.cfg.CentralBackupDir(req.RepoPath), targetBackup)
+				if _, err := os.Stat(centralCand); err == nil {
+					targetBackup = centralCand
+				}
+			}
+		}
 	}
 
 	// 1. Verify backup file exists and passes integrity check
-	testDB, err := sqlite.Open(p.BackupPath)
+	testDB, err := sqlite.Open(targetBackup)
 	if err != nil {
 		return errorResp(req.ID, "backup file cannot be opened: "+err.Error())
 	}
@@ -894,9 +1047,12 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 		_ = copyFile(dbPath, preRestorePath)
 	}
 
+	// Ensure directory exists
+	_ = os.MkdirAll(filepath.Dir(dbPath), 0755)
+
 	// 4. Copy to a staging file in the target directory and verify before replacing
 	tmpPath := fmt.Sprintf("%s.tmp-restore-%d", dbPath, time.Now().UnixNano())
-	if err := copyFile(p.BackupPath, tmpPath); err != nil {
+	if err := copyFile(targetBackup, tmpPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return errorResp(req.ID, "failed to copy backup to staging file: "+err.Error())
 	}
@@ -929,9 +1085,11 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	}
 	s.dbs[dbPath] = newDB
 
+	go s.syncCentralBackup(newDB, req.RepoPath)
+
 	data, _ := json.Marshal(map[string]string{
 		"status":  "ok",
-		"message": fmt.Sprintf("✓ Successfully restored database from %s", p.BackupPath),
+		"message": fmt.Sprintf("✓ Successfully restored database from %s", targetBackup),
 	})
 	return protocol.Response{ID: req.ID, Success: true, Data: data}
 }

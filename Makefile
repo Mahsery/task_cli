@@ -53,13 +53,8 @@ install: build
 	@echo "✓ Successfully installed $(BINARY_NAME) to $(BINDIR)/$(BINARY_NAME)"
 
 restart-daemon:
-	@echo "==> Restarting daemon..."
-	@-if [ -x "$(BINDIR)/$(BINARY_NAME)" ]; then \
-		"$(BINDIR)/$(BINARY_NAME)" daemon stop 2>/dev/null || true; \
-	fi
-	@-pkill -f "$(BINARY_NAME) daemon run" 2>/dev/null || true
-	@sleep 0.2
-	@"$(BINDIR)/$(BINARY_NAME)" daemon status
+	@echo "==> Restarting daemon in background..."
+	@"$(BINDIR)/$(BINARY_NAME)" daemon restart
 
 uninstall:
 	@echo "==> Uninstalling $(BINARY_NAME)..."
