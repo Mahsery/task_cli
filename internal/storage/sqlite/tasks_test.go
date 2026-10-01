@@ -1406,5 +1406,101 @@ func TestFindAndReapStaleTasks_UnassignedAndArchived(t *testing.T) {
 	}
 }
 
+func TestListTasks_OrphanFiltering(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC()
+
+	// 1. Tagged orphaned task (status open, unassigned)
+	tTagged, err := db.CreateTask("local", "/repo/test", "Tagged Orphan", "Desc", domain.StatusOpen, domain.PriorityNormal, []string{"orphaned"}, "Alice", "")
+	if err != nil {
+		t.Fatalf("create tTagged failed: %v", err)
+	}
+
+	// 2. Inactive in_progress task (>1h inactive)
+	tInactiveProg, err := db.CreateTask("local", "/repo/test", "Inactive InProgress", "Desc", domain.StatusInProgress, domain.PriorityHigh, []string{"backend"}, "Alice", "bob")
+	if err != nil {
+		t.Fatalf("create tInactiveProg failed: %v", err)
+	}
+	// Backdate created_at and updated_at to 2h ago
+	oldTime := now.Add(-2 * time.Hour)
+	_, err = db.conn.Exec("UPDATE tasks SET created_at = ?, updated_at = ? WHERE id = ?", oldTime, oldTime, tInactiveProg.ID)
+	if err != nil {
+		t.Fatalf("backdate tInactiveProg failed: %v", err)
+	}
+
+	// 3. Active in_progress task (recent activity 5m ago)
+	_, err = db.CreateTask("local", "/repo/test", "Active InProgress", "Desc", domain.StatusInProgress, domain.PriorityNormal, []string{"frontend"}, "Alice", "charlie")
+	if err != nil {
+		t.Fatalf("create tActiveProg failed: %v", err)
+	}
+
+	// 4. Normal open unassigned task (cannot be orphaned)
+	tOpen, err := db.CreateTask("local", "/repo/test", "Backlog Open", "Desc", domain.StatusOpen, domain.PriorityLow, []string{"ux"}, "Alice", "")
+	if err != nil {
+		t.Fatalf("create tOpen failed: %v", err)
+	}
+	_, err = db.conn.Exec("UPDATE tasks SET created_at = ?, updated_at = ? WHERE id = ?", oldTime, oldTime, tOpen.ID)
+	if err != nil {
+		t.Fatalf("backdate tOpen failed: %v", err)
+	}
+
+	// 5. Inactive archived task (should never be returned)
+	tArchived, err := db.CreateTask("local", "/repo/test", "Archived Inactive", "Desc", domain.StatusInProgress, domain.PriorityNormal, []string{"legacy"}, "Alice", "david")
+	if err != nil {
+		t.Fatalf("create tArchived failed: %v", err)
+	}
+	_, err = db.conn.Exec("UPDATE tasks SET created_at = ?, updated_at = ?, archived_at = ?, status = 'archived' WHERE id = ?", oldTime, oldTime, oldTime, tArchived.ID)
+	if err != nil {
+		t.Fatalf("backdate tArchived failed: %v", err)
+	}
+
+	// Verify OnlyOrphaned: true
+	orphanTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", OnlyOrphaned: true})
+	if err != nil {
+		t.Fatalf("ListTasks OnlyOrphaned failed: %v", err)
+	}
+	if len(orphanTasks) != 2 {
+		var ids []string
+		for _, ot := range orphanTasks {
+			ids = append(ids, ot.ID)
+		}
+		t.Fatalf("expected exactly 2 orphan tasks, got %d (%v)", len(orphanTasks), ids)
+	}
+	idMap := map[string]bool{orphanTasks[0].ID: true, orphanTasks[1].ID: true}
+	if !idMap[tTagged.ID] || !idMap[tInactiveProg.ID] {
+		t.Errorf("expected %s and %s in orphan tasks, got %+v", tTagged.ID, tInactiveProg.ID, orphanTasks)
+	}
+
+	// Verify Status: &StatusOrphan produces identical results
+	statusOrphan := domain.StatusOrphan
+	statusOrphanTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", Status: &statusOrphan})
+	if err != nil {
+		t.Fatalf("ListTasks StatusOrphan failed: %v", err)
+	}
+	if len(statusOrphanTasks) != 2 {
+		t.Fatalf("expected 2 tasks for StatusOrphan, got %d", len(statusOrphanTasks))
+	}
+
+	// Verify search "status:orphan"
+	searchTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", Search: "status:orphan"})
+	if err != nil {
+		t.Fatalf("ListTasks search status:orphan failed: %v", err)
+	}
+	if len(searchTasks) != 2 {
+		t.Fatalf("expected 2 tasks for search status:orphan, got %d", len(searchTasks))
+	}
+
+	// Verify search "status:orphaned"
+	searchOrphanedTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/test", Search: "status:orphaned"})
+	if err != nil {
+		t.Fatalf("ListTasks search status:orphaned failed: %v", err)
+	}
+	if len(searchOrphanedTasks) != 2 {
+		t.Fatalf("expected 2 tasks for search status:orphaned, got %d", len(searchOrphanedTasks))
+	}
+}
+
 
 

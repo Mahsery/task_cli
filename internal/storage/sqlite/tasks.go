@@ -899,8 +899,12 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		args = append(args, filter.RepoPath)
 	}
 	if filter.Status != nil {
-		conditions = append(conditions, "status = ?")
-		args = append(args, string(*filter.Status))
+		if *filter.Status == domain.StatusOrphan || strings.EqualFold(string(*filter.Status), "orphaned") {
+			filter.OnlyOrphaned = true
+		} else {
+			conditions = append(conditions, "status = ?")
+			args = append(args, string(*filter.Status))
+		}
 	}
 	if filter.Priority != nil {
 		conditions = append(conditions, "priority = ?")
@@ -915,7 +919,8 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		args = append(args, filter.Assignee)
 	}
 	if filter.OnlyOrphaned {
-		conditions = append(conditions, "EXISTS (SELECT 1 FROM json_each(tasks.tags) WHERE value = 'orphaned')")
+		// Orphaned tasks cannot be done, closed, or archived
+		conditions = append(conditions, "tasks.archived_at IS NULL AND tasks.status NOT IN ('done', 'closed', 'archived')")
 	}
 	if filter.OnlyArchived {
 		conditions = append(conditions, "(tasks.archived_at IS NOT NULL OR tasks.status = 'archived')")
@@ -929,7 +934,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	}
 
 	limitClause := ""
-	if filter.Limit > 0 && filter.Search == "" {
+	if filter.Limit > 0 && filter.Search == "" && !filter.OnlyReady && !filter.OnlyBlocked && !filter.OnlyOrphaned && filter.DependsOn == "" && filter.Blocks == "" {
 		limitClause = fmt.Sprintf("LIMIT %d", filter.Limit)
 	}
 
@@ -998,8 +1003,8 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	}
 	_ = rows.Close() // Explicitly release cursor back to single connection pool before secondary query
 
-	// Batch load notes for listed tasks (unless explicitly omitted and not required for in-memory search)
-	if len(tasks) > 0 && (!filter.OmitNotes || filter.Search != "") {
+	// Batch load notes for listed tasks (unless explicitly omitted and not required for in-memory search / orphan checks)
+	if len(tasks) > 0 && (!filter.OmitNotes || filter.Search != "" || filter.OnlyOrphaned) {
 		taskMap := make(map[string]*domain.Task, len(tasks))
 		var taskIDs []any
 		var placeholders []string
@@ -1069,13 +1074,16 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		}
 	}
 
-	if filter.OnlyReady || filter.OnlyBlocked || filter.DependsOn != "" || filter.Blocks != "" {
+	if filter.OnlyReady || filter.OnlyBlocked || filter.OnlyOrphaned || filter.DependsOn != "" || filter.Blocks != "" {
 		var filtered []*domain.Task
 		for _, t := range tasks {
 			if filter.OnlyReady && (t.Status != domain.StatusOpen || t.IsBlocked) {
 				continue
 			}
 			if filter.OnlyBlocked && !t.IsBlocked {
+				continue
+			}
+			if filter.OnlyOrphaned && !t.IsOrphaned() {
 				continue
 			}
 			if filter.DependsOn != "" {
@@ -1117,9 +1125,10 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 			}
 		}
 		tasks = matched
-		if filter.Limit > 0 && len(tasks) > filter.Limit {
-			tasks = tasks[:filter.Limit]
-		}
+	}
+
+	if filter.Limit > 0 && len(tasks) > filter.Limit {
+		tasks = tasks[:filter.Limit]
 	}
 
 	return tasks, nil

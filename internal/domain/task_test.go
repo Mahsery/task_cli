@@ -27,6 +27,9 @@ func TestParseStatus(t *testing.T) {
 		{"archive", StatusArchived, false},
 		{"arc", StatusArchived, false},
 		{"ARCHIVE", StatusArchived, false},
+		{"orphan", StatusOrphan, false},
+		{"orphaned", StatusOrphan, false},
+		{"ORPHAN", StatusOrphan, false},
 		{"invalid_status", StatusOpen, true},
 		{"", StatusOpen, true},
 	}
@@ -106,6 +109,18 @@ func TestIsOrphaned(t *testing.T) {
 	tagged := &Task{Tags: []string{"orphaned"}}
 	if !tagged.IsOrphaned() {
 		t.Error("expected task tagged orphaned to return true")
+	}
+
+	// Tagged 'orphan'
+	taggedOrphan := &Task{Tags: []string{"orphan"}}
+	if !taggedOrphan.IsOrphaned() {
+		t.Error("expected task tagged orphan to return true")
+	}
+
+	// Status 'orphan'
+	statusOrphan := &Task{Status: StatusOrphan}
+	if !statusOrphan.IsOrphaned() {
+		t.Error("expected task with status orphan to return true")
 	}
 
 	// Open, unassigned, older than 1h -> CANNOT be orphaned

@@ -19,6 +19,7 @@ const (
 	StatusDone       Status = "done"
 	StatusClosed     Status = "closed"
 	StatusArchived   Status = "archived"
+	StatusOrphan     Status = "orphan"
 )
 
 func ParseStatus(s string) (Status, error) {
@@ -33,8 +34,10 @@ func ParseStatus(s string) (Status, error) {
 		return StatusClosed, nil
 	case "archived", "archive", "arc":
 		return StatusArchived, nil
+	case "orphan", "orphaned":
+		return StatusOrphan, nil
 	default:
-		return StatusOpen, fmt.Errorf("invalid status %q (allowed: open, in_progress, done, closed, archived)", s)
+		return StatusOpen, fmt.Errorf("invalid status %q (allowed: open, in_progress, done, closed, archived, orphan)", s)
 	}
 }
 
@@ -138,8 +141,11 @@ func (t *Task) IsOrphaned() bool {
 	if t.Status == StatusDone || t.Status == StatusClosed {
 		return false
 	}
+	if strings.EqualFold(string(t.Status), "orphan") || strings.EqualFold(string(t.Status), "orphaned") {
+		return true
+	}
 	for _, tag := range t.Tags {
-		if strings.EqualFold(tag, "orphaned") {
+		if strings.EqualFold(tag, "orphaned") || strings.EqualFold(tag, "orphan") {
 			return true
 		}
 	}
@@ -177,7 +183,7 @@ type TaskFilter struct {
 	IncludeNotes    bool
 	OnlyReady       bool   // Return tasks with status open and 0 unfinished blockers
 	OnlyBlocked     bool   // Return tasks that have unfinished blockers
-	OnlyOrphaned    bool   // Return tasks that are tagged orphaned
+	OnlyOrphaned    bool   // Return tasks that are orphaned (tagged, status, or inactive)
 	IncludeArchived bool   // Return both active and archived tasks
 	OnlyArchived    bool   // Return only archived tasks
 	DependsOn       string // Filter by prerequisite task ID

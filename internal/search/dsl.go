@@ -192,6 +192,9 @@ func (n *termNode) Eval(task *domain.Task) bool {
 		return false
 
 	case "status", "s":
+		if (target == "orphan" || target == "orphaned") && task.IsOrphaned() {
+			return true
+		}
 		return strings.Contains(strings.ToLower(string(task.Status)), target)
 
 	case "priority", "pri", "p":
@@ -207,7 +210,10 @@ func (n *termNode) Eval(task *domain.Task) bool {
 		return strings.Contains(strings.ToLower(task.ID), target)
 
 	default:
-		// General match: ID, Title, Description, Tags, Assignee, Author, Notes
+		// General match: ID, Title, Description, Tags, Assignee, Author, Notes, Orphaned state
+		if (target == "orphan" || target == "orphaned") && task.IsOrphaned() {
+			return true
+		}
 		if strings.Contains(strings.ToLower(task.ID), target) {
 			return true
 		}

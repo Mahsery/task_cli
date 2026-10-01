@@ -2,6 +2,7 @@ package search
 
 import (
 	"testing"
+	"time"
 
 	"task_cli/internal/domain"
 )
@@ -32,6 +33,15 @@ func TestSearchMatch(t *testing.T) {
 		Author:      "bob",
 	}
 
+	taskOrphan := &domain.Task{
+		ID:        "T-3",
+		Title:     "Old Feature",
+		Status:    domain.StatusInProgress,
+		Assignee:  "alice",
+		CreatedAt: time.Now().Add(-2 * time.Hour),
+		UpdatedAt: time.Now().Add(-2 * time.Hour),
+	}
+
 	tests := []struct {
 		name     string
 		query    string
@@ -39,6 +49,11 @@ func TestSearchMatch(t *testing.T) {
 		expected bool
 	}{
 		{"empty query matches all", "", task1, true},
+		{"status orphan matches orphaned task", "status:orphan", taskOrphan, true},
+		{"short status orphan matches orphaned task", "s:orphan", taskOrphan, true},
+		{"status orphaned matches orphaned task", "status:orphaned", taskOrphan, true},
+		{"status orphan mismatch on active task", "status:orphan", task1, false},
+		{"orphan keyword matches orphaned task", "orphan", taskOrphan, true},
 		{"single word in title", "odin", task1, true},
 		{"single word in tag", "compiler", task1, true},
 		{"single word in tag for task1 but not task2", "compiler", task2, false},

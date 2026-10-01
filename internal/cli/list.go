@@ -74,7 +74,11 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 			if err != nil {
 				return err
 			}
-			filter.Status = &s
+			if s == domain.StatusOrphan {
+				filter.OnlyOrphaned = true
+			} else {
+				filter.Status = &s
+			}
 		}
 		if listPriority != "" {
 			p, err := domain.ParsePriority(listPriority)
@@ -118,7 +122,11 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 		if listShort {
 			var sb strings.Builder
 			for _, t := range tasks {
-				sb.WriteString(fmt.Sprintf("%-6s [%-11s] %s\n", t.ID, t.Status, t.Title))
+				dispStatus := string(t.Status)
+				if t.IsOrphaned() {
+					dispStatus = "orphan"
+				}
+				sb.WriteString(fmt.Sprintf("%-6s [%-11s] %s\n", t.ID, dispStatus, t.Title))
 			}
 			return PrintWithPager(sb.String())
 		}
@@ -131,7 +139,7 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 var listSort string
 
 func init() {
-	listCmd.Flags().StringVarP(&listStatus, "status", "s", "", "Filter by status (open, in_progress, done, closed)")
+	listCmd.Flags().StringVarP(&listStatus, "status", "s", "", "Filter by status (open, in_progress, done, closed, orphan)")
 	listCmd.Flags().StringVarP(&listPriority, "priority", "p", "", "Filter by priority (low, normal, high, urgent)")
 	listCmd.Flags().StringVarP(&listTag, "tag", "t", "", "Filter by tag")
 	listCmd.Flags().StringVarP(&listTagLabel, "label", "l", "", "Filter by tag (alias for -t, --tag)")
