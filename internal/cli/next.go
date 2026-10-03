@@ -17,7 +17,7 @@ Automatically filters out tasks blocked by unfinished prerequisites.
 Ideal for AI agents, CI runners, and developers asking 'what should I work on next?'.`,
 	Example: `  tk next               # Get next actionable task
   tk next --json        # Machine-readable output for automated agent claiming`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		// 1. First look for in_progress or open tasks that are NOT blocked
 		readyFilter := domain.TaskFilter{
 			Scope:     scope,

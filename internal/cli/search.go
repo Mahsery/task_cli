@@ -38,7 +38,7 @@ Supports:
   tk search bug NOT closed
   tk search s:open p:urgent
   tk search -g odin --json`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		query := strings.Join(args, " ")
 
 		filter := domain.TaskFilter{
@@ -86,7 +86,7 @@ Supports:
 		if searchShort {
 			var sb strings.Builder
 			for _, t := range tasks {
-				sb.WriteString(fmt.Sprintf("%-6s [%-11s] %s\n", t.ID, t.Status, t.Title))
+				fmt.Fprintf(&sb, "%-6s [%-11s] %s\n", t.ID, t.Status, t.Title)
 			}
 			return PrintWithPager(sb.String())
 		}

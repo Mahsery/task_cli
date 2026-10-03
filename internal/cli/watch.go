@@ -311,7 +311,7 @@ func renderDashboardView(state *WatchState, width, height int, ascii bool, now t
 	sb.WriteString(strings.Repeat(sepChar, width) + "\n\n")
 
 	// 2. Active Tasks Table (In Progress)
-	sb.WriteString(fmt.Sprintf("ACTIVE TASKS (In Progress: %d)\n", len(state.ActiveTasks)))
+	fmt.Fprintf(&sb, "ACTIVE TASKS (In Progress: %d)\n", len(state.ActiveTasks))
 	if len(state.ActiveTasks) == 0 {
 		sb.WriteString("  (No tasks currently in progress)\n\n")
 	} else {
@@ -320,7 +320,7 @@ func renderDashboardView(state *WatchState, width, height int, ascii bool, now t
 	}
 
 	// 3. Backlog Tasks Table (Open)
-	sb.WriteString(fmt.Sprintf("BACKLOG TASKS (Open: %d)\n", len(state.BacklogTasks)))
+	fmt.Fprintf(&sb, "BACKLOG TASKS (Open: %d)\n", len(state.BacklogTasks))
 	if len(state.BacklogTasks) == 0 {
 		sb.WriteString("  (No open tasks in backlog)\n\n")
 	} else {
@@ -340,7 +340,7 @@ func renderDashboardView(state *WatchState, width, height int, ascii bool, now t
 
 		writeTaskTable(&sb, displayedBacklog, false, width, sepChar, now)
 		if overflow > 0 {
-			sb.WriteString(fmt.Sprintf("  ... and %d more open tasks in backlog (run 'tk list --ready' to view all)\n", overflow))
+			fmt.Fprintf(&sb, "  ... and %d more open tasks in backlog (run 'tk list --ready' to view all)\n", overflow)
 		}
 		sb.WriteString("\n")
 	}
@@ -405,7 +405,7 @@ func writeTaskTable(sb *strings.Builder, tasks []*domain.Task, isActiveTable boo
 		priStr := truncateWithEllipsis(string(t.Priority), priCol)
 		titleStr := truncateWithEllipsis(t.Title, titleCol)
 
-		otherVal := ""
+		var otherVal string
 		if isActiveTable {
 			otherVal = t.Assignee
 			if otherVal == "" {
@@ -542,7 +542,7 @@ func renderCardLine(content string, innerW int, v string) string {
 }
 
 // wrapCardText cleanly word-wraps text within maxWidth, capped at maxLines.
-func wrapCardText(text string, maxWidth int, maxLines int) []string {
+func wrapCardText(text string, maxWidth, maxLines int) []string {
 	if maxWidth <= 10 {
 		maxWidth = 10
 	}
@@ -669,7 +669,7 @@ func timeAgo(t time.Time) string {
 	return timeAgoAt(t, time.Now())
 }
 
-func timeAgoAt(t time.Time, now time.Time) string {
+func timeAgoAt(t, now time.Time) string {
 	if t.IsZero() {
 		return "just now"
 	}
@@ -705,11 +705,11 @@ terminal, renders a responsive, real-time updating dashboard. In non-interactive
 piped environments, streams raw event logs or JSON.`,
 	Example: `  tk watch
   tk watch --json | jq .`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		// Fetch initial task state including notes for current scope/repo
 		filter := domain.TaskFilter{
@@ -774,8 +774,8 @@ piped environments, streams raw event logs or JSON.`,
 		}
 
 		// Initial terminal setup: clear screen and hide cursor
-		fmt.Fprint(os.Stdout, "\033[2J\033[H\033[?25l")
-		defer fmt.Fprint(os.Stdout, "\033[?25h\n")
+		_, _ = fmt.Fprint(os.Stdout, "\033[2J\033[H\033[?25l")
+		defer func() { _, _ = fmt.Fprint(os.Stdout, "\033[?25h\n") }()
 
 		dashboard.Render(os.Stdout)
 
@@ -795,7 +795,7 @@ piped environments, streams raw event logs or JSON.`,
 		for {
 			select {
 			case <-sigCh:
-				taskClient.Close()
+				_ = taskClient.Close()
 				return nil
 			case <-sigwinchCh:
 				requestRedraw()

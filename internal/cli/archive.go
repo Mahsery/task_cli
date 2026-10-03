@@ -50,7 +50,7 @@ Archived tasks can be restored anytime with 'tk unarchive <id...>' or 'tk archiv
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		actor := cfg.Actor
 		if archiveActor != "" {
@@ -94,7 +94,7 @@ var archiveListCmd = &cobra.Command{
 	Long:    "Displays all archived tasks matching the current repository or global scope.",
 	Example: `  tk archive list
   tk archive list --json`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		return runArchiveList()
 	},
 }
@@ -107,7 +107,7 @@ var archiveUnarchiveCmd = &cobra.Command{
 	Example: `  tk archive unarchive T-1
   tk archive restore T-1 T-2 -m "Resuming work"`,
 	Args: cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		return runUnarchive(args, unarchiveActor, unarchiveMessage)
 	},
 }
@@ -119,7 +119,7 @@ var unarchiveCmd = &cobra.Command{
 	Example: `  tk unarchive T-1
   tk unarchive T-1 T-2 -m "Resuming work"`,
 	Args: cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		return runUnarchive(args, unarchiveActor, unarchiveMessage)
 	},
 }
@@ -128,7 +128,7 @@ func runArchiveList() error {
 	if err := taskClient.Connect(); err != nil {
 		return fmt.Errorf("failed to connect to daemon: %w", err)
 	}
-	defer taskClient.Close()
+	defer func() { _ = taskClient.Close() }()
 
 	tasks, err := taskClient.ListTasks(domain.TaskFilter{
 		Scope:           scope,
@@ -160,7 +160,7 @@ func runUnarchive(args []string, explicitActor, message string) error {
 	if err := taskClient.Connect(); err != nil {
 		return fmt.Errorf("failed to connect to daemon: %w", err)
 	}
-	defer taskClient.Close()
+	defer func() { _ = taskClient.Close() }()
 
 	actor := cfg.Actor
 	if explicitActor != "" {

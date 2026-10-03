@@ -77,7 +77,7 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 		latestBackup := findLatestBackupInDir(centralDir)
 		if latestBackup != "" {
 			log.Printf("[tkd] Database %s missing on disk, found central backup %s; auto-restoring...", dbPath, latestBackup)
-			_ = os.MkdirAll(filepath.Dir(dbPath), 0755)
+			_ = os.MkdirAll(filepath.Dir(dbPath), 0o755)
 			if err := copyFile(latestBackup, dbPath); err == nil {
 				log.Printf("[tkd] Successfully auto-restored %s from central backup", dbPath)
 			} else {
@@ -109,7 +109,7 @@ func (s *Server) syncCentralBackup(db *sqlite.DB, repoPath string) {
 		return
 	}
 	centralDir := s.cfg.CentralBackupDir(repoPath)
-	_ = os.MkdirAll(centralDir, 0755)
+	_ = os.MkdirAll(centralDir, 0o755)
 	s.ensureCentralRepoMeta(centralDir, repoPath)
 	_, _ = db.CreateRollingBackupInDir(centralDir, "", 10)
 }
@@ -128,17 +128,17 @@ func (s *Server) ensureCentralRepoMeta(centralDir, repoPath string) {
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err == nil {
-		_ = os.WriteFile(metaFile, data, 0644)
+		_ = os.WriteFile(metaFile, data, 0o644)
 	}
 }
 
 func (s *Server) Start() error {
 	// 1. Prepare unix socket
-	_ = os.MkdirAll(filepath.Dir(s.cfg.SocketPath), 0755)
+	_ = os.MkdirAll(filepath.Dir(s.cfg.SocketPath), 0o755)
 
 	// Test if existing socket is active
 	if conn, err := net.Dial("unix", s.cfg.SocketPath); err == nil {
-		conn.Close()
+		_ = conn.Close()
 		return fmt.Errorf("daemon is already running on %s", s.cfg.SocketPath)
 	}
 	_ = os.Remove(s.cfg.SocketPath)
@@ -148,7 +148,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to listen on unix socket %s: %w", s.cfg.SocketPath, err)
 	}
 	s.unixLn = unixLn
-	_ = os.Chmod(s.cfg.SocketPath, 0600)
+	_ = os.Chmod(s.cfg.SocketPath, 0o600)
 
 	log.Printf("[tkd] Listening on unix socket %s", s.cfg.SocketPath)
 
@@ -176,7 +176,8 @@ func (s *Server) Start() error {
 	// 4. Background maintenance (idle WAL checkpoints to minimize disk footprint and SSD churn)
 	go s.maintenanceLoop()
 
-	return s.acceptLoop(unixLn)
+	s.acceptLoop(unixLn)
+	return nil
 }
 
 func (s *Server) maintenanceLoop() {
@@ -222,10 +223,10 @@ func (s *Server) Stop() {
 
 	close(s.stopCh)
 	if s.unixLn != nil {
-		s.unixLn.Close()
+		_ = s.unixLn.Close()
 	}
 	if s.tcpLn != nil {
-		s.tcpLn.Close()
+		_ = s.tcpLn.Close()
 	}
 	_ = os.Remove(s.cfg.SocketPath)
 
@@ -239,16 +240,17 @@ func (s *Server) Stop() {
 	log.Println("[tkd] Daemon stopped.")
 }
 
-func (s *Server) acceptLoop(ln net.Listener) error {
+// acceptLoop serves connections until the listener is closed or the server stops.
+func (s *Server) acceptLoop(ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			select {
 			case <-s.stopCh:
-				return nil
+				return
 			default:
 				if errors.Is(err, net.ErrClosed) {
-					return nil
+					return
 				}
 				log.Printf("[tkd] Accept error: %v", err)
 				continue
@@ -260,7 +262,7 @@ func (s *Server) acceptLoop(ln net.Listener) error {
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	dec := json.NewDecoder(conn)
 	enc := json.NewEncoder(conn)
@@ -878,7 +880,7 @@ func (s *Server) handleBackupCreate(req protocol.Request) protocol.Response {
 
 	// Also mirror to central backup vault
 	centralDir := s.cfg.CentralBackupDir(req.RepoPath)
-	_ = os.MkdirAll(centralDir, 0755)
+	_ = os.MkdirAll(centralDir, 0o755)
 	s.ensureCentralRepoMeta(centralDir, req.RepoPath)
 	_, cErr := db.CreateRollingBackupInDir(centralDir, p.Name, p.MaxSnapshots)
 	if cErr != nil {
@@ -942,7 +944,7 @@ func (s *Server) handleBackupVerify(req protocol.Request) protocol.Response {
 		if err != nil {
 			return errorResp(req.ID, "failed to open backup file: "+err.Error())
 		}
-		defer tempDB.Close()
+		defer func() { _ = tempDB.Close() }()
 		if err := tempDB.IntegrityCheck(); err != nil {
 			return errorResp(req.ID, "integrity check failed for backup: "+err.Error())
 		}
@@ -1020,10 +1022,10 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 		return errorResp(req.ID, "backup file cannot be opened: "+err.Error())
 	}
 	if err := testDB.IntegrityCheck(); err != nil {
-		testDB.Close()
+		_ = testDB.Close()
 		return errorResp(req.ID, "backup file failed integrity check: "+err.Error())
 	}
-	testDB.Close()
+	_ = testDB.Close()
 
 	// 2. Lock server and close active database connection
 	s.mu.Lock()
@@ -1048,7 +1050,7 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	}
 
 	// Ensure directory exists
-	_ = os.MkdirAll(filepath.Dir(dbPath), 0755)
+	_ = os.MkdirAll(filepath.Dir(dbPath), 0o755)
 
 	// 4. Copy to a staging file in the target directory and verify before replacing
 	tmpPath := fmt.Sprintf("%s.tmp-restore-%d", dbPath, time.Now().UnixNano())
@@ -1063,11 +1065,11 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 		return errorResp(req.ID, "staging database failed to open: "+err.Error())
 	}
 	if err := testRestored.IntegrityCheck(); err != nil {
-		testRestored.Close()
+		_ = testRestored.Close()
 		_ = os.Remove(tmpPath)
 		return errorResp(req.ID, "staging database failed integrity check: "+err.Error())
 	}
-	testRestored.Close()
+	_ = testRestored.Close()
 
 	// 5. Clean up old WAL/SHM and atomically move staging file into place
 	_ = os.Remove(dbPath + "-wal")
@@ -1094,18 +1096,23 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	return protocol.Response{ID: req.ID, Success: true, Data: data}
 }
 
-func copyFile(src, dst string) error {
+func copyFile(src, dst string) (err error) {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }() // read-only; close error carries no data-loss risk
 
 	out, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		// Close flushes the written copy; surface its failure unless an earlier error occurred.
+		if cerr := out.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	_, err = io.Copy(out, in)
 	return err

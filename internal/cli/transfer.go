@@ -25,7 +25,7 @@ to 'in_progress', and appends an audit note documenting the transfer.`,
   # Transfer using --to flag
   tk transfer T-1 --to bob -m "Need help with frontend UI"`,
 	Args: cobra.RangeArgs(1, 2),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		taskID := args[0]
 		newAssignee := transferTo
 		if len(args) == 2 {
@@ -38,7 +38,7 @@ to 'in_progress', and appends an audit note documenting the transfer.`,
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		actor := cfg.Actor
 		if transferActor != "" {

@@ -22,13 +22,13 @@ func setupTestDB(t *testing.T) (*DB, func()) {
 	dbPath := filepath.Join(tmpDir, "test.db")
 	db, err := Open(dbPath)
 	if err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		t.Fatalf("failed to open test db: %v", err)
 	}
 
 	cleanup := func() {
-		db.Close()
-		os.RemoveAll(tmpDir)
+		_ = db.Close()
+		_ = os.RemoveAll(tmpDir)
 	}
 	return db, cleanup
 }
@@ -130,7 +130,7 @@ func TestConcurrentWrites(t *testing.T) {
 
 	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
-		go func(idx int) {
+		go func(_ int) {
 			defer wg.Done()
 			_, err := db.CreateTask("local", "/repo/test", "Concurrent Task", "", domain.StatusOpen, domain.PriorityNormal, []string{"test"}, "Worker", "")
 			if err != nil {
@@ -166,13 +166,13 @@ func setupBenchDB(b *testing.B) (*DB, func()) {
 	dbPath := filepath.Join(tmpDir, "bench.db")
 	db, err := Open(dbPath)
 	if err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		b.Fatalf("failed to open bench db: %v", err)
 	}
 
 	cleanup := func() {
-		db.Close()
-		os.RemoveAll(tmpDir)
+		_ = db.Close()
+		_ = os.RemoveAll(tmpDir)
 	}
 	return db, cleanup
 }
@@ -1248,14 +1248,14 @@ func TestSchemaMigration_V3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "mig.db")
 	db, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var version int
 	if err := db.conn.QueryRow("PRAGMA user_version;").Scan(&version); err != nil {
@@ -1329,10 +1329,8 @@ func TestFindAndReapStaleTasks_UnassignedAndArchived(t *testing.T) {
 	cAssigned, ok := candMap[tAssigned.ID]
 	if !ok {
 		t.Errorf("expected assigned task %s to be detected as stale candidate", tAssigned.ID)
-	} else {
-		if cAssigned.Assignee != "worker-1" {
-			t.Errorf("expected assignee worker-1, got %q", cAssigned.Assignee)
-		}
+	} else if cAssigned.Assignee != "worker-1" {
+		t.Errorf("expected assignee worker-1, got %q", cAssigned.Assignee)
 	}
 
 	// Verify tRecent is NOT detected

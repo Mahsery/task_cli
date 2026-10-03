@@ -116,14 +116,14 @@ func TestArchiveAndUnarchiveExecutionWithMock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	sockPath := filepath.Join(tmpDir, "mock.sock")
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("failed to listen on mock socket: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	// Mock server handling requests
 	go func() {
@@ -133,7 +133,7 @@ func TestArchiveAndUnarchiveExecutionWithMock(t *testing.T) {
 				return
 			}
 			go func(c net.Conn) {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				dec := json.NewDecoder(c)
 				enc := json.NewEncoder(c)
 

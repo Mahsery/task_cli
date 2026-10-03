@@ -33,7 +33,7 @@ on each specified prerequisite task. Cycles in dependencies are strictly rejecte
 	Example: `  tk dep add T-2 T-1
   tk dep add T-3 T-1 T-2`,
 	Args: cobra.MinimumNArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		taskID := args[0]
 		prereqs := args[1:]
 
@@ -54,7 +54,7 @@ var depRmCmd = &cobra.Command{
 	Long:    `Remove one or more prerequisite dependency links between tasks.`,
 	Example: `  tk dep rm T-2 T-1`,
 	Args:    cobra.MinimumNArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		taskID := args[0]
 		prereqs := args[1:]
 
@@ -75,7 +75,7 @@ var depShowCmd = &cobra.Command{
 	Long:    `Display all prerequisite tasks that this task depends on, and all dependent tasks that this task blocks.`,
 	Example: `  tk dep show T-2`,
 	Args:    cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		taskID := args[0]
 		task, err := taskClient.GetTask(taskID)
 		if err != nil {

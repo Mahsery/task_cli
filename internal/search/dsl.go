@@ -67,23 +67,24 @@ func Tokenize(query string) []token {
 		colonQuote := false
 		start := i
 		for j := i; j < n && runes[j] != ' ' && runes[j] != '\t' && runes[j] != '\n' && runes[j] != '\r' && runes[j] != '(' && runes[j] != ')'; j++ {
-			if runes[j] == ':' && j+1 < n && (runes[j+1] == '"' || runes[j+1] == '\'') {
-				quote := runes[j+1]
-				field := string(runes[start : j+1])
-				j += 2
-				valStart := j
-				for j < n && runes[j] != quote {
-					j++
-				}
-				val := string(runes[valStart:j])
-				if j < n && runes[j] == quote {
-					j++
-				}
-				tokens = append(tokens, token{typ: tokWord, value: field + val})
-				i = j
-				colonQuote = true
-				break
+			if runes[j] != ':' || j+1 >= n || (runes[j+1] != '"' && runes[j+1] != '\'') {
+				continue
 			}
+			quote := runes[j+1]
+			field := string(runes[start : j+1])
+			j += 2
+			valStart := j
+			for j < n && runes[j] != quote {
+				j++
+			}
+			val := string(runes[valStart:j])
+			if j < n && runes[j] == quote {
+				j++
+			}
+			tokens = append(tokens, token{typ: tokWord, value: field + val})
+			i = j
+			colonQuote = true
+			break
 		}
 		if colonQuote {
 			continue
@@ -107,8 +108,7 @@ func Tokenize(query string) []token {
 		default:
 			// Check for leading minus sign e.g. -wip or -tag:bug
 			if strings.HasPrefix(word, "-") && len(word) > 1 {
-				tokens = append(tokens, token{typ: tokNot, value: "NOT"})
-				tokens = append(tokens, token{typ: tokWord, value: word[1:]})
+				tokens = append(tokens, token{typ: tokNot, value: "NOT"}, token{typ: tokWord, value: word[1:]})
 			} else {
 				tokens = append(tokens, token{typ: tokWord, value: word})
 			}
@@ -185,7 +185,7 @@ func (n *termNode) Eval(task *domain.Task) bool {
 	switch n.field {
 	case "tag", "t":
 		for _, tag := range task.Tags {
-			if strings.ToLower(tag) == target || strings.Contains(strings.ToLower(tag), target) {
+			if strings.EqualFold(tag, target) || strings.Contains(strings.ToLower(tag), target) {
 				return true
 			}
 		}
@@ -256,12 +256,11 @@ func (p *parser) peek() *token {
 	return nil
 }
 
-func (p *parser) next() *token {
-	tok := p.peek()
-	if tok != nil {
+// advance consumes the current token, if any.
+func (p *parser) advance() {
+	if p.pos < len(p.tokens) {
 		p.pos++
 	}
-	return tok
 }
 
 // parseExpr parses an OR expression.
@@ -269,18 +268,17 @@ func (p *parser) parseExpr() Node {
 	left := p.parseAnd()
 	for {
 		tok := p.peek()
-		if tok != nil && tok.typ == tokOr {
-			p.next()
-			right := p.parseAnd()
-			if right != nil {
-				if left == nil {
-					left = right
-				} else {
-					left = &orNode{left: left, right: right}
-				}
-			}
-		} else {
+		if tok == nil || tok.typ != tokOr {
 			break
+		}
+		p.advance()
+		right := p.parseAnd()
+		if right != nil {
+			if left == nil {
+				left = right
+			} else {
+				left = &orNode{left: left, right: right}
+			}
 		}
 	}
 	return left
@@ -296,7 +294,7 @@ func (p *parser) parseAnd() Node {
 		}
 
 		if tok.typ == tokAnd {
-			p.next()
+			p.advance()
 			right := p.parseNot()
 			if right != nil {
 				if left == nil {
@@ -308,14 +306,13 @@ func (p *parser) parseAnd() Node {
 		} else {
 			// Implicit AND
 			right := p.parseNot()
-			if right != nil {
-				if left == nil {
-					left = right
-				} else {
-					left = &andNode{left: left, right: right}
-				}
-			} else {
+			if right == nil {
 				break
+			}
+			if left == nil {
+				left = right
+			} else {
+				left = &andNode{left: left, right: right}
 			}
 		}
 	}
@@ -326,7 +323,7 @@ func (p *parser) parseAnd() Node {
 func (p *parser) parseNot() Node {
 	tok := p.peek()
 	if tok != nil && tok.typ == tokNot {
-		p.next()
+		p.advance()
 		child := p.parseNot()
 		if child != nil {
 			return &notNode{child: child}
@@ -344,16 +341,16 @@ func (p *parser) parsePrimary() Node {
 	}
 
 	if tok.typ == tokLParen {
-		p.next()
+		p.advance()
 		expr := p.parseExpr()
 		if p.peek() != nil && p.peek().typ == tokRParen {
-			p.next()
+			p.advance()
 		}
 		return expr
 	}
 
 	if tok.typ == tokWord {
-		p.next()
+		p.advance()
 		val := tok.value
 		// Check for field qualifiers: tag:foo, s:open, etc.
 		if idx := strings.Index(val, ":"); idx > 0 {
@@ -367,7 +364,7 @@ func (p *parser) parsePrimary() Node {
 		return &termNode{val: val}
 	}
 
-	p.next()
+	p.advance()
 	return nil
 }
 

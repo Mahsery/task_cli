@@ -36,9 +36,9 @@ and subsequent lines form the description.`,
   tk new -t "Refactor storage" -m "Migrate to WAL mode"
   echo -e "Update docs\nInclude quickstart" | tk new
   tk new              # Opens interactive editor ($EDITOR)`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		var title string
-		var prio domain.Priority = domain.PriorityNormal
+		var prio = domain.PriorityNormal
 		var tags []string
 		var assignee string
 		var desc string
@@ -95,13 +95,12 @@ and subsequent lines form the description.`,
 			if title == "" {
 				// Use first line of piped desc if no title
 				lines := strings.Split(desc, "\n")
-				if len(lines) > 0 && lines[0] != "" {
-					title = lines[0]
-					if len(lines) > 1 {
-						desc = strings.TrimSpace(strings.Join(lines[1:], "\n"))
-					}
-				} else {
+				if len(lines) == 0 || lines[0] == "" {
 					return fmt.Errorf("task title cannot be empty (use -t or provide in template)")
+				}
+				title = lines[0]
+				if len(lines) > 1 {
+					desc = strings.TrimSpace(strings.Join(lines[1:], "\n"))
 				}
 			}
 		} else {
@@ -126,7 +125,7 @@ and subsequent lines form the description.`,
 		}
 		title = normalized
 
-		var status domain.Status = domain.StatusOpen
+		var status = domain.StatusOpen
 		if cmd.Flags().Changed("status") {
 			s, err := domain.ParseStatus(newStatus)
 			if err != nil {

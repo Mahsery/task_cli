@@ -19,7 +19,7 @@ In an interactive terminal, prompts for confirmation unless --yes or -y is speci
   tk rm G-4
   tk delete T-1 -y`,
 	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		taskID := args[0]
 
 		if IsInteractiveTerminal() && !deleteForce && !jsonFlag {

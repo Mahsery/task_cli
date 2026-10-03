@@ -19,7 +19,7 @@ type DB struct {
 
 func Open(dbPath string) (*DB, error) {
 	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create db directory %q: %w", dir, err)
 	}
 
@@ -34,7 +34,7 @@ func Open(dbPath string) (*DB, error) {
 
 	db := &DB{conn: conn, dbPath: dbPath}
 	if err := db.migrate(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to migrate db: %w", err)
 	}
 
@@ -78,7 +78,7 @@ func (d *DB) migrate() error {
 
 	if userVersion < CurrentSchemaVersion && tableCount > 0 {
 		backupDir := filepath.Join(filepath.Dir(d.dbPath), "backups")
-		_ = os.MkdirAll(backupDir, 0755)
+		_ = os.MkdirAll(backupDir, 0o755)
 		snapshotPath := filepath.Join(backupDir, fmt.Sprintf("pre-upgrade-v%d-%s.db", userVersion, time.Now().Format("20060102-150405")))
 
 		if err := d.IntegrityCheck(); err != nil {
@@ -104,7 +104,7 @@ func (d *DB) migrate() error {
 					hasArchivedAt = true
 				}
 			}
-			cols.Close()
+			_ = cols.Close()
 		}
 		if !hasArchivedAt {
 			if _, err := d.conn.Exec("ALTER TABLE tasks ADD COLUMN archived_at DATETIME;"); err != nil {

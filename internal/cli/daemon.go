@@ -37,7 +37,7 @@ var daemonStartCmd = &cobra.Command{
 	Long:  `Launch the tk daemon in a detached background session and verify it is accepting connections.`,
 	Example: `  tk daemon start
   tk daemon start --socket /tmp/tk-custom.sock`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if daemonSocketPath != "" {
 			cfg.SocketPath = daemonSocketPath
 		}
@@ -59,11 +59,11 @@ var daemonStartCmd = &cobra.Command{
 		}
 
 		logPath := filepath.Join(cfg.GlobalDir, "daemon.log")
-		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			return fmt.Errorf("failed to open daemon log file %s: %w", logPath, err)
 		}
-		defer logFile.Close()
+		defer func() { _ = logFile.Close() }()
 
 		spawnArgs := []string{"daemon", "run"}
 		if daemonSocketPath != "" {
@@ -129,7 +129,7 @@ var daemonRestartCmd = &cobra.Command{
 
 		if err := taskClient.PingPassive(); err == nil {
 			_ = taskClient.ShutdownDaemon()
-			taskClient.Close()
+			_ = taskClient.Close()
 			deadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(deadline) {
 				if err := taskClient.PingPassive(); err != nil {
@@ -149,7 +149,7 @@ var daemonRunCmd = &cobra.Command{
 	Long:  `Run the task daemon process in the foreground, logging requests and events to stdout. Useful for debugging or containerized services.`,
 	Example: `  tk daemon run
   tk daemon run --socket /tmp/tk-custom.sock`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if daemonSocketPath != "" {
 			cfg.SocketPath = daemonSocketPath
 		}
@@ -167,7 +167,7 @@ var daemonStopCmd = &cobra.Command{
 	Long:  `Send a graceful shutdown signal to the active daemon, closing database connections, flushing WAL frames, and unlinking the socket.`,
 	Example: `  tk daemon stop
   tk daemon stop --json`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if err := taskClient.PingPassive(); err != nil {
 			if jsonFlag {
 				return outputJSON(map[string]any{"running": false, "message": "Daemon is not running."})
@@ -175,7 +175,7 @@ var daemonStopCmd = &cobra.Command{
 			fmt.Println("Daemon is not running.")
 			return nil
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		if err := taskClient.ShutdownDaemon(); err != nil {
 			return err
@@ -204,7 +204,7 @@ var daemonStatusCmd = &cobra.Command{
 	Long:  `Ping the daemon socket passively without triggering auto-spawn to verify whether the background process is running and healthy.`,
 	Example: `  tk daemon status
   tk daemon status --json`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		err := taskClient.PingPassive()
 		if err != nil {
 			if jsonFlag {

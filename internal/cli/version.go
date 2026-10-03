@@ -17,7 +17,7 @@ var versionCmd = &cobra.Command{
 	Example: `  tk version
   tk version --json
   tk --version`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		info := version.Get()
 		if jsonFlag {
 			enc := json.NewEncoder(os.Stdout)

@@ -50,7 +50,7 @@ When a task is orphaned:
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		actor := cfg.Actor
 		if orphanActor != "" {
@@ -285,11 +285,11 @@ and tags abandoned or stale open tasks (including unassigned tasks with zero act
   # Or using flag on tk orphan:
   tk orphan --backport --dry-run
   tk orphan --backport --older-than 24h`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		actor := cfg.Actor
 		if orphanActor != "" {
@@ -325,11 +325,11 @@ commits, or dependency activity within the threshold window.`,
 
   # Custom inactivity threshold with reason
   tk orphan reap --older-than 2h -m "Reaping inactive tasks"`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		actor := cfg.Actor
 		if orphanActor != "" {
@@ -358,11 +358,11 @@ var orphanListCmd = &cobra.Command{
 	Long:  "Displays tasks that are currently tagged 'orphaned' along with stale candidate tasks.",
 	Example: `  tk orphan list
   tk orphan list --older-than 30m`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		actor := cfg.Actor
 		if orphanActor != "" {

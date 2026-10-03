@@ -165,15 +165,15 @@ func GetWorkingDiff(repoDir string) (*CommitInfo, error) {
 
 func FormatKernelPatch(info *CommitInfo) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("commit %s\n", info.SHA))
-	sb.WriteString(fmt.Sprintf("Author: %s\n", info.Author))
-	sb.WriteString(fmt.Sprintf("Date:   %s\n\n", info.Date))
-	sb.WriteString(fmt.Sprintf("    %s\n", info.Subject))
+	fmt.Fprintf(&sb, "commit %s\n", info.SHA)
+	fmt.Fprintf(&sb, "Author: %s\n", info.Author)
+	fmt.Fprintf(&sb, "Date:   %s\n\n", info.Date)
+	fmt.Fprintf(&sb, "    %s\n", info.Subject)
 	if info.Body != "" {
 		sb.WriteString("\n")
 		lines := strings.Split(info.Body, "\n")
 		for _, l := range lines {
-			sb.WriteString(fmt.Sprintf("    %s\n", l))
+			fmt.Fprintf(&sb, "    %s\n", l)
 		}
 	}
 	sb.WriteString("\n")

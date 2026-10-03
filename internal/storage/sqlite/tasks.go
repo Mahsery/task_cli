@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -42,7 +43,7 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Monotonically allocate sequence number from persistent task_sequences table
 	var nextSeq int64
@@ -80,7 +81,6 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 		return nil, fmt.Errorf("failed to insert task: %w", err)
 	}
 
-	var linkedDeps []string
 	for _, depID := range dependsOn {
 		depID = strings.TrimSpace(depID)
 		if depID == "" {
@@ -97,7 +97,6 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 		if err != nil {
 			return nil, fmt.Errorf("failed to link dependency %s -> %s: %w", taskID, depID, err)
 		}
-		linkedDeps = append(linkedDeps, depID)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -158,7 +157,7 @@ func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
 
 	var task domain.Task
 	if err := scanTask(row, &task); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("task %q not found", id)
 		}
 		return nil, fmt.Errorf("failed to query task: %w", err)
@@ -170,7 +169,7 @@ func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query task notes: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	task.Notes = []domain.TaskNote{}
 	for rows.Next() {
@@ -194,7 +193,7 @@ func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
 	`
 	depRows, err := q.Query(depQuery, id)
 	if err == nil {
-		defer depRows.Close()
+		defer func() { _ = depRows.Close() }()
 		task.DependsOn = []string{}
 		task.BlockedBy = []string{}
 		for depRows.Next() {
@@ -215,7 +214,7 @@ func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
 	`
 	downRows, err := q.Query(downstreamQuery, id)
 	if err == nil {
-		defer downRows.Close()
+		defer func() { _ = downRows.Close() }()
 		task.Blocks = []string{}
 		for downRows.Next() {
 			var blockedID string
@@ -232,7 +231,7 @@ func (d *DB) GetTask(id string) (*domain.Task, error) {
 	return d.getTaskLocked(d.conn, id)
 }
 
-func (d *DB) UpdateTask(id string, title, description *string, status *domain.Status, priority *domain.Priority, tags *[]string, addTags []string, removeTags []string, assignee *string, addNote *string, author string) (*domain.Task, error) {
+func (d *DB) UpdateTask(id string, title, description *string, status *domain.Status, priority *domain.Priority, tags *[]string, addTags, removeTags []string, assignee, addNote *string, author string) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -240,13 +239,13 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Verify task exists and load current state in transaction
 	var currentTagsJSON, currentTitle string
 	err = tx.QueryRow("SELECT tags, title FROM tasks WHERE id = ?", id).Scan(&currentTagsJSON, &currentTitle)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("task %s not found", id)
 		}
 		return nil, fmt.Errorf("failed to query task: %w", err)
@@ -346,7 +345,7 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 	}
 
 	args = append(args, id)
-	updateSQL := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(updates, ", "))
+	updateSQL := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(updates, ", ")) //nolint:gosec // G201: only fixed column/placeholder fragments are interpolated; values are bound via args
 
 	if _, err := tx.Exec(updateSQL, args...); err != nil {
 		return nil, fmt.Errorf("failed to update task: %w", err)
@@ -367,7 +366,7 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 	return d.GetTask(id)
 }
 
-func (d *DB) ClaimTask(id string, assignee string, force bool) (*domain.Task, error) {
+func (d *DB) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -380,7 +379,7 @@ func (d *DB) ClaimTask(id string, assignee string, force bool) (*domain.Task, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var currentAssignee, currentStatus, currentTagsJSON string
 	query := "SELECT assignee, status, tags FROM tasks WHERE id = ?"
@@ -435,12 +434,12 @@ func (d *DB) ClaimTask(id string, assignee string, force bool) (*domain.Task, er
 	return d.GetTask(id)
 }
 
-func (d *DB) orphanTaskLocked(id string, actor, reason string, now time.Time) error {
+func (d *DB) orphanTaskLocked(id, actor, reason string, now time.Time) error {
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var currentAssignee, currentStatus, currentTagsJSON string
 	query := "SELECT assignee, status, tags FROM tasks WHERE id = ?"
@@ -481,7 +480,7 @@ func (d *DB) orphanTaskLocked(id string, actor, reason string, now time.Time) er
 	if actor == "" {
 		actor = "system"
 	}
-	noteContent := ""
+	var noteContent string
 	if reason != "" {
 		if currentAssignee != "" {
 			noteContent = fmt.Sprintf("Task orphaned: %s (dropped assignee %q, reset status to %s)", reason, currentAssignee, newStatus)
@@ -509,7 +508,7 @@ func (d *DB) orphanTaskLocked(id string, actor, reason string, now time.Time) er
 	return tx.Commit()
 }
 
-func (d *DB) OrphanTask(id string, actor, reason string) (*domain.Task, error) {
+func (d *DB) OrphanTask(id, actor, reason string) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -520,7 +519,7 @@ func (d *DB) OrphanTask(id string, actor, reason string) (*domain.Task, error) {
 	return d.getTaskLocked(d.conn, id)
 }
 
-func (d *DB) TransferTask(id string, fromActor, toAssignee, note string, force bool) (*domain.Task, error) {
+func (d *DB) TransferTask(id, fromActor, toAssignee, note string, _ bool) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -533,7 +532,7 @@ func (d *DB) TransferTask(id string, fromActor, toAssignee, note string, force b
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var currentAssignee, currentStatus, currentTagsJSON string
 	query := "SELECT assignee, status, tags FROM tasks WHERE id = ?"
@@ -608,7 +607,7 @@ func (d *DB) ArchiveTask(id, actor, reason string) (*domain.Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var currentStatus string
 	var archivedAt sql.NullTime
@@ -664,7 +663,7 @@ func (d *DB) UnarchiveTask(id, actor, reason string) (*domain.Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var currentStatus, assignee string
 	var archivedAt, closedAt sql.NullTime
@@ -750,7 +749,7 @@ func (d *DB) findStaleTasksLocked(scope, repoPath string, threshold time.Duratio
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tasks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var candidateIDs []string
 	for rows.Next() {
@@ -843,15 +842,6 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 	}
 
 	return candidates, orphanedIDs, nil
-}
-
-func hasTag(tags []string, target string) bool {
-	for _, t := range tags {
-		if strings.EqualFold(t, target) {
-			return true
-		}
-	}
-	return false
 }
 
 func taskActivityTime(t *domain.Task) time.Time {
@@ -1012,7 +1002,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tasks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tasks []*domain.Task
 	for rows.Next() {
@@ -1040,10 +1030,10 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 			placeholders = append(placeholders, "?")
 		}
 
-		notesQuery := fmt.Sprintf("SELECT id, task_id, author, content, created_at FROM task_notes WHERE task_id IN (%s) ORDER BY created_at ASC", strings.Join(placeholders, ","))
+		notesQuery := fmt.Sprintf("SELECT id, task_id, author, content, created_at FROM task_notes WHERE task_id IN (%s) ORDER BY created_at ASC", strings.Join(placeholders, ",")) //nolint:gosec // G201: only fixed column/placeholder fragments are interpolated; values are bound via args
 		noteRows, err := d.conn.Query(notesQuery, taskIDs...)
 		if err == nil {
-			defer noteRows.Close()
+			defer func() { _ = noteRows.Close() }()
 			for noteRows.Next() {
 				var note domain.TaskNote
 				var tID string
@@ -1071,6 +1061,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		}
 
 		inClause := strings.Join(placeholders, ",")
+		//nolint:gosec // G201: only "?" placeholders are interpolated; IDs are bound via args
 		depsQuery := fmt.Sprintf(`
 			SELECT td.task_id, td.depends_on_id, COALESCE(p.status, 'open')
 			FROM task_dependencies td
@@ -1078,10 +1069,12 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 			WHERE td.task_id IN (%s) OR td.depends_on_id IN (%s)
 		`, inClause, inClause)
 
-		args := append(taskIDs, taskIDs...)
+		args := make([]any, 0, 2*len(taskIDs))
+		args = append(args, taskIDs...)
+		args = append(args, taskIDs...)
 		depRows, err := d.conn.Query(depsQuery, args...)
 		if err == nil {
-			defer depRows.Close()
+			defer func() { _ = depRows.Close() }()
 			for depRows.Next() {
 				var tID, depID, depStatus string
 				if err := depRows.Scan(&tID, &depID, &depStatus); err == nil {
@@ -1171,7 +1164,7 @@ func (d *DB) DeleteTask(id string) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// 1. Fetch full task including notes & git diff inside tx
 	task, err := d.getTaskLocked(tx, id)
@@ -1244,7 +1237,7 @@ func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, m
 	}
 
 	args = append(args, id)
-	updateSQL := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(updates, ", "))
+	updateSQL := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(updates, ", ")) //nolint:gosec // G201: only fixed column/placeholder fragments are interpolated; values are bound via args
 	if _, err := d.conn.Exec(updateSQL, args...); err != nil {
 		return nil, fmt.Errorf("failed to attach git info: %w", err)
 	}
@@ -1362,7 +1355,7 @@ func (d *DB) RestoreTask(task *domain.Task) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if err := d.restoreTaskTx(tx, task); err != nil {
 		return err
@@ -1376,7 +1369,7 @@ func (d *DB) RestoreTaskByID(id string) (*domain.Task, error) {
 
 	var taskJSON string
 	err := d.conn.QueryRow("SELECT task_json FROM task_tombstones WHERE id = ?", id).Scan(&taskJSON)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("tombstone for task %q not found", id)
 	}
 	if err != nil {
@@ -1392,7 +1385,7 @@ func (d *DB) RestoreTaskByID(id string) (*domain.Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if err := d.restoreTaskTx(tx, &task); err != nil {
 		return nil, err
@@ -1425,7 +1418,7 @@ func (d *DB) ListTombstones(scope, repoPath string) ([]*domain.Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tombstones: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tasks []*domain.Task
 	for rows.Next() {
@@ -1462,7 +1455,7 @@ func (d *DB) AddDependency(taskID, dependsOnID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Verify both tasks exist
 	var exists int
@@ -1518,7 +1511,7 @@ func (d *DB) RemoveDependency(taskID, dependsOnID string) error {
 	return nil
 }
 
-func (d *DB) GetDependencies(taskID string) (dependsOn []string, blocks []string, err error) {
+func (d *DB) GetDependencies(taskID string) (dependsOn, blocks []string, err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -1526,7 +1519,7 @@ func (d *DB) GetDependencies(taskID string) (dependsOn []string, blocks []string
 	if err != nil {
 		return nil, nil, err
 	}
-	defer depRows.Close()
+	defer func() { _ = depRows.Close() }()
 
 	dependsOn = []string{}
 	for depRows.Next() {
@@ -1540,7 +1533,7 @@ func (d *DB) GetDependencies(taskID string) (dependsOn []string, blocks []string
 	if err != nil {
 		return nil, nil, err
 	}
-	defer blockRows.Close()
+	defer func() { _ = blockRows.Close() }()
 
 	blocks = []string{}
 	for blockRows.Next() {
@@ -1569,7 +1562,7 @@ func (d *DB) CheckBlocked(taskID string) (blocked bool, unfinishedPrereqs []*dom
 	if err != nil {
 		return false, nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var prereqs []*domain.Task
 	for rows.Next() {

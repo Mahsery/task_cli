@@ -32,14 +32,14 @@ func TestMockListenerPing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	sockPath := filepath.Join(tmpDir, "mock.sock")
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("failed to listen on mock socket: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	// Handle one connection in goroutine
 	done := make(chan struct{})
@@ -49,7 +49,7 @@ func TestMockListenerPing(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		dec := json.NewDecoder(conn)
 		enc := json.NewEncoder(conn)
@@ -83,14 +83,14 @@ func TestArchiveAndUnarchiveMock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	sockPath := filepath.Join(tmpDir, "mock.sock")
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("failed to listen on mock socket: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	done := make(chan struct{})
 	go func() {
@@ -99,7 +99,7 @@ func TestArchiveAndUnarchiveMock(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		dec := json.NewDecoder(conn)
 		enc := json.NewEncoder(conn)
@@ -110,7 +110,8 @@ func TestArchiveAndUnarchiveMock(t *testing.T) {
 				return
 			}
 			now := time.Now()
-			if req.Action == protocol.ActionArchiveTask {
+			switch req.Action {
+			case protocol.ActionArchiveTask:
 				var p protocol.ArchiveTaskPayload
 				_ = json.Unmarshal(req.Payload, &p)
 				task := domain.Task{
@@ -124,7 +125,7 @@ func TestArchiveAndUnarchiveMock(t *testing.T) {
 					Success: true,
 					Data:    data,
 				})
-			} else if req.Action == protocol.ActionUnarchiveTask {
+			case protocol.ActionUnarchiveTask:
 				var p protocol.UnarchiveTaskPayload
 				_ = json.Unmarshal(req.Payload, &p)
 				task := domain.Task{

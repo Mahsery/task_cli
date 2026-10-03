@@ -40,7 +40,7 @@ Running 'tk' without arguments in an interactive terminal launches the TUI.`,
   tk search bug AND odin # Search tasks using boolean query DSL
   tk -g list             # List global tasks across all projects
   tk list --json         # Output tasks in JSON format for automation`,
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+	PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 		cfg = config.Load()
 
 		if flagSocket != "" {
@@ -69,7 +69,7 @@ Running 'tk' without arguments in an interactive terminal launches the TUI.`,
 		taskClient = client.New(cfg, scope, repoRoot)
 		return nil
 	},
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(cmd *cobra.Command, _ []string) error {
 		// If invoked with no args and connected to an interactive terminal, launch TUI
 		if !IsInteractiveTerminal() || jsonFlag {
 			return cmd.Help()
@@ -78,7 +78,7 @@ Running 'tk' without arguments in an interactive terminal launches the TUI.`,
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		model := tui.NewModel(taskClient, cfg.Editor, scope, repoRoot)
 		p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())

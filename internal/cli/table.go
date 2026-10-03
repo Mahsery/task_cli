@@ -59,14 +59,13 @@ func renderTaskTable(tasks []*domain.Task) {
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("%s %s %s %s %s %s\n",
+	fmt.Fprintf(&sb, "%s %s %s %s %s %s\n",
 		padRight("ID", idW),
 		padRight("STATUS", statusW),
 		padRight("PRI", priW),
 		padRight("TITLE", titleW),
 		padRight("TAGS", tagsW),
-		"AGE",
-	))
+		"AGE")
 	sb.WriteString(strings.Repeat(sepChar, sepWidth) + "\n")
 	for _, t := range tasks {
 		rawTitle := t.Title
@@ -74,7 +73,7 @@ func renderTaskTable(tasks []*domain.Task) {
 			if IsASCIIOnly() {
 				rawTitle = "[orphan] " + rawTitle
 			} else {
-				rawTitle = rawTitle + " 👻"
+				rawTitle += " 👻"
 			}
 		}
 		title := truncateWithEllipsis(rawTitle, titleW)
@@ -91,14 +90,13 @@ func renderTaskTable(tasks []*domain.Task) {
 		if t.IsOrphaned() {
 			status = "orphan"
 		}
-		sb.WriteString(fmt.Sprintf("%s %s %s %s %s %s\n",
+		fmt.Fprintf(&sb, "%s %s %s %s %s %s\n",
 			padRight(t.ID, idW),
 			padRight(status, statusW),
 			padRight(string(t.Priority), priW),
 			padRight(title, titleW),
 			padRight(tags, tagsW),
-			age,
-		))
+			age)
 	}
 	_ = PrintWithPager(sb.String())
 }

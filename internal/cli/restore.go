@@ -25,7 +25,7 @@ With --db (or -d), restores the entire task database from the latest or specifie
   tk restore --db latest   # Restore database from latest backup
   tk restore --db -f       # Restore database without interactive confirmation`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		if restoreDBFlag {
 			target := "latest"
 			if len(args) > 0 && strings.TrimSpace(args[0]) != "" {

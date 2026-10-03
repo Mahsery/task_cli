@@ -127,7 +127,7 @@ func PrintWithPager(content string) error {
 		return err
 	}
 
-	cmd := exec.Command(binPath, parts[1:]...)
+	cmd := exec.Command(binPath, parts[1:]...) //nolint:gosec // G702: executing the user-configured $PAGER is the intended behavior
 	cmd.Stdin = strings.NewReader(content)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

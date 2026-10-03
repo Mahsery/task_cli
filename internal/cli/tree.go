@@ -33,7 +33,7 @@ Use --reverse to view prerequisite breakdown (tasks flow into the prerequisites 
   tk tree -r                   # Reverse view: tasks -> required prerequisites
   tk tree -s open,in_progress  # View active tasks only
   tk tree --json               # Export hierarchical tree as JSON`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		var rootID string
 		if len(args) > 0 {
 			rootID = args[0]
@@ -84,7 +84,7 @@ Use --reverse to view prerequisite breakdown (tasks flow into the prerequisites 
 		}
 
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("Task Dependency Tree (%s scope)\n", scope))
+		fmt.Fprintf(&sb, "Task Dependency Tree (%s scope)\n", scope)
 		if treeReverse {
 			sb.WriteString("Mode: Prerequisite Breakdown (Task -> Needs)\n")
 		} else {
@@ -98,7 +98,7 @@ Use --reverse to view prerequisite breakdown (tasks flow into the prerequisites 
 
 		for i, root := range roots {
 			isLast := i == len(roots)-1
-			renderTreeNode(&sb, root, "", isLast, true, IsASCIIOnly(), treeReverse)
+			renderTreeNode(&sb, root, "", isLast, true, IsASCIIOnly())
 		}
 
 		return PrintWithPager(sb.String())
@@ -156,7 +156,7 @@ func buildForest(tasks []*domain.Task, taskMap map[string]*domain.Task, reverse 
 	return roots
 }
 
-func buildSubtree(task *domain.Task, taskMap map[string]*domain.Task, reverse bool, branchVisited map[string]bool, allVisited map[string]bool) *TreeNode {
+func buildSubtree(task *domain.Task, taskMap map[string]*domain.Task, reverse bool, branchVisited, allVisited map[string]bool) *TreeNode {
 	node := &TreeNode{Task: task}
 	branchVisited[task.ID] = true
 	allVisited[task.ID] = true
@@ -188,7 +188,7 @@ func buildSubtree(task *domain.Task, taskMap map[string]*domain.Task, reverse bo
 	return node
 }
 
-func renderTreeNode(sb *strings.Builder, node *TreeNode, prefix string, isLast bool, isRoot bool, ascii bool, reverse bool) {
+func renderTreeNode(sb *strings.Builder, node *TreeNode, prefix string, isLast, isRoot, ascii bool) {
 	branchGlyph := "├── "
 	lastGlyph := "└── "
 	contGlyph := "│   "
@@ -254,7 +254,7 @@ func renderTreeNode(sb *strings.Builder, node *TreeNode, prefix string, isLast b
 
 	for i, child := range node.Children {
 		childLast := i == len(node.Children)-1
-		renderTreeNode(sb, child, newPrefix, childLast, false, ascii, reverse)
+		renderTreeNode(sb, child, newPrefix, childLast, false, ascii)
 	}
 }
 

@@ -58,16 +58,15 @@ func (d *DB) Backup(targetPath string) error {
 
 func (d *DB) backupLocked(targetPath string) error {
 	dir := filepath.Dir(targetPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create backup directory: %w", err)
 	}
 
 	tmpTarget := fmt.Sprintf("%s.tmp-%d", targetPath, time.Now().UnixNano())
 	_ = os.Remove(tmpTarget)
 
-	escaped := strings.ReplaceAll(tmpTarget, "'", "''")
-	query := fmt.Sprintf("VACUUM INTO '%s';", escaped)
-	if _, err := d.conn.Exec(query); err != nil {
+	// VACUUM INTO accepts an expression, so the target path is bound as a parameter.
+	if _, err := d.conn.Exec("VACUUM INTO ?", tmpTarget); err != nil {
 		_ = os.Remove(tmpTarget)
 		return fmt.Errorf("failed to vacuum into %q: %w", targetPath, err)
 	}
@@ -183,7 +182,7 @@ func (d *DB) Resurrect(targetPath string) error {
 	defer d.mu.Unlock()
 
 	dir := filepath.Dir(targetPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create directory for resurrect: %w", err)
 	}
 

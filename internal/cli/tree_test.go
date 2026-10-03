@@ -83,7 +83,7 @@ func TestTreeForestAndRendering(t *testing.T) {
 	var sb strings.Builder
 	for i, root := range forest {
 		isLast := (i == len(forest)-1)
-		renderTreeNode(&sb, root, "", isLast, true, false, false)
+		renderTreeNode(&sb, root, "", isLast, true, false)
 	}
 	rendered := sb.String()
 
@@ -101,7 +101,7 @@ func TestTreeForestAndRendering(t *testing.T) {
 	var sbASCII strings.Builder
 	for i, root := range forest {
 		isLast := (i == len(forest)-1)
-		renderTreeNode(&sbASCII, root, "", isLast, true, true, false)
+		renderTreeNode(&sbASCII, root, "", isLast, true, true)
 	}
 	renderedASCII := sbASCII.String()
 	if !strings.Contains(renderedASCII, "\\--") {

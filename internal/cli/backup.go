@@ -27,7 +27,7 @@ Backups use SQLite's native VACUUM INTO for non-blocking point-in-time recovery.
   tk backup create my-milestone # Create named snapshot
   tk backup verify              # Run SQLite integrity_check on active database
   tk backup restore <file> -f   # Restore snapshot without confirmation`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		return runBackupList()
 	},
 }
@@ -39,7 +39,7 @@ var backupListCmd = &cobra.Command{
 	Long:    `Display all point-in-time backup snapshots in the .tasks/backups directory with size and age.`,
 	Example: `  tk backup list
   tk backup list --json`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		return runBackupList()
 	},
 }
@@ -83,7 +83,7 @@ var backupCreateCmd = &cobra.Command{
 	Example: `  tk backup create
   tk backup create pre-refactor --keep 10`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		name := ""
 		if len(args) > 0 {
 			name = args[0]
@@ -114,7 +114,7 @@ var backupVerifyCmd = &cobra.Command{
 	Example: `  tk backup verify
   tk backup verify .tasks/backups/snapshot-20260924-120000.db`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		target := ""
 		if len(args) > 0 {
 			target = args[0]
@@ -148,7 +148,7 @@ In interactive mode, a confirmation prompt is displayed unless --force is suppli
   tk backup restore snapshot-20260926-074900.db --force
   tk backup restore .tasks/backups/snapshot-20260924-120000.db`,
 	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		target := "latest"
 		if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
 			target = args[0]
@@ -216,7 +216,7 @@ var dbCmd = &cobra.Command{
 	Example: `  tk db restore latest    # Restore database from newest backup
   tk db list              # List all available snapshots
   tk db backup            # Create an atomic snapshot`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		return runBackupList()
 	},
 }

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -28,10 +27,7 @@ func TestPrintWithPagerNoPagerFlag(t *testing.T) {
 }
 
 func TestPrintWithPagerEnvOverride(t *testing.T) {
-	oldEnv := os.Getenv("TK_NO_PAGER")
-	defer os.Setenv("TK_NO_PAGER", oldEnv)
-
-	os.Setenv("TK_NO_PAGER", "1")
+	t.Setenv("TK_NO_PAGER", "1")
 	content := strings.Repeat("Long output line\n", 100)
 	err := PrintWithPager(content)
 	if err != nil {
@@ -41,69 +37,51 @@ func TestPrintWithPagerEnvOverride(t *testing.T) {
 
 func TestIsInteractiveTerminal(t *testing.T) {
 	// Test dumb terminal rejection
-	oldTerm := os.Getenv("TERM")
-	defer os.Setenv("TERM", oldTerm)
-
-	os.Setenv("TERM", "dumb")
+	t.Setenv("TERM", "dumb")
 	if IsInteractiveTerminal() {
 		t.Errorf("Expected IsInteractiveTerminal() to be false for TERM=dumb")
 	}
 
-	os.Setenv("TERM", "")
+	t.Setenv("TERM", "")
 	if IsInteractiveTerminal() {
 		t.Errorf("Expected IsInteractiveTerminal() to be false for empty TERM")
 	}
 
 	// Test CI environment rejection
-	os.Setenv("TERM", "xterm-256color")
-	oldCI := os.Getenv("CI")
-	defer os.Setenv("CI", oldCI)
-
-	os.Setenv("CI", "true")
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("CI", "true")
 	if IsInteractiveTerminal() {
 		t.Errorf("Expected IsInteractiveTerminal() to be false for CI=true")
 	}
 
 	// Test Agent environment rejection
-	os.Setenv("CI", "")
-	oldAgent := os.Getenv("AGENT")
-	defer os.Setenv("AGENT", oldAgent)
-
-	os.Setenv("AGENT", "1")
+	t.Setenv("CI", "")
+	t.Setenv("AGENT", "1")
 	if IsInteractiveTerminal() {
 		t.Errorf("Expected IsInteractiveTerminal() to be false for AGENT=1")
 	}
 }
 
 func TestIsASCIIOnly(t *testing.T) {
-	oldLC := os.Getenv("LC_ALL")
-	oldLang := os.Getenv("LANG")
-	oldTerm := os.Getenv("TERM")
-	defer func() {
-		os.Setenv("LC_ALL", oldLC)
-		os.Setenv("LANG", oldLang)
-		os.Setenv("TERM", oldTerm)
-	}()
+	t.Setenv("TERM", "xterm-256color")
 
-	os.Setenv("TERM", "xterm-256color")
-
-	os.Setenv("LC_ALL", "C")
+	t.Setenv("LC_ALL", "C")
 	if !IsASCIIOnly() {
 		t.Errorf("Expected IsASCIIOnly() to be true for LC_ALL=C")
 	}
 
-	os.Setenv("LC_ALL", "POSIX")
+	t.Setenv("LC_ALL", "POSIX")
 	if !IsASCIIOnly() {
 		t.Errorf("Expected IsASCIIOnly() to be true for LC_ALL=POSIX")
 	}
 
-	os.Setenv("LC_ALL", "en_US.UTF-8")
+	t.Setenv("LC_ALL", "en_US.UTF-8")
 	if IsASCIIOnly() {
 		t.Errorf("Expected IsASCIIOnly() to be false for en_US.UTF-8")
 	}
 
 	// Test TERM=dumb forces ASCII fallback regardless of locale
-	os.Setenv("TERM", "dumb")
+	t.Setenv("TERM", "dumb")
 	if !IsASCIIOnly() {
 		t.Errorf("Expected IsASCIIOnly() to be true when TERM=dumb")
 	}

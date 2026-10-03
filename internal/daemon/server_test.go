@@ -17,7 +17,7 @@ func TestDaemonArchiveAndUnarchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cfg := &config.Config{
 		GlobalDir:  tmpDir,
@@ -28,13 +28,13 @@ func TestDaemonArchiveAndUnarchive(t *testing.T) {
 	defer func() {
 		srv.mu.Lock()
 		for _, db := range srv.dbs {
-			db.Close()
+			_ = db.Close()
 		}
 		srv.mu.Unlock()
 	}()
 
 	repoPath := filepath.Join(tmpDir, "repo")
-	_ = os.MkdirAll(repoPath, 0755)
+	_ = os.MkdirAll(repoPath, 0o755)
 
 	// 1. Create a task via daemon
 	createPayload, _ := json.Marshal(protocol.CreateTaskPayload{
@@ -166,7 +166,7 @@ func TestDaemonGhostAutoResurrection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cfg := &config.Config{
 		GlobalDir:  tmpDir,
@@ -177,13 +177,13 @@ func TestDaemonGhostAutoResurrection(t *testing.T) {
 	defer func() {
 		srv.mu.Lock()
 		for _, db := range srv.dbs {
-			db.Close()
+			_ = db.Close()
 		}
 		srv.mu.Unlock()
 	}()
 
 	repoPath := filepath.Join(tmpDir, "repo")
-	_ = os.MkdirAll(repoPath, 0755)
+	_ = os.MkdirAll(repoPath, 0o755)
 
 	// 1. Create a task via daemon
 	createPayload, _ := json.Marshal(protocol.CreateTaskPayload{
@@ -251,7 +251,7 @@ func TestDaemonCentralAutoRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cfg := &config.Config{
 		GlobalDir:  tmpDir,
@@ -260,7 +260,7 @@ func TestDaemonCentralAutoRestore(t *testing.T) {
 
 	srv := NewServer(cfg)
 	repoPath := filepath.Join(tmpDir, "repo")
-	_ = os.MkdirAll(repoPath, 0755)
+	_ = os.MkdirAll(repoPath, 0o755)
 
 	// 1. Create a task via daemon (this triggers backup sync to central vault)
 	createPayload, _ := json.Marshal(protocol.CreateTaskPayload{
@@ -301,7 +301,7 @@ func TestDaemonCentralAutoRestore(t *testing.T) {
 	// 2. Shut down daemon / drop DB cache
 	srv.mu.Lock()
 	for _, db := range srv.dbs {
-		db.Close()
+		_ = db.Close()
 	}
 	srv.dbs = make(map[string]*sqlite.DB)
 	srv.mu.Unlock()
@@ -318,7 +318,7 @@ func TestDaemonCentralAutoRestore(t *testing.T) {
 	defer func() {
 		freshSrv.mu.Lock()
 		for _, db := range freshSrv.dbs {
-			db.Close()
+			_ = db.Close()
 		}
 		freshSrv.mu.Unlock()
 	}()
@@ -356,7 +356,7 @@ func TestDaemonBackupListAndRestoreLatest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cfg := &config.Config{
 		GlobalDir:  tmpDir,
@@ -367,13 +367,13 @@ func TestDaemonBackupListAndRestoreLatest(t *testing.T) {
 	defer func() {
 		srv.mu.Lock()
 		for _, db := range srv.dbs {
-			db.Close()
+			_ = db.Close()
 		}
 		srv.mu.Unlock()
 	}()
 
 	repoPath := filepath.Join(tmpDir, "repo")
-	_ = os.MkdirAll(repoPath, 0755)
+	_ = os.MkdirAll(repoPath, 0o755)
 
 	// Create task
 	srv.dispatch(protocol.Request{

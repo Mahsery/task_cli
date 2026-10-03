@@ -45,11 +45,11 @@ var statusCmd = &cobra.Command{
 - Unarchived orphaned tasks with action hints`,
 	Example: `  tk status
   tk status --json`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, _ []string) error {
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
 		}
-		defer taskClient.Close()
+		defer func() { _ = taskClient.Close() }()
 
 		actor := cfg.Actor
 		if flagActor != "" {

@@ -30,13 +30,13 @@ func Load() *Config {
 	}
 
 	appDir := filepath.Join(dataHome, "task_cli")
-	_ = os.MkdirAll(appDir, 0755)
+	_ = os.MkdirAll(appDir, 0o755) //nolint:gosec // G703: data dir is derived from the user's own XDG_DATA_HOME/HOME by design
 
 	socketPath := os.Getenv("TK_SOCKET")
 	if socketPath == "" {
 		// Use /run/user/<uid>/tk.sock if available, otherwise appDir/tk.sock
 		uid := os.Getuid()
-		runUserDir := filepath.Join("/run", "user", strconv.Itoa(uid))
+		runUserDir := "/run/user/" + strconv.Itoa(uid)
 		if stat, err := os.Stat(runUserDir); err == nil && stat.IsDir() {
 			socketPath = filepath.Join(runUserDir, "tk.sock")
 		} else {

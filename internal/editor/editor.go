@@ -27,13 +27,26 @@ type ParsedEditTask struct {
 	NewNote     string
 }
 
-func CreateNewTaskFile(initialTitle string) (string, error) {
-	tmpFile, err := os.CreateTemp("", "tk-new-*.md")
+// writeTempFile creates a temp file matching pattern, writes content to it and
+// closes it. On any write or close failure the file is removed and the error returned.
+func writeTempFile(pattern, content string) (string, error) {
+	tmpFile, err := os.CreateTemp("", pattern)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer tmpFile.Close()
+	if _, err := tmpFile.WriteString(content); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("failed to close temp file: %w", err)
+	}
+	return tmpFile.Name(), nil
+}
 
+func CreateNewTaskFile(initialTitle string) (string, error) {
 	template := fmt.Sprintf(`# Title: %s
 # Priority: normal (low | normal | high | urgent)
 # Tags: 
@@ -42,50 +55,34 @@ func CreateNewTaskFile(initialTitle string) (string, error) {
 Write task description here...
 `, initialTitle)
 
-	if _, err := tmpFile.WriteString(template); err != nil {
-		_ = os.Remove(tmpFile.Name())
-		return "", err
-	}
-
-	return tmpFile.Name(), nil
+	return writeTempFile("tk-new-*.md", template)
 }
 
 func CreateEditTaskFile(task *domain.Task) (string, error) {
-	tmpFile, err := os.CreateTemp("", fmt.Sprintf("tk-edit-%s-*.md", task.ID))
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
-	}
-	defer tmpFile.Close()
-
 	var sb strings.Builder
 	if task.IsOrphaned() {
 		sb.WriteString("# ⚠️  WARNING: THIS TASK IS ORPHANED / STALE\n")
 		sb.WriteString("# Inactivity has exceeded threshold or assignee abandoned work.\n")
 		sb.WriteString("# Run 'tk takeover " + task.ID + "' to claim, or update assignee/status below.\n#\n")
 	}
-	sb.WriteString(fmt.Sprintf("# Task: %s\n", task.ID))
-	sb.WriteString(fmt.Sprintf("# Title: %s\n", task.Title))
+	fmt.Fprintf(&sb, "# Task: %s\n", task.ID)
+	fmt.Fprintf(&sb, "# Title: %s\n", task.Title)
 	if task.IsOrphaned() {
-		sb.WriteString(fmt.Sprintf("# Status: %s [ORPHANED] (open | in_progress | done | closed)\n", task.Status))
+		fmt.Fprintf(&sb, "# Status: %s [ORPHANED] (open | in_progress | done | closed)\n", task.Status)
 	} else {
-		sb.WriteString(fmt.Sprintf("# Status: %s (open | in_progress | done | closed)\n", task.Status))
+		fmt.Fprintf(&sb, "# Status: %s (open | in_progress | done | closed)\n", task.Status)
 	}
-	sb.WriteString(fmt.Sprintf("# Priority: %s (low | normal | high | urgent)\n", task.Priority))
-	sb.WriteString(fmt.Sprintf("# Tags: %s\n", strings.Join(task.Tags, ", ")))
+	fmt.Fprintf(&sb, "# Priority: %s (low | normal | high | urgent)\n", task.Priority)
+	fmt.Fprintf(&sb, "# Tags: %s\n", strings.Join(task.Tags, ", "))
 	if task.IsOrphaned() && task.Assignee != "" {
-		sb.WriteString(fmt.Sprintf("# Assignee: %s [STALE / TIMED OUT]\n\n", task.Assignee))
+		fmt.Fprintf(&sb, "# Assignee: %s [STALE / TIMED OUT]\n\n", task.Assignee)
 	} else {
-		sb.WriteString(fmt.Sprintf("# Assignee: %s\n\n", task.Assignee))
+		fmt.Fprintf(&sb, "# Assignee: %s\n\n", task.Assignee)
 	}
 	sb.WriteString(task.Description)
 	sb.WriteString("\n\n# --- Add new notes/comments below (optional) ---\n")
 
-	if _, err := tmpFile.WriteString(sb.String()); err != nil {
-		_ = os.Remove(tmpFile.Name())
-		return "", err
-	}
-
-	return tmpFile.Name(), nil
+	return writeTempFile(fmt.Sprintf("tk-edit-%s-*.md", task.ID), sb.String())
 }
 
 func BuildEditorCmd(editorCmd, filePath string) *exec.Cmd {
@@ -93,11 +90,13 @@ func BuildEditorCmd(editorCmd, filePath string) *exec.Cmd {
 	if len(parts) == 0 {
 		parts = []string{"nvim"}
 	}
-	args := append(parts[1:], filePath)
+	args := make([]string, 0, len(parts))
+	args = append(args, parts[1:]...)
+	args = append(args, filePath)
 	return exec.Command(parts[0], args...)
 }
 
-func OpenNewTask(editorCmd string, initialTitle string) (*ParsedNewTask, error) {
+func OpenNewTask(editorCmd, initialTitle string) (*ParsedNewTask, error) {
 	tmpPath, err := CreateNewTaskFile(initialTitle)
 	if err != nil {
 		return nil, err

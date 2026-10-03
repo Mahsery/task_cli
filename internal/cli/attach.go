@@ -20,7 +20,7 @@ Must be executed within a git repository.`,
   tk attach T-1 HEAD~1        # Attach specific ancestor commit
   tk attach T-1 --diff        # Attach uncommitted working tree diff`,
 	Args: cobra.RangeArgs(1, 2),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	RunE: func(_ *cobra.Command, args []string) error {
 		taskID := args[0]
 		if repoRoot == "" {
 			return fmt.Errorf("must be inside a git repository to attach git diffs or commits")

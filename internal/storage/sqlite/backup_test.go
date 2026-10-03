@@ -60,7 +60,7 @@ func TestBackupAndIntegrity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open backup database: %v", err)
 	}
-	defer backupDB.Close()
+	defer func() { _ = backupDB.Close() }()
 
 	if err := backupDB.IntegrityCheck(); err != nil {
 		t.Fatalf("backup database failed integrity check: %v", err)

@@ -119,7 +119,7 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 				if t.IsOrphaned() {
 					dispStatus = "orphan"
 				}
-				sb.WriteString(fmt.Sprintf("%-6s [%-11s] %s\n", t.ID, dispStatus, t.Title))
+				fmt.Fprintf(&sb, "%-6s [%-11s] %s\n", t.ID, dispStatus, t.Title)
 			}
 			return PrintWithPager(sb.String())
 		}

@@ -160,7 +160,7 @@ func (c *Client) PingPassive() error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	enc := json.NewEncoder(conn)
 	dec := json.NewDecoder(conn)
@@ -460,11 +460,11 @@ func (c *Client) GetDependencies(taskID string) (*protocol.DependenciesData, err
 	return &data, nil
 }
 
-func (c *Client) AttachGit(taskID string, sha, msg, diffStat, diffContent string, markDone bool) (*domain.Task, error) {
+func (c *Client) AttachGit(taskID, sha, msg, diffStat, diffContent string, markDone bool) (*domain.Task, error) {
 	return c.AttachGitWithForce(taskID, sha, msg, diffStat, diffContent, markDone, false)
 }
 
-func (c *Client) AttachGitWithForce(taskID string, sha, msg, diffStat, diffContent string, markDone, force bool) (*domain.Task, error) {
+func (c *Client) AttachGitWithForce(taskID, sha, msg, diffStat, diffContent string, markDone, force bool) (*domain.Task, error) {
 	p := protocol.AttachGitPayload{
 		TaskID:      taskID,
 		CommitSHA:   sha,
