@@ -6,18 +6,15 @@ import (
 	"strings"
 
 	"task_cli/internal/domain"
+	"task_cli/internal/termutil"
 
 	"github.com/charmbracelet/x/term"
-	"github.com/mattn/go-runewidth"
 )
 
-func padRight(s string, targetWidth int) string {
-	w := runewidth.StringWidth(s)
-	if w >= targetWidth {
-		return s
-	}
-	return s + strings.Repeat(" ", targetWidth-w)
-}
+var (
+	padRight             = termutil.PadRight
+	truncateWithEllipsis = termutil.Truncate
+)
 
 // tableAgeWidth reserves room for the AGE column, e.g. "3 weeks ago (abc123)".
 const tableAgeWidth = 20

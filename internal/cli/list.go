@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"task_cli/internal/domain"
+	"task_cli/internal/termutil"
 
 	"github.com/spf13/cobra"
 )
@@ -173,15 +174,5 @@ func init() {
 }
 
 func formatAge(t time.Time) string {
-	d := time.Since(t)
-	if d < time.Minute {
-		return "just now"
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	}
-	if d < 24*time.Hour {
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	}
-	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	return termutil.FormatAge(t)
 }

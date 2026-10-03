@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"task_cli/internal/termutil"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/term"
 )
@@ -55,14 +57,7 @@ func IsInteractiveTerminal() bool {
 
 // IsASCIIOnly returns true if the current locale is strictly 7-bit ASCII (e.g. C or POSIX) or TERM=dumb.
 func IsASCIIOnly() bool {
-	if strings.ToLower(os.Getenv("TERM")) == "dumb" {
-		return true
-	}
-	lc := os.Getenv("LC_ALL")
-	if lc == "" {
-		lc = os.Getenv("LANG")
-	}
-	return lc == "C" || lc == "POSIX"
+	return termutil.IsASCIIOnly()
 }
 
 // PrintWithPager outputs text to stdout, automatically invoking a pager

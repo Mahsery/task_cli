@@ -635,36 +635,6 @@ func wrapCardText(text string, maxWidth, maxLines int) []string {
 	return result
 }
 
-// truncateWithEllipsis truncates s to maxLen visual cells, appending ".." if truncated.
-func truncateWithEllipsis(s string, maxLen int) string {
-	if maxLen <= 0 {
-		return ""
-	}
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	w := runewidth.StringWidth(s)
-	if w <= maxLen {
-		return s
-	}
-	if maxLen <= 2 {
-		return strings.Repeat(".", maxLen)
-	}
-
-	target := maxLen - 2
-	var sb strings.Builder
-	curW := 0
-	for _, r := range s {
-		rw := runewidth.RuneWidth(r)
-		if curW+rw > target {
-			break
-		}
-		sb.WriteRune(r)
-		curW += rw
-	}
-	sb.WriteString("..")
-	return sb.String()
-}
-
 func timeAgo(t time.Time) string {
 	return timeAgoAt(t, time.Now())
 }
