@@ -201,7 +201,8 @@ type TaskDependency struct {
 type TaskFilter struct {
 	Scope           string
 	RepoPath        string
-	Status          *Status
+	Status          *Status  // Single-status filter (kept for compatibility; merged with Statuses)
+	Statuses        []Status // Multi-status filter: a task matches if its status is any of these (OR)
 	Priority        *Priority
 	Tag             string
 	Assignee        string
@@ -217,6 +218,55 @@ type TaskFilter struct {
 	OnlyArchived    bool   // Return only archived tasks
 	DependsOn       string // Filter by prerequisite task ID
 	Blocks          string // Filter by downstream task ID
+}
+
+// EffectiveStatuses returns the de-duplicated union of Status and Statuses,
+// normalizing the "orphaned" alias to StatusOrphan. Order of first appearance is kept.
+func (f *TaskFilter) EffectiveStatuses() []Status {
+	var out []Status
+	seen := make(map[Status]bool)
+	add := func(s Status) {
+		if strings.EqualFold(string(s), "orphaned") {
+			s = StatusOrphan
+		}
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	if f.Status != nil {
+		add(*f.Status)
+	}
+	for _, s := range f.Statuses {
+		add(s)
+	}
+	return out
+}
+
+// ParseStatusList parses a comma-separated list of statuses (e.g. "open,in_progress").
+// Each element is parsed with ParseStatus; empty elements are ignored and duplicates removed.
+// An input containing no statuses at all is an error.
+func ParseStatusList(s string) ([]Status, error) {
+	var out []Status
+	seen := make(map[Status]bool)
+	for _, part := range strings.Split(s, ",") {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		st, err := ParseStatus(part)
+		if err != nil {
+			return nil, err
+		}
+		if !seen[st] {
+			seen[st] = true
+			out = append(out, st)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("invalid status %q: no status given", s)
+	}
+	return out, nil
 }
 
 type StaleTaskCandidate struct {

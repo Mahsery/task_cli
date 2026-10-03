@@ -36,6 +36,7 @@ var listCmd = &cobra.Command{
 Renders an aligned tabular view by default, or single-line summaries with --short.`,
 	Example: `  tk list
   tk ls -s open -p high
+  tk list -s open,in_progress
   tk list -t backend -q "jwt"
   tk ls -l backend --short
   tk list -a alice
@@ -69,16 +70,8 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 			Blocks:          listBlocks,
 		}
 
-		if listStatus != "" {
-			s, err := domain.ParseStatus(listStatus)
-			if err != nil {
-				return err
-			}
-			if s == domain.StatusOrphan {
-				filter.OnlyOrphaned = true
-			} else {
-				filter.Status = &s
-			}
+		if err := applyStatusFilter(&filter, listStatus); err != nil {
+			return err
 		}
 		if listPriority != "" {
 			p, err := domain.ParsePriority(listPriority)
@@ -138,8 +131,29 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 
 var listSort string
 
+// applyStatusFilter parses the -s/--status flag value, which may be a single
+// status or a comma-separated list (e.g. "open,in_progress"), into filter.
+// A lone "orphan" keeps its dedicated semantics (OnlyOrphaned); when mixed with
+// concrete statuses (e.g. "open,orphan") the result is the union of tasks in
+// those statuses and orphaned tasks, which the storage layer resolves.
+func applyStatusFilter(filter *domain.TaskFilter, raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	statuses, err := domain.ParseStatusList(raw)
+	if err != nil {
+		return err
+	}
+	if len(statuses) == 1 && statuses[0] == domain.StatusOrphan {
+		filter.OnlyOrphaned = true
+		return nil
+	}
+	filter.Statuses = statuses
+	return nil
+}
+
 func init() {
-	listCmd.Flags().StringVarP(&listStatus, "status", "s", "", "Filter by status (open, in_progress, done, closed, orphan)")
+	listCmd.Flags().StringVarP(&listStatus, "status", "s", "", "Filter by status, comma-separated for multiple (open, in_progress, done, closed, orphan)")
 	listCmd.Flags().StringVarP(&listPriority, "priority", "p", "", "Filter by priority (low, normal, high, urgent)")
 	listCmd.Flags().StringVarP(&listTag, "tag", "t", "", "Filter by tag")
 	listCmd.Flags().StringVarP(&listTagLabel, "label", "l", "", "Filter by tag (alias for -t, --tag)")

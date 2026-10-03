@@ -91,6 +91,7 @@ type ListTasksPayload struct {
 	Scope           string           `json:"scope"`
 	RepoPath        string           `json:"repo_path"`
 	Status          *domain.Status   `json:"status,omitempty"`
+	Statuses        []domain.Status  `json:"statuses,omitempty"`
 	Priority        *domain.Priority `json:"priority,omitempty"`
 	Tag             string           `json:"tag,omitempty"`
 	Assignee        string           `json:"assignee,omitempty"`

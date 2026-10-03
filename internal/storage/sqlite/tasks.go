@@ -900,13 +900,37 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		conditions = append(conditions, "repo_path = ?")
 		args = append(args, filter.RepoPath)
 	}
-	if filter.Status != nil {
-		if *filter.Status == domain.StatusOrphan || strings.EqualFold(string(*filter.Status), "orphaned") {
-			filter.OnlyOrphaned = true
+	// Status filtering. "orphan" is not a stored status but a computed condition
+	// (see Task.IsOrphaned), so it is handled separately from concrete statuses:
+	//   - only "orphan"           -> same as OnlyOrphaned
+	//   - only concrete statuses  -> SQL status IN (...)
+	//   - "orphan" + concrete     -> union: status IN (...) OR task is orphaned
+	var concreteStatuses []domain.Status
+	wantOrphan := false
+	for _, s := range filter.EffectiveStatuses() {
+		if s == domain.StatusOrphan {
+			wantOrphan = true
 		} else {
-			conditions = append(conditions, "status = ?")
-			args = append(args, string(*filter.Status))
+			concreteStatuses = append(concreteStatuses, s)
 		}
+	}
+	statusUnionOrphan := wantOrphan && len(concreteStatuses) > 0
+	statusSet := make(map[domain.Status]bool, len(concreteStatuses))
+	if wantOrphan && len(concreteStatuses) == 0 {
+		filter.OnlyOrphaned = true
+	} else if len(concreteStatuses) > 0 {
+		placeholders := make([]string, len(concreteStatuses))
+		for i, s := range concreteStatuses {
+			placeholders[i] = "?"
+			args = append(args, string(s))
+			statusSet[s] = true
+		}
+		inCond := fmt.Sprintf("status IN (%s)", strings.Join(placeholders, ","))
+		if statusUnionOrphan {
+			// Candidate orphans are pre-selected in SQL; exact orphan check happens in memory below.
+			inCond = fmt.Sprintf("(%s OR (tasks.archived_at IS NULL AND tasks.status NOT IN ('done', 'closed', 'archived')))", inCond)
+		}
+		conditions = append(conditions, inCond)
 	}
 	if filter.Priority != nil {
 		conditions = append(conditions, "priority = ?")
@@ -936,7 +960,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	}
 
 	limitClause := ""
-	if filter.Limit > 0 && filter.Search == "" && !filter.OnlyReady && !filter.OnlyBlocked && !filter.OnlyOrphaned && filter.DependsOn == "" && filter.Blocks == "" {
+	if filter.Limit > 0 && filter.Search == "" && !filter.OnlyReady && !filter.OnlyBlocked && !filter.OnlyOrphaned && !statusUnionOrphan && filter.DependsOn == "" && filter.Blocks == "" {
 		limitClause = fmt.Sprintf("LIMIT %d", filter.Limit)
 	}
 
@@ -1006,7 +1030,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	_ = rows.Close() // Explicitly release cursor back to single connection pool before secondary query
 
 	// Batch load notes for listed tasks (unless explicitly omitted and not required for in-memory search / orphan checks)
-	if len(tasks) > 0 && (!filter.OmitNotes || filter.Search != "" || filter.OnlyOrphaned) {
+	if len(tasks) > 0 && (!filter.OmitNotes || filter.Search != "" || filter.OnlyOrphaned || statusUnionOrphan) {
 		taskMap := make(map[string]*domain.Task, len(tasks))
 		var taskIDs []any
 		var placeholders []string
@@ -1076,7 +1100,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		}
 	}
 
-	if filter.OnlyReady || filter.OnlyBlocked || filter.OnlyOrphaned || filter.DependsOn != "" || filter.Blocks != "" {
+	if filter.OnlyReady || filter.OnlyBlocked || filter.OnlyOrphaned || statusUnionOrphan || filter.DependsOn != "" || filter.Blocks != "" {
 		var filtered []*domain.Task
 		for _, t := range tasks {
 			if filter.OnlyReady && (t.Status != domain.StatusOpen || t.IsBlocked) {
@@ -1086,6 +1110,9 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 				continue
 			}
 			if filter.OnlyOrphaned && !t.IsOrphaned() {
+				continue
+			}
+			if statusUnionOrphan && !statusSet[t.Status] && !t.IsOrphaned() {
 				continue
 			}
 			if filter.DependsOn != "" {

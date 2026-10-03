@@ -51,12 +51,8 @@ Supports:
 			Limit:    searchLimit,
 		}
 
-		if searchStatus != "" {
-			s, err := domain.ParseStatus(searchStatus)
-			if err != nil {
-				return err
-			}
-			filter.Status = &s
+		if err := applyStatusFilter(&filter, searchStatus); err != nil {
+			return err
 		}
 		if searchPriority != "" {
 			p, err := domain.ParsePriority(searchPriority)
@@ -101,7 +97,7 @@ Supports:
 }
 
 func init() {
-	searchCmd.Flags().StringVarP(&searchStatus, "status", "s", "", "Filter by status: open, in_progress, done, closed")
+	searchCmd.Flags().StringVarP(&searchStatus, "status", "s", "", "Filter by status, comma-separated for multiple (open, in_progress, done, closed, orphan)")
 	searchCmd.Flags().StringVarP(&searchPriority, "priority", "p", "", "Filter by priority: low, normal, high, urgent")
 	searchCmd.Flags().StringVarP(&searchTag, "tag", "l", "", "Filter by exact tag")
 	searchCmd.Flags().StringVarP(&searchAssignee, "assignee", "a", "", "Filter by assignee")

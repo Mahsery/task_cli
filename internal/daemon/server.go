@@ -578,6 +578,7 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 			Scope:           p.Scope,
 			RepoPath:        p.RepoPath,
 			Status:          p.Status,
+			Statuses:        p.Statuses,
 			Priority:        p.Priority,
 			Tag:             p.Tag,
 			Assignee:        p.Assignee,

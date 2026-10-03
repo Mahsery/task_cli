@@ -255,6 +255,7 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		Scope:           scope,
 		RepoPath:        repoPath,
 		Status:          filter.Status,
+		Statuses:        filter.Statuses,
 		Priority:        filter.Priority,
 		Tag:             filter.Tag,
 		Assignee:        filter.Assignee,

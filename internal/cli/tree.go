@@ -43,12 +43,8 @@ Use --reverse to view prerequisite breakdown (tasks flow into the prerequisites 
 			Scope:    scope,
 			RepoPath: repoRoot,
 		}
-		if treeStatus != "" {
-			s, err := domain.ParseStatus(treeStatus)
-			if err != nil {
-				return err
-			}
-			filter.Status = &s
+		if err := applyStatusFilter(&filter, treeStatus); err != nil {
+			return err
 		}
 
 		tasks, err := taskClient.ListTasks(filter)
@@ -263,7 +259,7 @@ func renderTreeNode(sb *strings.Builder, node *TreeNode, prefix string, isLast b
 }
 
 func init() {
-	treeCmd.Flags().StringVarP(&treeStatus, "status", "s", "", "Filter tasks by status (open, in_progress, done, closed)")
+	treeCmd.Flags().StringVarP(&treeStatus, "status", "s", "", "Filter tasks by status, comma-separated for multiple (open, in_progress, done, closed, orphan)")
 	treeCmd.Flags().BoolVarP(&treeReverse, "reverse", "r", false, "Show reverse tree (prerequisite breakdown)")
 	treeCmd.Flags().BoolVarP(&treeAll, "all", "a", false, "Include closed and done tasks")
 
