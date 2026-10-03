@@ -225,6 +225,11 @@ func ParseNewTaskContent(content string) (*ParsedNewTask, error) {
 	if res.Title == "" {
 		return nil, fmt.Errorf("task creation aborted: title cannot be empty")
 	}
+	title, err := domain.NormalizeTitle(res.Title)
+	if err != nil {
+		return nil, err
+	}
+	res.Title = title
 
 	return res, nil
 }
@@ -317,6 +322,14 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 
 	res.Description = strings.TrimSpace(strings.Join(bodyLines, "\n"))
 	res.NewNote = strings.TrimSpace(strings.Join(noteLines, "\n"))
+
+	if res.Title != orig.Title {
+		title, err := domain.NormalizeTitle(res.Title)
+		if err != nil {
+			return nil, err
+		}
+		res.Title = title
+	}
 
 	return res, nil
 }

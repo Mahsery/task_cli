@@ -117,10 +117,14 @@ and subsequent lines form the description.`,
 			desc = parsed.Description
 		}
 
-		title = strings.TrimSpace(title)
-		if title == "" {
+		if strings.TrimSpace(title) == "" {
 			return fmt.Errorf("task title cannot be empty (use -t or provide in template)")
 		}
+		normalized, err := domain.NormalizeTitle(title)
+		if err != nil {
+			return err
+		}
+		title = normalized
 
 		var status domain.Status = domain.StatusOpen
 		if cmd.Flags().Changed("status") {

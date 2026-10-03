@@ -89,12 +89,12 @@ opens an interactive buffer with existing values pre-populated.`,
 		payload.Author = author
 
 		if hasFlags {
-			if cmd.Flags().Changed("title") {
-				trimmed := strings.TrimSpace(editTitle)
-				if trimmed == "" {
-					return fmt.Errorf("task title cannot be empty")
+			if cmd.Flags().Changed("title") && strings.TrimSpace(editTitle) != task.Title {
+				normalized, err := domain.NormalizeTitle(editTitle)
+				if err != nil {
+					return err
 				}
-				payload.Title = &trimmed
+				payload.Title = &normalized
 			}
 			if cmd.Flags().Changed("status") {
 				s, err := domain.ParseStatus(editStatus)

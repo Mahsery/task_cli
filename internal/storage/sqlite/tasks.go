@@ -18,10 +18,11 @@ func (d *DB) CreateTask(scope, repoPath, title, description string, status domai
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return nil, fmt.Errorf("task title cannot be empty")
+	normalized, err := domain.NormalizeTitle(title)
+	if err != nil {
+		return nil, err
 	}
+	title = normalized
 
 	if tags == nil {
 		tags = []string{}
@@ -242,8 +243,8 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 	defer tx.Rollback()
 
 	// Verify task exists and load current state in transaction
-	var currentTagsJSON string
-	err = tx.QueryRow("SELECT tags FROM tasks WHERE id = ?", id).Scan(&currentTagsJSON)
+	var currentTagsJSON, currentTitle string
+	err = tx.QueryRow("SELECT tags, title FROM tasks WHERE id = ?", id).Scan(&currentTagsJSON, &currentTitle)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("task %s not found", id)
@@ -255,13 +256,15 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 	updates := []string{"updated_at = ?"}
 	args := []any{now}
 
-	if title != nil {
-		trimmed := strings.TrimSpace(*title)
-		if trimmed == "" {
-			return nil, fmt.Errorf("task title cannot be empty")
+	// Re-submitting an unchanged title is always allowed so that legacy titles
+	// predating the length limit don't block unrelated edits.
+	if title != nil && strings.TrimSpace(*title) != strings.TrimSpace(currentTitle) {
+		normalized, err := domain.NormalizeTitle(*title)
+		if err != nil {
+			return nil, err
 		}
 		updates = append(updates, "title = ?")
-		args = append(args, trimmed)
+		args = append(args, normalized)
 	}
 	if description != nil {
 		updates = append(updates, "description = ?")

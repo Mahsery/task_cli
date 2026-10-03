@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type Status string
@@ -39,6 +41,33 @@ func ParseStatus(s string) (Status, error) {
 	default:
 		return StatusOpen, fmt.Errorf("invalid status %q (allowed: open, in_progress, done, closed, archived, orphan)", s)
 	}
+}
+
+// MaxTitleLength is the maximum number of characters (runes) allowed in a task title.
+// Longer context belongs in the description.
+const MaxTitleLength = 120
+
+// NormalizeTitle trims surrounding whitespace and validates a task title.
+// It rejects empty titles, titles containing line breaks or control characters,
+// and titles longer than MaxTitleLength characters.
+func NormalizeTitle(title string) (string, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", fmt.Errorf("task title cannot be empty")
+	}
+	for _, r := range title {
+		if r == '\n' || r == '\r' {
+			return "", fmt.Errorf("task title must be a single line (put details in the description)")
+		}
+		if unicode.IsControl(r) && r != '\t' {
+			return "", fmt.Errorf("task title contains invalid control character %U", r)
+		}
+	}
+	title = strings.ReplaceAll(title, "\t", " ")
+	if n := utf8.RuneCountInString(title); n > MaxTitleLength {
+		return "", fmt.Errorf("task title is too long: %d characters (max %d); move details into the description", n, MaxTitleLength)
+	}
+	return title, nil
 }
 
 type Priority string

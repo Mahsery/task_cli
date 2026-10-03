@@ -1554,7 +1554,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "a":
-			actor := git.GetAuthor()
+			actor := m.resolveActor()
 			if len(m.selected) > 0 {
 				ids := m.getSelectedIDs()
 				m.confirmDialog = &ConfirmDialog{
@@ -1926,8 +1926,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			cmd := editor.BuildEditorCmd(m.editorCmd, tmpPath)
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-				defer os.Remove(tmpPath)
 				if err != nil {
+					_ = os.Remove(tmpPath)
 					return errMsg(err)
 				}
 				data, err := os.ReadFile(tmpPath)
@@ -1936,21 +1936,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				parsed, err := editor.ParseNewTaskContent(string(data))
 				if err != nil {
-					return errMsg(err)
+					return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
 				}
-				author := git.GetAuthor()
 				_, err = m.client.CreateTask(protocol.CreateTaskPayload{
 					Title:       parsed.Title,
 					Description: parsed.Description,
 					Status:      domain.StatusOpen,
 					Priority:    parsed.Priority,
 					Tags:        parsed.Tags,
-					Author:      author,
+					Author:      m.resolveActor(),
 					Assignee:    parsed.Assignee,
 				})
 				if err != nil {
-					return errMsg(err)
+					return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
 				}
+				_ = os.Remove(tmpPath)
 				return m.fetchTasksCmd()()
 			})
 
@@ -1964,8 +1964,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				cmd := editor.BuildEditorCmd(m.editorCmd, tmpPath)
 				return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-					defer os.Remove(tmpPath)
 					if err != nil {
+						_ = os.Remove(tmpPath)
 						return errMsg(err)
 					}
 					data, err := os.ReadFile(tmpPath)
@@ -1974,9 +1974,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					parsed, err := editor.ParseEditTaskContent(string(data), t)
 					if err != nil {
-						return errMsg(err)
+						return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
 					}
-					author := git.GetAuthor()
 					var addNote *string
 					if parsed.NewNote != "" {
 						addNote = &parsed.NewNote
@@ -1990,11 +1989,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Tags:        &parsed.Tags,
 						Assignee:    &parsed.Assignee,
 						AddNote:     addNote,
-						Author:      author,
+						Author:      m.resolveActor(),
 					})
 					if err != nil {
-						return errMsg(err)
+						return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
 					}
+					_ = os.Remove(tmpPath)
 					return m.fetchTasksCmd()()
 				})
 			}
@@ -2351,8 +2351,25 @@ func (m Model) batchArchiveCmd(ids []string, archive bool) tea.Cmd {
 	}
 }
 
+// resolveActor returns the configured actor identity (TK_ACTOR / config), falling back to the git author.
+func (m Model) resolveActor() string {
+	if m.client != nil {
+		if a := m.client.Actor(); a != "" {
+			return a
+		}
+	}
+	return git.GetAuthor()
+}
+
+// wrapText word-wraps text to the given visual width (terminal cells), prefixing each
+// line with indent. Words wider than the available space are hard-broken so no line overflows.
 func wrapText(text string, width int, indent string) []string {
 	var result []string
+	indentW := runewidth.StringWidth(indent)
+	avail := width - indentW
+	if avail < 1 {
+		avail = 1
+	}
 	paragraphs := strings.Split(text, "\n")
 	for _, p := range paragraphs {
 		p = strings.TrimRight(p, " \t\r")
@@ -2367,23 +2384,40 @@ func wrapText(text string, width int, indent string) []string {
 		}
 		var curLine strings.Builder
 		curLine.WriteString(indent)
-		curLen := len(indent)
+		curLen := 0 // visual width excluding indent
+
+		flush := func() {
+			result = append(result, curLine.String())
+			curLine.Reset()
+			curLine.WriteString(indent)
+			curLen = 0
+		}
 
 		for _, w := range words {
-			if curLen > len(indent) && curLen+1+len(w) > width {
-				result = append(result, curLine.String())
-				curLine.Reset()
-				curLine.WriteString(indent)
-				curLen = len(indent)
+			ww := runewidth.StringWidth(w)
+			if curLen > 0 && curLen+1+ww > avail {
+				flush()
 			}
-			if curLen > len(indent) {
+			if curLen > 0 {
 				curLine.WriteString(" ")
 				curLen++
 			}
-			curLine.WriteString(w)
-			curLen += len(w)
+			if ww <= avail-curLen {
+				curLine.WriteString(w)
+				curLen += ww
+				continue
+			}
+			// Hard-break a word that cannot fit on a line by itself.
+			for _, r := range w {
+				rw := runewidth.RuneWidth(r)
+				if curLen > 0 && curLen+rw > avail {
+					flush()
+				}
+				curLine.WriteRune(r)
+				curLen += rw
+			}
 		}
-		if curLine.Len() > len(indent) {
+		if curLen > 0 {
 			result = append(result, curLine.String())
 		}
 	}
@@ -3163,14 +3197,27 @@ func (m Model) renderConfirmationModal(dlg *ConfirmDialog, termWidth, termHeight
 		lines = append(lines, theme.ModalPrompt.Render(pw))
 	}
 
-	// Details
+	// Details: one truncated line per entry, capped so the modal always fits on screen.
 	if len(dlg.Details) > 0 {
 		lines = append(lines, "")
-		for _, det := range dlg.Details {
-			wrapped := wrapText("• "+det, contentWidth, "  ")
-			for _, w := range wrapped {
-				lines = append(lines, theme.ModalDesc.Render(w))
+		maxDetails := 8
+		if termHeight > 0 {
+			if fit := termHeight - 14; fit < maxDetails {
+				maxDetails = fit
 			}
+		}
+		if maxDetails < 1 {
+			maxDetails = 1
+		}
+		shown := dlg.Details
+		if len(shown) > maxDetails {
+			shown = shown[:maxDetails]
+		}
+		for _, det := range shown {
+			lines = append(lines, theme.ModalDesc.Render(truncateToWidth("• "+det, contentWidth)))
+		}
+		if extra := len(dlg.Details) - len(shown); extra > 0 {
+			lines = append(lines, theme.ModalDesc.Render(fmt.Sprintf("  … and %d more", extra)))
 		}
 	}
 
