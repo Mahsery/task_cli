@@ -1,0 +1,80 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - copyloopvar
+    - durationcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - nolintlint
+    - predeclared
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # struct layout churn with no readability benefit
+        - shadow # `err` shadowing is idiomatic Go
+    errcheck:
+      check-type-assertions: true
+    gocritic:
+      enabled-tags: [diagnostic, style, performance]
+      disabled-checks:
+        - hugeParam # bubbletea models are passed by value by design
+        - ifElseChain
+        - unnamedResult
+        - whyNoLint
+    gosec:
+      excludes:
+        - G204 # launching $EDITOR / git with variable args is the point of this tool
+        - G304 # reading user-specified files (drafts, backups) is intended
+        - G301 # data dirs are created 0755 intentionally
+        - G306
+    revive:
+      rules:
+        - name: exported
+          disabled: true # internal packages; doc-comment-per-export is noise here
+        - name: package-comments
+          disabled: true
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: early-return
+        - name: indent-error-flow
+        - name: superfluous-else
+        - name: var-declaration
+        - name: errorf
+        - name: error-strings
+        - name: error-return
+        - name: receiver-naming
+        - name: increment-decrement
+        - name: range
+        - name: time-naming
+        - name: context-as-argument
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: [task_cli]
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

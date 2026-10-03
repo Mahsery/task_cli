@@ -12,7 +12,7 @@ LDFLAGS := -X '$(MODULE)/internal/version.Version=$(VERSION)' \
            -X '$(MODULE)/internal/version.BuildDate=$(BUILD_DATE)' \
            -w -s
 
-.PHONY: all build install uninstall test test-race migrate restart-daemon version clean
+.PHONY: all build install uninstall test test-race migrate restart-daemon version clean tools fmt fmt-check lint vet check hooks
 
 all: build
 
@@ -69,3 +69,39 @@ clean:
 	@echo "==> Cleaning..."
 	rm -f $(BINARY_NAME)
 	rm -f sqlite.test
+
+# ─── Code quality gates (mandatory before every commit; see AGENTS.md §4) ───
+GOLANGCI_LINT ?= $(shell command -v golangci-lint 2>/dev/null || echo $(HOME)/go/bin/golangci-lint)
+
+GOLANGCI_LINT_VERSION ?= v2.14.0
+
+# Install the pinned linter if missing.
+tools:
+	@test -x "$(GOLANGCI_LINT)" || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+# Rewrite sources: gofmt + goimports (local imports grouped under task_cli).
+fmt: tools
+	@$(GOLANGCI_LINT) fmt ./...
+
+# Fail if any file is not formatted.
+fmt-check: tools
+	@out="$$($(GOLANGCI_LINT) fmt --diff ./... 2>&1)"; \
+	if [ -n "$$out" ]; then echo "$$out"; echo "✗ Unformatted files. Run 'make fmt'."; exit 1; fi
+	@echo "✓ Formatting clean"
+
+lint: tools
+	@$(GOLANGCI_LINT) run ./...
+	@echo "✓ Lint clean"
+
+vet:
+	go vet ./...
+
+# Full gate: formatting, strict lint, vet and race-enabled tests. Must pass with zero findings.
+check: fmt-check lint vet test-race
+	@echo "✓ All checks passed"
+
+# Install a git pre-commit hook that blocks commits failing fmt-check or lint.
+hooks:
+	@printf '#!/bin/sh\n# Installed by `make hooks`: enforce formatting + strict lint (AGENTS.md section 4).\nexec make --no-print-directory fmt-check lint\n' > .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "✓ Installed .git/hooks/pre-commit"
