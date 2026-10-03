@@ -555,56 +555,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x":
 		// Batch delete prompt if tasks selected, otherwise single-task
 		if len(m.selected) > 0 {
-			ids := m.getSelectedIDs()
-			m.confirmDialog = &ConfirmDialog{
-				Kind:      ConfirmDelete,
-				Title:     "CONFIRM BATCH DELETION",
-				Prompt:    fmt.Sprintf("Permanently delete %d selected tasks?", len(ids)),
-				Details:   m.getTaskTitlesForIDs(ids),
-				TargetIDs: ids,
-				IsBatch:   true,
-			}
+			m.confirmDialog = m.newBatchConfirmDialog(ConfirmDelete, "CONFIRM BATCH DELETION", fmt.Sprintf("Permanently delete %d selected tasks?", len(m.selected)))
 			return m, nil
 		}
-		if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-			t := m.tasks[m.cursor]
-			m.confirmDialog = &ConfirmDialog{
-				Kind:      ConfirmDelete,
-				Title:     "CONFIRM DELETION",
-				Prompt:    fmt.Sprintf("Permanently delete task %s?", t.ID),
-				Details:   []string{fmt.Sprintf("%s: %s", t.ID, t.Title)},
-				TargetIDs: []string{t.ID},
-				IsBatch:   false,
-			}
+		if cur := m.currentTask(); cur != nil {
+			m.confirmDialog = m.newSingleConfirmDialog(ConfirmDelete, "CONFIRM DELETION", fmt.Sprintf("Permanently delete task %s?", cur.ID), cur)
 			return m, nil
 		}
 
 	case "a":
 		actor := m.resolveActor()
 		if len(m.selected) > 0 {
-			ids := m.getSelectedIDs()
-			m.confirmDialog = &ConfirmDialog{
-				Kind:           ConfirmClaim,
-				Title:          "CONFIRM BATCH CLAIM",
-				Prompt:         fmt.Sprintf("Claim %d selected tasks as %q?", len(ids), actor),
-				Details:        m.getTaskTitlesForIDs(ids),
-				TargetIDs:      ids,
-				IsBatch:        true,
-				TargetAssignee: actor,
-			}
+			dlg := m.newBatchConfirmDialog(ConfirmClaim, "CONFIRM BATCH CLAIM", fmt.Sprintf("Claim %d selected tasks as %q?", len(m.selected), actor))
+			dlg.TargetAssignee = actor
+			m.confirmDialog = dlg
 			return m, nil
 		}
-		if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-			t := m.tasks[m.cursor]
-			m.confirmDialog = &ConfirmDialog{
-				Kind:           ConfirmClaim,
-				Title:          "CONFIRM TASK CLAIM",
-				Prompt:         fmt.Sprintf("Claim task %s as %q?", t.ID, actor),
-				Details:        []string{fmt.Sprintf("%s: %s", t.ID, t.Title)},
-				TargetIDs:      []string{t.ID},
-				IsBatch:        false,
-				TargetAssignee: actor,
-			}
+		if cur := m.currentTask(); cur != nil {
+			dlg := m.newSingleConfirmDialog(ConfirmClaim, "CONFIRM TASK CLAIM", fmt.Sprintf("Claim task %s as %q?", cur.ID, actor), cur)
+			dlg.TargetAssignee = actor
+			m.confirmDialog = dlg
 		}
 		return m, nil
 
@@ -759,37 +729,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.statusMsg = fmt.Sprintf("⚠️ Cannot mark done: %d task(s) are blocked by prerequisites (%s)", len(blockedIDs), strings.Join(blockedIDs, ", "))
 				return m, nil
 			}
-			m.confirmDialog = &ConfirmDialog{
-				Kind:         ConfirmDone,
-				Title:        "CONFIRM BATCH DONE",
-				Prompt:       fmt.Sprintf("Mark %d selected tasks as DONE?", len(ids)),
-				Details:      m.getTaskTitlesForIDs(ids),
-				TargetIDs:    ids,
-				IsBatch:      true,
-				TargetStatus: domain.StatusDone,
-			}
+			dlg := m.newBatchConfirmDialog(ConfirmDone, "CONFIRM BATCH DONE", fmt.Sprintf("Mark %d selected tasks as DONE?", len(ids)))
+			dlg.TargetStatus = domain.StatusDone
+			m.confirmDialog = dlg
 			return m, nil
 		}
 		cur := m.currentTask()
 		if cur != nil {
 			if cur.Status == domain.StatusDone || cur.Status == domain.StatusClosed {
-				undo := UndoAction{
-					Kind:        UndoStatusChange,
-					Description: fmt.Sprintf("Reopened %s", cur.ID),
-					Snapshots: []TaskUndoSnapshot{
-						{
-							Task:             cur,
-							PreviousStatus:   cur.Status,
-							PreviousAssignee: cur.Assignee,
-							PreviousClosedAt: cur.ClosedAt,
-							PreviousTags:     append([]string(nil), cur.Tags...),
-						},
-					},
-				}
-				m.undoStack = append(m.undoStack, undo)
-				if len(m.undoStack) > 50 {
-					m.undoStack = m.undoStack[len(m.undoStack)-50:]
-				}
+				m.pushUndo(UndoStatusChange, fmt.Sprintf("Reopened %s", cur.ID), cloneTaskSnapshot(cur, nil))
 				cur.Status = domain.StatusOpen
 				m.statusMsg = fmt.Sprintf("Reopened %s (press 'u' to undo)", cur.ID)
 				return m, m.reopenTaskCmd(cur.ID)
@@ -798,23 +746,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.statusMsg = fmt.Sprintf("⚠️ Cannot mark %s DONE: blocked by unfinished prerequisite(s): %s", cur.ID, strings.Join(cur.BlockedBy, ", "))
 				return m, nil
 			}
-			undo := UndoAction{
-				Kind:        UndoStatusChange,
-				Description: fmt.Sprintf("Marked %s as DONE", cur.ID),
-				Snapshots: []TaskUndoSnapshot{
-					{
-						Task:             cur,
-						PreviousStatus:   cur.Status,
-						PreviousAssignee: cur.Assignee,
-						PreviousClosedAt: cur.ClosedAt,
-						PreviousTags:     append([]string(nil), cur.Tags...),
-					},
-				},
-			}
-			m.undoStack = append(m.undoStack, undo)
-			if len(m.undoStack) > 50 {
-				m.undoStack = m.undoStack[len(m.undoStack)-50:]
-			}
+			m.pushUndo(UndoStatusChange, fmt.Sprintf("Marked %s as DONE", cur.ID), cloneTaskSnapshot(cur, nil))
 			cur.Status = domain.StatusDone
 			m.statusMsg = fmt.Sprintf("Marked %s as DONE (press 'u' to undo)", cur.ID)
 			return m, m.markDoneCmd(cur.ID)
@@ -823,15 +755,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		// Batch status toggle if tasks selected, otherwise single-task toggle
 		if len(m.selected) > 0 {
-			ids := m.getSelectedIDs()
-			m.confirmDialog = &ConfirmDialog{
-				Kind:      ConfirmStatus,
-				Title:     "CONFIRM BATCH STATUS CYCLE",
-				Prompt:    fmt.Sprintf("Cycle status for %d selected tasks?", len(ids)),
-				Details:   m.getTaskTitlesForIDs(ids),
-				TargetIDs: ids,
-				IsBatch:   true,
-			}
+			m.confirmDialog = m.newBatchConfirmDialog(ConfirmStatus, "CONFIRM BATCH STATUS CYCLE", fmt.Sprintf("Cycle status for %d selected tasks?", len(m.selected)))
 			return m, nil
 		}
 		cur := m.currentTask()
@@ -843,23 +767,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case domain.StatusDone, domain.StatusClosed:
 				newStatus = domain.StatusInProgress
 			}
-			undo := UndoAction{
-				Kind:        UndoStatusChange,
-				Description: fmt.Sprintf("Status change on %s", cur.ID),
-				Snapshots: []TaskUndoSnapshot{
-					{
-						Task:             cur,
-						PreviousStatus:   cur.Status,
-						PreviousAssignee: cur.Assignee,
-						PreviousClosedAt: cur.ClosedAt,
-						PreviousTags:     append([]string(nil), cur.Tags...),
-					},
-				},
-			}
-			m.undoStack = append(m.undoStack, undo)
-			if len(m.undoStack) > 50 {
-				m.undoStack = m.undoStack[len(m.undoStack)-50:]
-			}
+			m.pushUndo(UndoStatusChange, fmt.Sprintf("Status change on %s", cur.ID), cloneTaskSnapshot(cur, nil))
 			cur.Status = newStatus
 			m.statusMsg = fmt.Sprintf("Updated %s status to %s (press 'u' to undo)", cur.ID, newStatus)
 			return m, m.updateStatusCmd(cur.ID, newStatus)

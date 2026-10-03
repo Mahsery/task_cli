@@ -58,6 +58,71 @@ func (m Model) activeConfirmDialog() *ConfirmDialog {
 	return nil
 }
 
+func cloneTaskSnapshot(t, fullTask *domain.Task) TaskUndoSnapshot {
+	if fullTask == nil {
+		clone := *t
+		if t.Tags != nil {
+			clone.Tags = append([]string(nil), t.Tags...)
+		}
+		if t.Notes != nil {
+			clone.Notes = append([]domain.TaskNote(nil), t.Notes...)
+		}
+		fullTask = &clone
+	}
+	var prevClosed *time.Time
+	if t.ClosedAt != nil {
+		tCopy := *t.ClosedAt
+		prevClosed = &tCopy
+	}
+	var prevArchived *time.Time
+	if t.ArchivedAt != nil {
+		tCopy := *t.ArchivedAt
+		prevArchived = &tCopy
+	}
+	return TaskUndoSnapshot{
+		Task:               fullTask,
+		PreviousStatus:     t.Status,
+		PreviousAssignee:   t.Assignee,
+		PreviousClosedAt:   prevClosed,
+		PreviousArchivedAt: prevArchived,
+		PreviousTags:       append([]string(nil), t.Tags...),
+	}
+}
+
+func (m *Model) pushUndo(kind UndoKind, desc string, snapshots ...TaskUndoSnapshot) {
+	m.undoStack = append(m.undoStack, UndoAction{
+		Kind:        kind,
+		Description: desc,
+		Snapshots:   snapshots,
+	})
+	if len(m.undoStack) > 50 {
+		m.undoStack = m.undoStack[len(m.undoStack)-50:]
+	}
+}
+
+func (m *Model) newBatchConfirmDialog(kind ConfirmKind, title, prompt string) *ConfirmDialog {
+	ids := m.getSelectedIDs()
+	return &ConfirmDialog{
+		Kind:      kind,
+		Title:     title,
+		Prompt:    prompt,
+		Details:   m.getTaskTitlesForIDs(ids),
+		TargetIDs: ids,
+		IsBatch:   true,
+	}
+}
+
+func (m *Model) newSingleConfirmDialog(kind ConfirmKind, title, prompt string, t *domain.Task) *ConfirmDialog {
+	return &ConfirmDialog{
+		Kind:      kind,
+		Title:     title,
+		Prompt:    prompt,
+		Details:   []string{fmt.Sprintf("%s: %s", t.ID, t.Title)},
+		TargetIDs: []string{t.ID},
+		IsBatch:   false,
+	}
+}
+
 func (m Model) buildUndoAction(dlg *ConfirmDialog) UndoAction {
 	var snapshots []TaskUndoSnapshot
 	idMap := make(map[string]bool, len(dlg.TargetIDs))
@@ -75,34 +140,7 @@ func (m Model) buildUndoAction(dlg *ConfirmDialog) UndoAction {
 				fullTask = fetched
 			}
 		}
-		if fullTask == nil {
-			clone := *t
-			if t.Tags != nil {
-				clone.Tags = append([]string(nil), t.Tags...)
-			}
-			if t.Notes != nil {
-				clone.Notes = append([]domain.TaskNote(nil), t.Notes...)
-			}
-			fullTask = &clone
-		}
-		var prevClosed *time.Time
-		if t.ClosedAt != nil {
-			tCopy := *t.ClosedAt
-			prevClosed = &tCopy
-		}
-		var prevArchived *time.Time
-		if t.ArchivedAt != nil {
-			tCopy := *t.ArchivedAt
-			prevArchived = &tCopy
-		}
-		snapshots = append(snapshots, TaskUndoSnapshot{
-			Task:               fullTask,
-			PreviousStatus:     t.Status,
-			PreviousAssignee:   t.Assignee,
-			PreviousClosedAt:   prevClosed,
-			PreviousArchivedAt: prevArchived,
-			PreviousTags:       append([]string(nil), t.Tags...),
-		})
+		snapshots = append(snapshots, cloneTaskSnapshot(t, fullTask))
 	}
 
 	var kind UndoKind
