@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -115,6 +116,28 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+const (
+	taskColumns = `id, scope, repo_path, title, description, status, priority, tags, author, assignee,
+	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, diff_content`
+
+	taskColumnsSummary = `id, scope, repo_path, title, description, status, priority, tags, author, assignee,
+	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, '' AS diff_content`
+)
+
+func taskColumnsPrefixed(prefix string) string {
+	cols := []string{
+		"id", "scope", "repo_path", "title", "description", "status", "priority", "tags", "author", "assignee",
+		"created_at", "updated_at", "closed_at", "archived_at", "commit_sha", "commit_msg", "diff_stat", "diff_content",
+	}
+	if prefix == "" {
+		return strings.Join(cols, ", ")
+	}
+	for i, c := range cols {
+		cols[i] = prefix + "." + c
+	}
+	return strings.Join(cols, ", ")
+}
+
 func scanTask(s rowScanner, task *domain.Task) error {
 	var statusStr, priorityStr, tagsJSON string
 	var closedAt, archivedAt sql.NullTime
@@ -146,13 +169,105 @@ func scanTask(s rowScanner, task *domain.Task) error {
 	return nil
 }
 
-func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
-	query := `
-	SELECT id, scope, repo_path, title, description, status, priority, tags, author, assignee,
-	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, diff_content
-	FROM tasks WHERE id = ?
-	`
+func (d *DB) hydrateTaskRelations(q queryRower, tasks []*domain.Task, includeNotes bool) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+	if q == nil {
+		q = d.conn
+	}
 
+	taskMap := make(map[string]*domain.Task, len(tasks))
+	var taskIDs []any
+	var placeholders []string
+	for _, t := range tasks {
+		if t.Notes == nil {
+			t.Notes = []domain.TaskNote{}
+		}
+		t.DependsOn = []string{}
+		t.BlockedBy = []string{}
+		t.Blocks = []string{}
+		taskMap[t.ID] = t
+		taskIDs = append(taskIDs, t.ID)
+		placeholders = append(placeholders, "?")
+	}
+
+	inClause := strings.Join(placeholders, ",")
+
+	// Batch load notes
+	if includeNotes {
+		notesQuery := fmt.Sprintf("SELECT id, task_id, author, content, created_at FROM task_notes WHERE task_id IN (%s) ORDER BY created_at ASC", inClause)
+		noteRows, err := q.Query(notesQuery, taskIDs...)
+		if err != nil {
+			return fmt.Errorf("failed to query task notes: %w", err)
+		}
+		for noteRows.Next() {
+			var note domain.TaskNote
+			var tID string
+			if err := noteRows.Scan(&note.ID, &tID, &note.Author, &note.Content, &note.CreatedAt); err != nil {
+				_ = noteRows.Close()
+				return fmt.Errorf("failed to scan task note: %w", err)
+			}
+			if t, ok := taskMap[tID]; ok {
+				t.Notes = append(t.Notes, note)
+			}
+		}
+		if err := noteRows.Err(); err != nil {
+			_ = noteRows.Close()
+			return fmt.Errorf("failed to iterate task notes: %w", err)
+		}
+		_ = noteRows.Close()
+	}
+
+	// Batch load dependencies
+	depsQuery := fmt.Sprintf(`
+		SELECT td.task_id, td.depends_on_id, COALESCE(p.status, 'open')
+		FROM task_dependencies td
+		LEFT JOIN tasks p ON td.depends_on_id = p.id
+		WHERE td.task_id IN (%s) OR td.depends_on_id IN (%s)
+	`, inClause, inClause)
+
+	args := make([]any, 0, 2*len(taskIDs))
+	args = append(args, taskIDs...)
+	args = append(args, taskIDs...)
+	depRows, err := q.Query(depsQuery, args...)
+	if err != nil {
+		return fmt.Errorf("failed to query task dependencies: %w", err)
+	}
+	for depRows.Next() {
+		var tID, depID, depStatus string
+		if err := depRows.Scan(&tID, &depID, &depStatus); err != nil {
+			_ = depRows.Close()
+			return fmt.Errorf("failed to scan task dependency: %w", err)
+		}
+		if t, ok := taskMap[tID]; ok {
+			t.DependsOn = append(t.DependsOn, depID)
+			if domain.Status(depStatus) != domain.StatusDone && domain.Status(depStatus) != domain.StatusClosed {
+				t.BlockedBy = append(t.BlockedBy, depID)
+				t.IsBlocked = true
+			}
+		}
+		if depT, ok := taskMap[depID]; ok {
+			depT.Blocks = append(depT.Blocks, tID)
+		}
+	}
+	if err := depRows.Err(); err != nil {
+		_ = depRows.Close()
+		return fmt.Errorf("failed to iterate task dependencies: %w", err)
+	}
+	_ = depRows.Close()
+
+	for _, t := range tasks {
+		sort.Strings(t.DependsOn)
+		sort.Strings(t.BlockedBy)
+		sort.Strings(t.Blocks)
+	}
+
+	return nil
+}
+
+func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
+	query := fmt.Sprintf("SELECT %s FROM tasks WHERE id = ?", taskColumns)
 	row := q.QueryRow(query, id)
 
 	var task domain.Task
@@ -163,67 +278,10 @@ func (d *DB) getTaskLocked(q queryRower, id string) (*domain.Task, error) {
 		return nil, fmt.Errorf("failed to query task: %w", err)
 	}
 
-	// Fetch notes
-	notesQuery := `SELECT id, author, content, created_at FROM task_notes WHERE task_id = ? ORDER BY created_at ASC`
-	rows, err := q.Query(notesQuery, id)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query task notes: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
 	task.Notes = []domain.TaskNote{}
-	for rows.Next() {
-		var note domain.TaskNote
-		if err := rows.Scan(&note.ID, &note.Author, &note.Content, &note.CreatedAt); err != nil {
-			return nil, err
-		}
-		task.Notes = append(task.Notes, note)
+	if err := d.hydrateTaskRelations(q, []*domain.Task{&task}, true); err != nil {
+		return nil, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate task notes: %w", err)
-	}
-
-	// Fetch dependencies (prerequisites that must be completed)
-	depQuery := `
-	SELECT td.depends_on_id, COALESCE(p.status, 'open')
-	FROM task_dependencies td
-	LEFT JOIN tasks p ON td.depends_on_id = p.id
-	WHERE td.task_id = ?
-	ORDER BY td.depends_on_id ASC
-	`
-	depRows, err := q.Query(depQuery, id)
-	if err == nil {
-		defer func() { _ = depRows.Close() }()
-		task.DependsOn = []string{}
-		task.BlockedBy = []string{}
-		for depRows.Next() {
-			var depID, depStatus string
-			if err := depRows.Scan(&depID, &depStatus); err == nil {
-				task.DependsOn = append(task.DependsOn, depID)
-				if domain.Status(depStatus) != domain.StatusDone && domain.Status(depStatus) != domain.StatusClosed {
-					task.BlockedBy = append(task.BlockedBy, depID)
-					task.IsBlocked = true
-				}
-			}
-		}
-	}
-
-	// Fetch downstream (tasks that depend on this task)
-	downstreamQuery := `
-	SELECT task_id FROM task_dependencies WHERE depends_on_id = ? ORDER BY task_id ASC
-	`
-	downRows, err := q.Query(downstreamQuery, id)
-	if err == nil {
-		defer func() { _ = downRows.Close() }()
-		task.Blocks = []string{}
-		for downRows.Next() {
-			var blockedID string
-			if err := downRows.Scan(&blockedID); err == nil {
-				task.Blocks = append(task.Blocks, blockedID)
-			}
-		}
-	}
-
 	return &task, nil
 }
 
@@ -992,11 +1050,10 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	}
 
 	query := fmt.Sprintf(`
-	SELECT id, scope, repo_path, title, description, status, priority, tags, author, assignee,
-	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, '' as diff_content
+	SELECT %s
 	FROM tasks %s
 	%s %s
-	`, whereClause, orderClause, limitClause)
+	`, taskColumnsSummary, whereClause, orderClause, limitClause)
 
 	rows, err := d.conn.Query(query, args...)
 	if err != nil {
@@ -1019,77 +1076,10 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	}
 	_ = rows.Close() // Explicitly release cursor back to single connection pool before secondary query
 
-	// Batch load notes for listed tasks (unless explicitly omitted and not required for in-memory search / orphan checks)
-	if len(tasks) > 0 && (!filter.OmitNotes || filter.Search != "" || filter.OnlyOrphaned || statusUnionOrphan) {
-		taskMap := make(map[string]*domain.Task, len(tasks))
-		var taskIDs []any
-		var placeholders []string
-		for _, t := range tasks {
-			taskMap[t.ID] = t
-			taskIDs = append(taskIDs, t.ID)
-			placeholders = append(placeholders, "?")
-		}
-
-		notesQuery := fmt.Sprintf("SELECT id, task_id, author, content, created_at FROM task_notes WHERE task_id IN (%s) ORDER BY created_at ASC", strings.Join(placeholders, ",")) //nolint:gosec // G201: only fixed column/placeholder fragments are interpolated; values are bound via args
-		noteRows, err := d.conn.Query(notesQuery, taskIDs...)
-		if err == nil {
-			defer func() { _ = noteRows.Close() }()
-			for noteRows.Next() {
-				var note domain.TaskNote
-				var tID string
-				if err := noteRows.Scan(&note.ID, &tID, &note.Author, &note.Content, &note.CreatedAt); err == nil {
-					if t, ok := taskMap[tID]; ok {
-						t.Notes = append(t.Notes, note)
-					}
-				}
-			}
-		}
-	}
-
-	// Batch load dependencies for listed tasks
 	if len(tasks) > 0 {
-		taskMap := make(map[string]*domain.Task, len(tasks))
-		var taskIDs []any
-		var placeholders []string
-		for _, t := range tasks {
-			t.DependsOn = []string{}
-			t.BlockedBy = []string{}
-			t.Blocks = []string{}
-			taskMap[t.ID] = t
-			taskIDs = append(taskIDs, t.ID)
-			placeholders = append(placeholders, "?")
-		}
-
-		inClause := strings.Join(placeholders, ",")
-		//nolint:gosec // G201: only "?" placeholders are interpolated; IDs are bound via args
-		depsQuery := fmt.Sprintf(`
-			SELECT td.task_id, td.depends_on_id, COALESCE(p.status, 'open')
-			FROM task_dependencies td
-			LEFT JOIN tasks p ON td.depends_on_id = p.id
-			WHERE td.task_id IN (%s) OR td.depends_on_id IN (%s)
-		`, inClause, inClause)
-
-		args := make([]any, 0, 2*len(taskIDs))
-		args = append(args, taskIDs...)
-		args = append(args, taskIDs...)
-		depRows, err := d.conn.Query(depsQuery, args...)
-		if err == nil {
-			defer func() { _ = depRows.Close() }()
-			for depRows.Next() {
-				var tID, depID, depStatus string
-				if err := depRows.Scan(&tID, &depID, &depStatus); err == nil {
-					if t, ok := taskMap[tID]; ok {
-						t.DependsOn = append(t.DependsOn, depID)
-						if domain.Status(depStatus) != domain.StatusDone && domain.Status(depStatus) != domain.StatusClosed {
-							t.BlockedBy = append(t.BlockedBy, depID)
-							t.IsBlocked = true
-						}
-					}
-					if depT, ok := taskMap[depID]; ok {
-						depT.Blocks = append(depT.Blocks, tID)
-					}
-				}
-			}
+		includeNotes := !filter.OmitNotes || filter.Search != "" || filter.OnlyOrphaned || statusUnionOrphan
+		if err := d.hydrateTaskRelations(d.conn, tasks, includeNotes); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1550,14 +1540,14 @@ func (d *DB) CheckBlocked(taskID string) (blocked bool, unfinishedPrereqs []*dom
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	query := `
-	SELECT p.id, p.scope, p.repo_path, p.title, p.description, p.status, p.priority, p.tags, p.author, p.assignee,
-	       p.created_at, p.updated_at, p.closed_at, p.commit_sha, p.commit_msg, p.diff_stat, p.diff_content
+	//nolint:gosec // G201: taskColumnsPrefixed interpolates fixed internal column names
+	query := fmt.Sprintf(`
+	SELECT %s
 	FROM task_dependencies td
 	JOIN tasks p ON td.depends_on_id = p.id
 	WHERE td.task_id = ? AND p.status NOT IN ('done', 'closed')
 	ORDER BY p.id ASC;
-	`
+	`, taskColumnsPrefixed("p"))
 	rows, err := d.conn.Query(query, taskID)
 	if err != nil {
 		return false, nil, err
@@ -1567,20 +1557,9 @@ func (d *DB) CheckBlocked(taskID string) (blocked bool, unfinishedPrereqs []*dom
 	var prereqs []*domain.Task
 	for rows.Next() {
 		var task domain.Task
-		var statusStr, priorityStr, tagsJSON string
-		var closedAt sql.NullTime
-
-		err := rows.Scan(
-			&task.ID, &task.Scope, &task.RepoPath, &task.Title, &task.Description,
-			&statusStr, &priorityStr, &tagsJSON, &task.Author, &task.Assignee,
-			&task.CreatedAt, &task.UpdatedAt, &closedAt,
-			&task.CommitSHA, &task.CommitMsg, &task.DiffStat, &task.DiffContent,
-		)
-		if err != nil {
+		if err := scanTask(rows, &task); err != nil {
 			return false, nil, err
 		}
-		task.Status = domain.Status(statusStr)
-		task.Priority = domain.Priority(priorityStr)
 		prereqs = append(prereqs, &task)
 	}
 
