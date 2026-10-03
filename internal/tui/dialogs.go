@@ -66,42 +66,43 @@ func (m Model) buildUndoAction(dlg *ConfirmDialog) UndoAction {
 	}
 
 	for _, t := range m.tasks {
-		if idMap[t.ID] {
-			var fullTask *domain.Task
-			if dlg.Kind == ConfirmDelete && m.client != nil {
-				if fetched, err := m.client.GetTask(t.ID); err == nil && fetched != nil {
-					fullTask = fetched
-				}
-			}
-			if fullTask == nil {
-				clone := *t
-				if t.Tags != nil {
-					clone.Tags = append([]string(nil), t.Tags...)
-				}
-				if t.Notes != nil {
-					clone.Notes = append([]domain.TaskNote(nil), t.Notes...)
-				}
-				fullTask = &clone
-			}
-			var prevClosed *time.Time
-			if t.ClosedAt != nil {
-				tCopy := *t.ClosedAt
-				prevClosed = &tCopy
-			}
-			var prevArchived *time.Time
-			if t.ArchivedAt != nil {
-				tCopy := *t.ArchivedAt
-				prevArchived = &tCopy
-			}
-			snapshots = append(snapshots, TaskUndoSnapshot{
-				Task:               fullTask,
-				PreviousStatus:     t.Status,
-				PreviousAssignee:   t.Assignee,
-				PreviousClosedAt:   prevClosed,
-				PreviousArchivedAt: prevArchived,
-				PreviousTags:       append([]string(nil), t.Tags...),
-			})
+		if !idMap[t.ID] {
+			continue
 		}
+		var fullTask *domain.Task
+		if dlg.Kind == ConfirmDelete && m.client != nil {
+			if fetched, err := m.client.GetTask(t.ID); err == nil && fetched != nil {
+				fullTask = fetched
+			}
+		}
+		if fullTask == nil {
+			clone := *t
+			if t.Tags != nil {
+				clone.Tags = append([]string(nil), t.Tags...)
+			}
+			if t.Notes != nil {
+				clone.Notes = append([]domain.TaskNote(nil), t.Notes...)
+			}
+			fullTask = &clone
+		}
+		var prevClosed *time.Time
+		if t.ClosedAt != nil {
+			tCopy := *t.ClosedAt
+			prevClosed = &tCopy
+		}
+		var prevArchived *time.Time
+		if t.ArchivedAt != nil {
+			tCopy := *t.ArchivedAt
+			prevArchived = &tCopy
+		}
+		snapshots = append(snapshots, TaskUndoSnapshot{
+			Task:               fullTask,
+			PreviousStatus:     t.Status,
+			PreviousAssignee:   t.Assignee,
+			PreviousClosedAt:   prevClosed,
+			PreviousArchivedAt: prevArchived,
+			PreviousTags:       append([]string(nil), t.Tags...),
+		})
 	}
 
 	var kind UndoKind

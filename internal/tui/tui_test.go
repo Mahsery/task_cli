@@ -201,7 +201,7 @@ func TestTUIMultiSelectionToggle(t *testing.T) {
 
 	// 1. Space on T-1 toggles T-1 selected and moves cursor to index 1 (T-2)
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if !m.selected["T-1"] {
 		t.Errorf("Expected T-1 to be selected after space")
 	}
@@ -211,7 +211,7 @@ func TestTUIMultiSelectionToggle(t *testing.T) {
 
 	// 2. 'v' on T-2 toggles T-2 selected without moving cursor
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if !m.selected["T-2"] {
 		t.Errorf("Expected T-2 to be selected after 'v'")
 	}
@@ -221,14 +221,14 @@ func TestTUIMultiSelectionToggle(t *testing.T) {
 
 	// 3. 'V' (Select all): since not all are selected, should select all 3
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if len(m.selected) != 3 {
 		t.Errorf("Expected all 3 tasks to be selected after 'V', got %d", len(m.selected))
 	}
 
 	// 4. 'V' again: since all are selected, should deselect all
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if len(m.selected) != 0 {
 		t.Errorf("Expected 0 tasks selected after second 'V', got %d", len(m.selected))
 	}
@@ -236,7 +236,7 @@ func TestTUIMultiSelectionToggle(t *testing.T) {
 	// 5. Select T-1, then press Esc to clear selection
 	m.selected["T-1"] = true
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if len(m.selected) != 0 {
 		t.Errorf("Expected selection to be cleared on Esc, got %d", len(m.selected))
 	}
@@ -339,7 +339,7 @@ func TestTUIDualPaneNavigation(t *testing.T) {
 
 	// 2. Tab toggles to PaneDetail
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.activePane != PaneDetail {
 		t.Errorf("Expected activePane to be PaneDetail after Tab, got %v", m.activePane)
 	}
@@ -349,34 +349,34 @@ func TestTUIDualPaneNavigation(t *testing.T) {
 
 	// 3. Tab toggles back to PaneList
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.activePane != PaneList {
 		t.Errorf("Expected activePane to be PaneList after second Tab, got %v", m.activePane)
 	}
 
 	// 4. 'l' switches to PaneDetail
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.activePane != PaneDetail {
 		t.Errorf("Expected activePane to be PaneDetail after 'l', got %v", m.activePane)
 	}
 
 	// 5. 'h' switches back to PaneList
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.activePane != PaneList {
 		t.Errorf("Expected activePane to be PaneList after 'h', got %v", m.activePane)
 	}
 
 	// 6. Right arrow switches to PaneDetail, Left arrow switches to PaneList
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.activePane != PaneDetail {
 		t.Errorf("Expected activePane to be PaneDetail after Right arrow, got %v", m.activePane)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.activePane != PaneList {
 		t.Errorf("Expected activePane to be PaneList after Left arrow, got %v", m.activePane)
 	}
@@ -384,7 +384,7 @@ func TestTUIDualPaneNavigation(t *testing.T) {
 	// 7. Focus PaneDetail and hit Esc -> returns to PaneList
 	m.activePane = PaneDetail
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.activePane != PaneList {
 		t.Errorf("Expected Esc in PaneDetail to return focus to PaneList, got %v", m.activePane)
 	}
@@ -428,7 +428,7 @@ func TestTUIIndependentContentScrolling(t *testing.T) {
 	// When activePane == PaneList:
 	// 'j' moves cursor to 1, detailScrollOffset stays 0
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.cursor != 1 {
 		t.Errorf("Expected cursor to advance to 1 in PaneList, got %d", m.cursor)
 	}
@@ -438,7 +438,7 @@ func TestTUIIndependentContentScrolling(t *testing.T) {
 
 	// 'k' moves cursor back to 0
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.cursor != 0 {
 		t.Errorf("Expected cursor to return to 0, got %d", m.cursor)
 	}
@@ -448,7 +448,7 @@ func TestTUIIndependentContentScrolling(t *testing.T) {
 
 	// In PaneDetail, 'j' scrolls content (detailScrollOffset++), cursor stays 0!
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.cursor != 0 {
 		t.Errorf("Expected cursor to remain locked at 0 in PaneDetail, got %d", m.cursor)
 	}
@@ -458,14 +458,14 @@ func TestTUIIndependentContentScrolling(t *testing.T) {
 
 	// 'j' again
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.detailScrollOffset != 2 {
 		t.Errorf("Expected detailScrollOffset to be 2, got %d", m.detailScrollOffset)
 	}
 
 	// 'k' scrolls up
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.detailScrollOffset != 1 {
 		t.Errorf("Expected detailScrollOffset to decrement to 1, got %d", m.detailScrollOffset)
 	}
@@ -475,14 +475,14 @@ func TestTUIIndependentContentScrolling(t *testing.T) {
 
 	// Fast scrolling: J adds 6
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'J'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.detailScrollOffset != 7 {
 		t.Errorf("Expected detailScrollOffset to be 7 after 'J', got %d", m.detailScrollOffset)
 	}
 
 	// 'g' jumps to top (0)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.detailScrollOffset != 0 {
 		t.Errorf("Expected detailScrollOffset to reset to 0 after 'g', got %d", m.detailScrollOffset)
 	}
@@ -537,7 +537,7 @@ func TestTUIScrollBoundsInBothPanes(t *testing.T) {
 
 	// 1. Jump to bottom of right pane with 'G'
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.detailScrollOffset != maxDetailOffset {
 		t.Errorf("Expected detailScrollOffset to equal maxDetailOffset (%d) after 'G', got %d", maxDetailOffset, m.detailScrollOffset)
 	}
@@ -545,7 +545,7 @@ func TestTUIScrollBoundsInBothPanes(t *testing.T) {
 	// 2. Press 'j' (down) 20 times past bottom: must NOT accumulate!
 	for i := 0; i < 20; i++ {
 		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-		m = updated.(Model)
+		m = mustModel(t, updated)
 	}
 	if m.detailScrollOffset != maxDetailOffset {
 		t.Errorf("Expected detailScrollOffset to remain clamped at %d after mashing 'j', got %d", maxDetailOffset, m.detailScrollOffset)
@@ -553,7 +553,7 @@ func TestTUIScrollBoundsInBothPanes(t *testing.T) {
 
 	// 3. Press 'k' (up) ONCE: must scroll up immediately by 1 line!
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.detailScrollOffset != maxDetailOffset-1 {
 		t.Errorf("Expected detailScrollOffset to decrement immediately to %d on single 'k', got %d", maxDetailOffset-1, m.detailScrollOffset)
 	}
@@ -561,7 +561,7 @@ func TestTUIScrollBoundsInBothPanes(t *testing.T) {
 	// 4. Press 'k' (up) past top: must clamp to 0 and not become negative
 	for i := 0; i < maxDetailOffset+10; i++ {
 		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-		m = updated.(Model)
+		m = mustModel(t, updated)
 	}
 	if m.detailScrollOffset != 0 {
 		t.Errorf("Expected detailScrollOffset to clamp at 0, got %d", m.detailScrollOffset)
@@ -574,7 +574,7 @@ func TestTUIScrollBoundsInBothPanes(t *testing.T) {
 	// Mash 'k' 10 times past top
 	for i := 0; i < 10; i++ {
 		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-		m = updated.(Model)
+		m = mustModel(t, updated)
 	}
 	if m.cursor != 0 {
 		t.Errorf("Expected cursor to remain at 0, got %d", m.cursor)
@@ -583,7 +583,7 @@ func TestTUIScrollBoundsInBothPanes(t *testing.T) {
 	// Mash 'j' 20 times past bottom (tasks length is 3, max cursor is 2)
 	for i := 0; i < 20; i++ {
 		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-		m = updated.(Model)
+		m = mustModel(t, updated)
 	}
 	if m.cursor != 2 {
 		t.Errorf("Expected cursor to clamp at last task index 2, got %d", m.cursor)
@@ -591,7 +591,7 @@ func TestTUIScrollBoundsInBothPanes(t *testing.T) {
 
 	// Single 'k' from bottom must move to index 1 immediately
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.cursor != 1 {
 		t.Errorf("Expected cursor to move immediately to 1 on single 'k', got %d", m.cursor)
 	}
@@ -615,7 +615,7 @@ func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
 
 	// 1. Test 'x' (Delete) opens ConfirmDelete dialog
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmDelete {
 		t.Fatalf("Expected confirmDialog of kind ConfirmDelete, got %+v", m.confirmDialog)
 	}
@@ -625,7 +625,7 @@ func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
 
 	// 1b. Test cancellation with 'n'
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog != nil {
 		t.Errorf("Expected confirmDialog to be nil after 'n', got %+v", m.confirmDialog)
 	}
@@ -635,7 +635,7 @@ func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
 
 	// 2. Test 'd' (Done) on open task is immediate without confirmation modal
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog != nil {
 		t.Fatalf("Expected NO confirmDialog for single-key 'd', got %+v", m.confirmDialog)
 	}
@@ -646,7 +646,7 @@ func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
 	// 2b. Move to T-3 (Done task) and test 'd' reopens immediately without modal
 	m.cursor = 2
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog != nil {
 		t.Fatalf("Expected NO confirmDialog for single-key 'd' reopen, got %+v", m.confirmDialog)
 	}
@@ -658,7 +658,7 @@ func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
 	m.cursor = 0
 	m.tasks[0].Status = domain.StatusOpen
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog != nil {
 		t.Fatalf("Expected NO confirmDialog for single-key 's', got %+v", m.confirmDialog)
 	}
@@ -668,12 +668,15 @@ func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
 
 	// 4. Test 'a' (Claim) opens ConfirmClaim dialog
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog == nil || m.confirmDialog.Kind != ConfirmClaim {
 		t.Fatalf("Expected confirmDialog of kind ConfirmClaim, got %+v", m.confirmDialog)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
+	if m.confirmDialog != nil {
+		t.Errorf("Expected 'n' to dismiss the claim confirm dialog, got %+v", m.confirmDialog)
+	}
 }
 
 func TestTUIBatchConfirmationDialogs(t *testing.T) {
@@ -693,7 +696,7 @@ func TestTUIBatchConfirmationDialogs(t *testing.T) {
 
 	// 1. Batch delete
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog == nil || !m.confirmDialog.IsBatch || m.confirmDialog.Kind != ConfirmDelete {
 		t.Fatalf("Expected batch ConfirmDelete, got %+v", m.confirmDialog)
 	}
@@ -701,27 +704,30 @@ func TestTUIBatchConfirmationDialogs(t *testing.T) {
 		t.Errorf("Expected 2 target IDs, got %d", len(m.confirmDialog.TargetIDs))
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 
 	// 2. Batch done
 	m.selected = map[string]bool{"T-1": true, "T-2": true}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog == nil || !m.confirmDialog.IsBatch || m.confirmDialog.Kind != ConfirmDone {
 		t.Fatalf("Expected batch ConfirmDone, got %+v", m.confirmDialog)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 
 	// 3. Batch claim
 	m.selected = map[string]bool{"T-1": true, "T-2": true}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog == nil || !m.confirmDialog.IsBatch || m.confirmDialog.Kind != ConfirmClaim {
 		t.Fatalf("Expected batch ConfirmClaim, got %+v", m.confirmDialog)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
+	if m.confirmDialog != nil {
+		t.Errorf("Expected 'n' to dismiss the claim confirm dialog, got %+v", m.confirmDialog)
+	}
 }
 
 func TestTUIUndoStackOperations(t *testing.T) {
@@ -740,20 +746,20 @@ func TestTUIUndoStackOperations(t *testing.T) {
 
 	// 1. Initial state: 'u' reports nothing to undo
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.statusMsg != "Nothing to undo" {
 		t.Errorf("Expected 'Nothing to undo', got %q", m.statusMsg)
 	}
 
 	// 2. Open Claim dialog and confirm with 'y'
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog == nil {
 		t.Fatal("Expected confirmDialog to be open")
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 
 	// Confirm dialog must be closed and undo stack must have 1 entry
 	if m.confirmDialog != nil {
@@ -777,7 +783,7 @@ func TestTUIUndoStackOperations(t *testing.T) {
 
 	// 3. Pop undo with 'u'
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if len(m.undoStack) != 0 {
 		t.Errorf("Expected undoStack to be empty after 'u', got %d", len(m.undoStack))
 	}
@@ -852,7 +858,7 @@ func TestTUITreeViewModeToggleAndRows(t *testing.T) {
 
 	// 2. Test 't' key toggles tree mode
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if !m.treeViewMode {
 		t.Fatalf("expected treeViewMode to be true after pressing 't'")
 	}
@@ -874,7 +880,7 @@ func TestTUITreeViewModeToggleAndRows(t *testing.T) {
 
 	// 4. Toggle back with 't'
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.treeViewMode {
 		t.Fatalf("expected treeViewMode to be false after second 't'")
 	}
@@ -905,7 +911,7 @@ func TestTUIBlockedTaskDoneProtection(t *testing.T) {
 
 	// Press 'd' to mark done on blocked task: should be rejected with warning!
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 
 	if m.confirmDialog != nil {
 		t.Fatalf("expected NO confirmDialog when attempting to complete blocked task, got %v", m.confirmDialog)
@@ -931,7 +937,7 @@ func TestTUILinkModalInteraction(t *testing.T) {
 
 	// 1. Press 'L' to open link modal
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 
 	if !m.isLinking {
 		t.Fatalf("expected isLinking to be true after 'L'")
@@ -952,7 +958,7 @@ func TestTUILinkModalInteraction(t *testing.T) {
 	// 3. Type 'T', '-', '1'
 	for _, r := range []rune{'T', '-', '1'} {
 		up, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		m = up.(Model)
+		m = mustModel(t, up)
 	}
 	if m.linkInput != "T-1" {
 		t.Fatalf("expected linkInput to be 'T-1', got %q", m.linkInput)
@@ -960,14 +966,14 @@ func TestTUILinkModalInteraction(t *testing.T) {
 
 	// 4. Test backspace
 	up, _ := m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if m.linkInput != "T-" {
 		t.Fatalf("expected linkInput to be 'T-' after backspace, got %q", m.linkInput)
 	}
 
 	// 5. Test Escape cancels link modal
 	up, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if m.isLinking {
 		t.Fatalf("expected isLinking to be false after Esc")
 	}
@@ -1081,7 +1087,7 @@ func TestTUISplitResizingKeys(t *testing.T) {
 
 	// 1. Press '>' to widen table
 	up, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'>'}})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if m.splitOffset != 4 {
 		t.Fatalf("expected splitOffset to be 4 after '>', got %d", m.splitOffset)
 	}
@@ -1096,21 +1102,21 @@ func TestTUISplitResizingKeys(t *testing.T) {
 
 	// 2. Press '.' to widen further
 	up, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'.'}})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if m.splitOffset != 8 {
 		t.Fatalf("expected splitOffset to be 8 after '.', got %d", m.splitOffset)
 	}
 
 	// 3. Press '<' to narrow table
 	up, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'<'}})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if m.splitOffset != 4 {
 		t.Fatalf("expected splitOffset to be 4 after '<', got %d", m.splitOffset)
 	}
 
 	// 4. Press '=' to reset split
 	up, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'='}})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if m.splitOffset != 0 {
 		t.Fatalf("expected splitOffset to be 0 after '=', got %d", m.splitOffset)
 	}
@@ -1145,7 +1151,7 @@ func TestTUIMouseSplitDragging(t *testing.T) {
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if !m.isDraggingSplit {
 		t.Fatalf("expected isDraggingSplit to be true after pressing divider")
 	}
@@ -1158,7 +1164,7 @@ func TestTUIMouseSplitDragging(t *testing.T) {
 		Action: tea.MouseActionMotion,
 		Button: tea.MouseButtonLeft,
 	})
-	m = up.(Model)
+	m = mustModel(t, up)
 	detWDragged, _ := m.getDetailDimensions()
 	tableWDragged := 120 - detWDragged - 1
 	if tableWDragged != targetX {
@@ -1175,7 +1181,7 @@ func TestTUIMouseSplitDragging(t *testing.T) {
 		Action: tea.MouseActionRelease,
 		Button: tea.MouseButtonLeft,
 	})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if m.isDraggingSplit {
 		t.Fatalf("expected isDraggingSplit to be false after release")
 	}
@@ -1187,7 +1193,7 @@ func TestTUIMouseSplitDragging(t *testing.T) {
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if m.activePane != PaneList {
 		t.Fatalf("expected activePane to be PaneList after clicking left pane")
 	}
@@ -1202,7 +1208,7 @@ func TestTUIMouseSplitDragging(t *testing.T) {
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 	})
-	m = up.(Model)
+	m = mustModel(t, up)
 	if m.activePane != PaneDetail {
 		t.Fatalf("expected activePane to be PaneDetail after clicking right pane")
 	}
@@ -1277,13 +1283,13 @@ func TestTUIVimMovementChords(t *testing.T) {
 
 	// 1. Vim chord '15': check active chord buffer is displayed in footer
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.chordBuffer != "1" {
 		t.Fatalf("Expected chordBuffer '1', got %q", m.chordBuffer)
 	}
 
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.chordBuffer != "15" {
 		t.Fatalf("Expected chordBuffer '15', got %q", m.chordBuffer)
 	}
@@ -1295,7 +1301,7 @@ func TestTUIVimMovementChords(t *testing.T) {
 
 	// 2. Press 'j': Vim chord 15j jumps down 15 lines from cursor 0 -> cursor 15
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.cursor != 15 {
 		t.Fatalf("Expected cursor 15 after '15j', got %d", m.cursor)
 	}
@@ -1305,11 +1311,11 @@ func TestTUIVimMovementChords(t *testing.T) {
 
 	// 3. Press '15k': Vim chord 15k jumps up 15 lines from cursor 15 -> cursor 0
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.cursor != 0 {
 		t.Fatalf("Expected cursor 0 after '15k', got %d", m.cursor)
 	}
@@ -1319,39 +1325,39 @@ func TestTUIVimMovementChords(t *testing.T) {
 
 	// 4. Test 15G: 1-indexed jump to line 15 (index 14)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.cursor != 14 {
 		t.Fatalf("Expected cursor 14 (line 15) after '15G', got %d", m.cursor)
 	}
 
 	// 5. Test G without chord jumps to last line (index 29)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.cursor != 29 {
 		t.Fatalf("Expected cursor 29 (last line) after 'G', got %d", m.cursor)
 	}
 
 	// 6. Test g jumps to top (line 0)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.cursor != 0 {
 		t.Fatalf("Expected cursor 0 after 'g', got %d", m.cursor)
 	}
 
 	// 7. Test Esc cancels chord
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.chordBuffer != "25" {
 		t.Fatalf("Expected chordBuffer '25', got %q", m.chordBuffer)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.chordBuffer != "" {
 		t.Fatalf("Expected chordBuffer to be empty after Esc, got %q", m.chordBuffer)
 	}
@@ -1377,7 +1383,7 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 
 	// 1. Single-key 'd' transitions task to DONE immediately without confirmation modal
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog != nil {
 		t.Fatalf("Expected NO confirmation modal on pressing 'd', got %+v", m.confirmDialog)
 	}
@@ -1390,7 +1396,7 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 
 	// 2. Undo 'u' reverts single-key 'd' action back to Open
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.tasks[0].Status != domain.StatusOpen {
 		t.Fatalf("Expected task status reverted to OPEN via 'u', got %s", m.tasks[0].Status)
 	}
@@ -1400,7 +1406,7 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 
 	// 3. Single-key 's' transitions task to IN_PROGRESS immediately without confirmation modal
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.confirmDialog != nil {
 		t.Fatalf("Expected NO confirmation modal on pressing 's', got %+v", m.confirmDialog)
 	}
@@ -1413,7 +1419,7 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 
 	// 4. Undo 'u' reverts 's' action back to Open
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.tasks[0].Status != domain.StatusOpen {
 		t.Fatalf("Expected task status reverted to OPEN via 'u', got %s", m.tasks[0].Status)
 	}
@@ -1423,18 +1429,18 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 
 	// 5. Test Quick Tagging with single-key 'm'
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if !m.isTagging {
 		t.Fatalf("Expected isTagging to be true after pressing 'm'")
 	}
 	// Type tag "urgent"
 	for _, r := range "urgent" {
 		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		m = updated.(Model)
+		m = mustModel(t, updated)
 	}
 	// Press Enter to apply tag
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.isTagging {
 		t.Fatalf("Expected isTagging to be false after Enter")
 	}
@@ -1451,7 +1457,7 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 
 	// 6. Undo 'u' reverts quick tag
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	hasTag = false
 	for _, tag := range m.tasks[0].Tags {
 		if tag == "urgent" {
@@ -1559,4 +1565,14 @@ func TestTUIDynamicRepoHeader(t *testing.T) {
 	if !strings.Contains(view2, "tk: global") {
 		t.Errorf("Expected 'tk: global' in header for global scope, got:\n%s", view2)
 	}
+}
+
+// mustModel asserts that a tea.Model returned from Update is our Model.
+func mustModel(t *testing.T, tm tea.Model) Model {
+	t.Helper()
+	m, ok := tm.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want tui.Model", tm)
+	}
+	return m
 }

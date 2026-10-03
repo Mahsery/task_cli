@@ -35,8 +35,7 @@ func (m Model) getDetailContentLines(detailWidth int) []string {
 		latestBadge = fmt.Sprintf(" Created: %s", timeAgo(t.CreatedAt))
 	}
 	latestBadge = truncateToWidth(latestBadge, detailWidth)
-	contentLines = append(contentLines, theme.NoteTime.Width(detailWidth).Render(latestBadge))
-	contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
+	contentLines = append(contentLines, theme.NoteTime.Width(detailWidth).Render(latestBadge), strings.Repeat(" ", detailWidth))
 
 	// Task Title
 	for _, tl := range wrapText(t.ID+": "+t.Title, detailWidth-4, "  ") {
@@ -75,9 +74,7 @@ func (m Model) getDetailContentLines(detailWidth int) []string {
 	} else {
 		contentLines = append(contentLines, meta1)
 		if len(metaParts) > 0 {
-			for _, mp := range wrapText(strings.Join(metaParts, "   "), detailWidth-4, "  ") {
-				contentLines = append(contentLines, mp)
-			}
+			contentLines = append(contentLines, wrapText(strings.Join(metaParts, "   "), detailWidth-4, "  ")...)
 		}
 	}
 	contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
@@ -146,8 +143,7 @@ func (m Model) getDetailContentLines(detailWidth int) []string {
 
 	// Activity Notes
 	if len(t.Notes) > 0 {
-		contentLines = append(contentLines, strings.Repeat(" ", detailWidth))
-		contentLines = append(contentLines, theme.NoteHeader.Width(detailWidth).Render(fmt.Sprintf("  • Notes & Messages (%d):", len(t.Notes))))
+		contentLines = append(contentLines, strings.Repeat(" ", detailWidth), theme.NoteHeader.Width(detailWidth).Render(fmt.Sprintf("  • Notes & Messages (%d):", len(t.Notes))))
 		for _, n := range t.Notes {
 			timeStr := theme.NoteTime.Render(timeAgo(n.CreatedAt))
 			authorStr := ""

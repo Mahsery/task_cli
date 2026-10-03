@@ -93,7 +93,7 @@ func TestStackedLayoutIsStableWhileNavigating(t *testing.T) {
 	}
 	for i := 0; i < 12; i++ {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-		m = updated.(Model)
+		m = mustModel(t, updated)
 		if got := detailBarRow(m); got != want {
 			t.Fatalf("after %d moves the detail pane moved from row %d to %d", i+1, want, got)
 		}
@@ -101,7 +101,7 @@ func TestStackedLayoutIsStableWhileNavigating(t *testing.T) {
 	// Focusing the detail pane (l) and back (h) must not move it either.
 	for _, k := range []rune{'l', 'h'} {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{k}})
-		m = updated.(Model)
+		m = mustModel(t, updated)
 		if got := detailBarRow(m); got != want {
 			t.Fatalf("after %q the detail pane moved from row %d to %d", k, want, got)
 		}
@@ -114,7 +114,7 @@ func TestCursorAlwaysVisible(t *testing.T) {
 		m := Model{tasks: layoutFixture(50), width: sz[0], height: sz[1], theme: NewKanagawaTheme()}
 		for i := 0; i < 49; i++ {
 			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-			m = updated.(Model)
+			m = mustModel(t, updated)
 			found := false
 			for _, line := range frameLines(t, m) {
 				if strings.Contains(ansi.Strip(line), "► "+m.tasks[m.cursor].ID+" ") {
@@ -135,10 +135,10 @@ func TestDetailPaneScrollsInStackedMode(t *testing.T) {
 		t.Fatal("precondition: fixture task 1 should overflow the stacked detail pane")
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	before := m.View()
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = updated.(Model)
+	m = mustModel(t, updated)
 	if m.detailScrollOffset != 1 {
 		t.Fatalf("expected detail scroll offset 1, got %d", m.detailScrollOffset)
 	}

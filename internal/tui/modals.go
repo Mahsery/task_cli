@@ -22,8 +22,7 @@ func (m Model) renderConfirmationModal(dlg *ConfirmDialog, termWidth, termHeight
 	var lines []string
 	// Title
 	titleStr := theme.ModalTitle.Render(" " + dlg.Title + " ")
-	lines = append(lines, titleStr)
-	lines = append(lines, "")
+	lines = append(lines, titleStr, "")
 
 	// Prompt
 	promptWrapped := wrapText(dlg.Prompt, contentWidth, "")
@@ -66,7 +65,7 @@ func (m Model) renderConfirmationModal(dlg *ConfirmDialog, termWidth, termHeight
 	return theme.ModalBox.Width(boxWidth).Render(inner)
 }
 
-func (m Model) renderLinkModal(termWidth, termHeight int) string {
+func (m Model) renderLinkModal(termWidth, _ int) string {
 	theme := m.theme
 	boxWidth := 56
 	if termWidth > 0 && termWidth-6 < boxWidth {
@@ -80,8 +79,7 @@ func (m Model) renderLinkModal(termWidth, termHeight int) string {
 	var lines []string
 
 	titleStr := theme.ModalTitle.Render(" LINK PREREQUISITE DEPENDENCY ")
-	lines = append(lines, titleStr)
-	lines = append(lines, "")
+	lines = append(lines, titleStr, "")
 
 	promptStr := fmt.Sprintf("Make task %s depend on prerequisite:", m.linkTaskID)
 	for _, pw := range wrapText(promptStr, contentWidth, "") {
@@ -90,8 +88,7 @@ func (m Model) renderLinkModal(termWidth, termHeight int) string {
 	lines = append(lines, "")
 
 	inputStr := fmt.Sprintf("  Prereq Task ID: %s_", m.linkInput)
-	lines = append(lines, theme.SearchPrompt.Render(inputStr))
-	lines = append(lines, "")
+	lines = append(lines, theme.SearchPrompt.Render(inputStr), "")
 
 	hint := fmt.Sprintf("E.g. enter T-1 to require T-1 before %s can be closed.", m.linkTaskID)
 	for _, hw := range wrapText(hint, contentWidth, "") {
@@ -107,7 +104,7 @@ func (m Model) renderLinkModal(termWidth, termHeight int) string {
 	return theme.ModalBox.Width(boxWidth).Render(inner)
 }
 
-func (m Model) renderTagModal(termWidth, termHeight int) string {
+func (m Model) renderTagModal(termWidth, _ int) string {
 	theme := m.theme
 	boxWidth := 56
 	if termWidth > 0 && termWidth-6 < boxWidth {
@@ -121,8 +118,7 @@ func (m Model) renderTagModal(termWidth, termHeight int) string {
 	var lines []string
 
 	titleStr := theme.ModalTitle.Render(" QUICK TAG TASK ")
-	lines = append(lines, titleStr)
-	lines = append(lines, "")
+	lines = append(lines, titleStr, "")
 
 	var promptStr string
 	if m.tagTaskID != "" {
@@ -136,8 +132,7 @@ func (m Model) renderTagModal(termWidth, termHeight int) string {
 	lines = append(lines, "")
 
 	inputStr := fmt.Sprintf("  Tag: %s_", m.tagInput)
-	lines = append(lines, theme.SearchPrompt.Render(inputStr))
-	lines = append(lines, "")
+	lines = append(lines, theme.SearchPrompt.Render(inputStr), "")
 
 	hint := "Type tag name to add (or toggle off if already present)."
 	for _, hw := range wrapText(hint, contentWidth, "") {
@@ -167,7 +162,7 @@ func (m Model) overlayModal(bg string, dlg *ConfirmDialog) string {
 	return m.overlayModalString(bg, modalStr)
 }
 
-func (m Model) overlayModalString(bg string, modalStr string) string {
+func (m Model) overlayModalString(bg, modalStr string) string {
 	width := m.width
 	if width <= 0 {
 		width = 80

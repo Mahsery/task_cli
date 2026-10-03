@@ -247,12 +247,11 @@ func (m Model) renderFooter(width int) string {
 		if len(activeKeys) > 0 {
 			sepW = 2
 		}
-		if currentWidth+sepW+kW <= maxContentWidth {
-			activeKeys = append(activeKeys, k)
-			currentWidth += sepW + kW
-		} else {
+		if currentWidth+sepW+kW > maxContentWidth {
 			break
 		}
+		activeKeys = append(activeKeys, k)
+		currentWidth += sepW + kW
 	}
 
 	line := prefix + strings.Join(activeKeys, "  ")

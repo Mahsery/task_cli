@@ -128,7 +128,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 							}
 							m.statusMsg = fmt.Sprintf("Removed tag %q from %s (press 'u' to undo)", tag, targetID)
 						} else {
-							newTags = append(cur.Tags, tag)
+							newTags = append(append(make([]string, 0, len(cur.Tags)+1), cur.Tags...), tag)
 							m.statusMsg = fmt.Sprintf("Tagged %s with %q (press 'u' to undo)", targetID, tag)
 						}
 						cur.Tags = newTags
@@ -154,24 +154,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					var snapshots []TaskUndoSnapshot
 					for _, id := range ids {
 						for _, t := range m.tasks {
-							if t.ID == id {
-								prevTags := append([]string(nil), t.Tags...)
-								snapshots = append(snapshots, TaskUndoSnapshot{
-									Task:         t,
-									PreviousTags: prevTags,
-								})
-								exists := false
-								for _, exTag := range t.Tags {
-									if exTag == tag {
-										exists = true
-										break
-									}
-								}
-								if !exists {
-									t.Tags = append(t.Tags, tag)
-								}
-								break
+							if t.ID != id {
+								continue
 							}
+							prevTags := append([]string(nil), t.Tags...)
+							snapshots = append(snapshots, TaskUndoSnapshot{
+								Task:         t,
+								PreviousTags: prevTags,
+							})
+							exists := false
+							for _, exTag := range t.Tags {
+								if exTag == tag {
+									exists = true
+									break
+								}
+							}
+							if !exists {
+								t.Tags = append(t.Tags, tag)
+							}
+							break
 						}
 					}
 					undo := UndoAction{
@@ -227,7 +228,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var chordCount int
 	if m.chordBuffer != "" {
-		fmt.Sscanf(m.chordBuffer, "%d", &chordCount)
+		// A non-numeric buffer simply leaves chordCount at 0 (no repeat prefix).
+		_, _ = fmt.Sscanf(m.chordBuffer, "%d", &chordCount)
 		m.chordBuffer = ""
 	}
 
@@ -635,29 +637,30 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			now := time.Now()
 			for _, id := range ids {
 				for _, t := range m.tasks {
-					if t.ID == id {
-						var prevArchived *time.Time
-						if t.ArchivedAt != nil {
-							c := *t.ArchivedAt
-							prevArchived = &c
-						}
-						snapshots = append(snapshots, TaskUndoSnapshot{
-							Task:               t,
-							PreviousStatus:     t.Status,
-							PreviousAssignee:   t.Assignee,
-							PreviousClosedAt:   t.ClosedAt,
-							PreviousArchivedAt: prevArchived,
-							PreviousTags:       append([]string(nil), t.Tags...),
-						})
-						if targetArchive {
-							t.ArchivedAt = &now
-							t.Status = domain.StatusArchived
-						} else {
-							t.ArchivedAt = nil
-							t.Status = domain.StatusOpen
-						}
-						break
+					if t.ID != id {
+						continue
 					}
+					var prevArchived *time.Time
+					if t.ArchivedAt != nil {
+						c := *t.ArchivedAt
+						prevArchived = &c
+					}
+					snapshots = append(snapshots, TaskUndoSnapshot{
+						Task:               t,
+						PreviousStatus:     t.Status,
+						PreviousAssignee:   t.Assignee,
+						PreviousClosedAt:   t.ClosedAt,
+						PreviousArchivedAt: prevArchived,
+						PreviousTags:       append([]string(nil), t.Tags...),
+					})
+					if targetArchive {
+						t.ArchivedAt = &now
+						t.Status = domain.StatusArchived
+					} else {
+						t.ArchivedAt = nil
+						t.Status = domain.StatusOpen
+					}
+					break
 				}
 			}
 			actionDesc := "Archived"
@@ -707,17 +710,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				cur.Status = domain.StatusOpen
 				m.statusMsg = fmt.Sprintf("Unarchived %s (press 'u' to undo)", cur.ID)
 				return m, m.unarchiveTaskCmd(cur.ID)
-			} else {
-				undo.Description = fmt.Sprintf("Archived %s", cur.ID)
-				m.undoStack = append(m.undoStack, undo)
-				if len(m.undoStack) > 50 {
-					m.undoStack = m.undoStack[len(m.undoStack)-50:]
-				}
-				cur.ArchivedAt = &now
-				cur.Status = domain.StatusArchived
-				m.statusMsg = fmt.Sprintf("Archived %s (press 'u' to undo)", cur.ID)
-				return m, m.archiveTaskCmd(cur.ID)
 			}
+			undo.Description = fmt.Sprintf("Archived %s", cur.ID)
+			m.undoStack = append(m.undoStack, undo)
+			if len(m.undoStack) > 50 {
+				m.undoStack = m.undoStack[len(m.undoStack)-50:]
+			}
+			cur.ArchivedAt = &now
+			cur.Status = domain.StatusArchived
+			m.statusMsg = fmt.Sprintf("Archived %s (press 'u' to undo)", cur.ID)
+			return m, m.archiveTaskCmd(cur.ID)
 		}
 		return m, nil
 
@@ -835,9 +837,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cur := m.currentTask()
 		if cur != nil {
 			newStatus := domain.StatusInProgress
-			if cur.Status == domain.StatusInProgress {
+			switch cur.Status {
+			case domain.StatusInProgress:
 				newStatus = domain.StatusOpen
-			} else if cur.Status == domain.StatusDone || cur.Status == domain.StatusClosed {
+			case domain.StatusDone, domain.StatusClosed:
 				newStatus = domain.StatusInProgress
 			}
 			undo := UndoAction{

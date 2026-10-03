@@ -161,11 +161,10 @@ func compactTreeBranch(branch string, maxW int) string {
 		connector = "\\-- "
 	default:
 		runes := []rune(branch)
-		if len(runes) >= 4 {
-			connector = string(runes[len(runes)-4:])
-		} else {
+		if len(runes) < 4 {
 			return truncateToWidth(branch, maxW)
 		}
+		connector = string(runes[len(runes)-4:])
 	}
 
 	ellipsis := "..│ "
