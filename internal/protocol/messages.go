@@ -108,6 +108,54 @@ type ListTasksPayload struct {
 	Blocks          string           `json:"blocks,omitempty"`
 }
 
+// ToFilter converts ListTasksPayload to a domain.TaskFilter.
+func (p ListTasksPayload) ToFilter() domain.TaskFilter {
+	return domain.TaskFilter{
+		Scope:           p.Scope,
+		RepoPath:        p.RepoPath,
+		Status:          p.Status,
+		Statuses:        p.Statuses,
+		Priority:        p.Priority,
+		Tag:             p.Tag,
+		Assignee:        p.Assignee,
+		Search:          p.Search,
+		Sort:            p.Sort,
+		Limit:           p.Limit,
+		IncludeNotes:    p.IncludeNotes,
+		OnlyReady:       p.OnlyReady,
+		OnlyBlocked:     p.OnlyBlocked,
+		OnlyOrphaned:    p.OnlyOrphaned,
+		IncludeArchived: p.IncludeArchived,
+		OnlyArchived:    p.OnlyArchived,
+		DependsOn:       p.DependsOn,
+		Blocks:          p.Blocks,
+	}
+}
+
+// FilterToListTasksPayload converts domain.TaskFilter to a ListTasksPayload.
+func FilterToListTasksPayload(filter domain.TaskFilter) ListTasksPayload {
+	return ListTasksPayload{
+		Scope:           filter.Scope,
+		RepoPath:        filter.RepoPath,
+		Status:          filter.Status,
+		Statuses:        filter.Statuses,
+		Priority:        filter.Priority,
+		Tag:             filter.Tag,
+		Assignee:        filter.Assignee,
+		Search:          filter.Search,
+		Sort:            filter.Sort,
+		Limit:           filter.Limit,
+		IncludeNotes:    filter.IncludeNotes,
+		OnlyReady:       filter.OnlyReady,
+		OnlyBlocked:     filter.OnlyBlocked,
+		OnlyOrphaned:    filter.OnlyOrphaned,
+		IncludeArchived: filter.IncludeArchived,
+		OnlyArchived:    filter.OnlyArchived,
+		DependsOn:       filter.DependsOn,
+		Blocks:          filter.Blocks,
+	}
+}
+
 type DeleteTaskPayload struct {
 	ID string `json:"id"`
 }

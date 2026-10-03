@@ -318,479 +318,298 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 }
 
 func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
-	resp := protocol.Response{
-		ID:      req.ID,
-		Success: true,
-	}
-
 	switch req.Action {
 	case protocol.ActionPing:
-		resp.Data = json.RawMessage(`{"status":"pong"}`)
-		return resp
+		return protocol.Response{
+			ID:      req.ID,
+			Success: true,
+			Data:    json.RawMessage(`{"status":"pong"}`),
+		}
 
 	case protocol.ActionCreateTask:
-		var p protocol.CreateTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		task, err := db.CreateTask(req.Scope, req.RepoPath, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.Author, p.Assignee, p.DependsOn...)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskCreated,
-			Timestamp: time.Now(),
-			Task:      task,
-			Message:   fmt.Sprintf("+ %s created: %q", task.ID, task.Title),
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.CreateTaskPayload) (*domain.Task, error) {
+			task, err := db.CreateTask(req.Scope, req.RepoPath, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.Author, p.Assignee, p.DependsOn...)
+			if err != nil {
+				return nil, err
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskCreated,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   fmt.Sprintf("+ %s created: %q", task.ID, task.Title),
+			})
+			return task, nil
 		})
-
-		data, _ := json.Marshal(task)
-		resp.Data = data
-		return resp
 
 	case protocol.ActionGetTask:
-		var p protocol.GetTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		task, err := db.GetTask(p.ID)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		data, _ := json.Marshal(task)
-		resp.Data = data
-		return resp
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.GetTaskPayload) (*domain.Task, error) {
+			return db.GetTask(p.ID)
+		})
 
 	case protocol.ActionUpdateTask:
-		var p protocol.UpdateTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		// Hard completion enforcement: cannot mark done/closed if unfinished dependencies exist
-		if p.Status != nil && (*p.Status == domain.StatusDone || *p.Status == domain.StatusClosed) && !p.Force {
-			if blocked, prereqs, err := db.CheckBlocked(p.ID); err == nil && blocked {
-				var titles []string
-				for _, pr := range prereqs {
-					titles = append(titles, fmt.Sprintf("%s [%s] %q", pr.ID, pr.Status, pr.Title))
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.UpdateTaskPayload) (*domain.Task, error) {
+			// Hard completion enforcement: cannot mark done/closed if unfinished dependencies exist
+			if p.Status != nil && (*p.Status == domain.StatusDone || *p.Status == domain.StatusClosed) && !p.Force {
+				if blocked, prereqs, err := db.CheckBlocked(p.ID); err == nil && blocked {
+					var titles []string
+					for _, pr := range prereqs {
+						titles = append(titles, fmt.Sprintf("%s [%s] %q", pr.ID, pr.Status, pr.Title))
+					}
+					return nil, fmt.Errorf("cannot mark %s as %s: blocked by %d unfinished task(s):\n  • %s\n(use --force to override)", p.ID, *p.Status, len(prereqs), strings.Join(titles, "\n  • "))
 				}
-				return errorResp(req.ID, fmt.Sprintf("cannot mark %s as %s: blocked by %d unfinished task(s):\n  • %s\n(use --force to override)", p.ID, *p.Status, len(prereqs), strings.Join(titles, "\n  • ")))
 			}
-		}
 
-		task, err := db.UpdateTask(p.ID, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.AddTags, p.RemoveTags, p.Assignee, p.AddNote, p.Author)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
+			task, err := db.UpdateTask(p.ID, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.AddTags, p.RemoveTags, p.Assignee, p.AddNote, p.Author)
+			if err != nil {
+				return nil, err
+			}
 
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskUpdated,
-			Timestamp: time.Now(),
-			Task:      task,
-			Message:   fmt.Sprintf("~ %s updated (status: %s)", task.ID, task.Status),
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   fmt.Sprintf("~ %s updated (status: %s)", task.ID, task.Status),
+			})
+			return task, nil
 		})
-
-		data, _ := json.Marshal(task)
-		resp.Data = data
-		return resp
 
 	case protocol.ActionClaimTask:
-		var p protocol.ClaimTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		task, err := db.ClaimTask(p.ID, p.Assignee, p.Force)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskUpdated,
-			Timestamp: time.Now(),
-			Task:      task,
-			Message:   fmt.Sprintf("* %s claimed by %q", task.ID, p.Assignee),
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.ClaimTaskPayload) (*domain.Task, error) {
+			task, err := db.ClaimTask(p.ID, p.Assignee, p.Force)
+			if err != nil {
+				return nil, err
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   fmt.Sprintf("* %s claimed by %q", task.ID, p.Assignee),
+			})
+			return task, nil
 		})
-
-		data, _ := json.Marshal(task)
-		resp.Data = data
-		return resp
 
 	case protocol.ActionOrphanTask:
-		var p protocol.OrphanTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		task, err := db.OrphanTask(p.ID, p.Actor, p.Reason)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskUpdated,
-			Timestamp: time.Now(),
-			Task:      task,
-			Message:   fmt.Sprintf("⚠ %s orphaned (dropped assignee, status: open)", task.ID),
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.OrphanTaskPayload) (*domain.Task, error) {
+			task, err := db.OrphanTask(p.ID, p.Actor, p.Reason)
+			if err != nil {
+				return nil, err
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   fmt.Sprintf("⚠ %s orphaned (dropped assignee, status: open)", task.ID),
+			})
+			return task, nil
 		})
-
-		data, _ := json.Marshal(task)
-		resp.Data = data
-		return resp
 
 	case protocol.ActionTransferTask:
-		var p protocol.TransferTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		task, err := db.TransferTask(p.ID, p.Actor, p.NewAssignee, p.Note, p.Force)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskUpdated,
-			Timestamp: time.Now(),
-			Task:      task,
-			Message:   fmt.Sprintf("* %s transferred to %q", task.ID, p.NewAssignee),
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.TransferTaskPayload) (*domain.Task, error) {
+			task, err := db.TransferTask(p.ID, p.Actor, p.NewAssignee, p.Note, p.Force)
+			if err != nil {
+				return nil, err
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   fmt.Sprintf("* %s transferred to %q", task.ID, p.NewAssignee),
+			})
+			return task, nil
 		})
-
-		data, _ := json.Marshal(task)
-		resp.Data = data
-		return resp
 
 	case protocol.ActionArchiveTask:
-		var p protocol.ArchiveTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		task, err := db.ArchiveTask(p.ID, p.Actor, p.Reason)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskUpdated,
-			Timestamp: time.Now(),
-			Task:      task,
-			Message:   fmt.Sprintf("⊘ %s archived", task.ID),
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.ArchiveTaskPayload) (*domain.Task, error) {
+			task, err := db.ArchiveTask(p.ID, p.Actor, p.Reason)
+			if err != nil {
+				return nil, err
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   fmt.Sprintf("⊘ %s archived", task.ID),
+			})
+			return task, nil
 		})
-
-		data, _ := json.Marshal(task)
-		resp.Data = data
-		return resp
 
 	case protocol.ActionUnarchiveTask:
-		var p protocol.UnarchiveTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		task, err := db.UnarchiveTask(p.ID, p.Actor, p.Reason)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskUpdated,
-			Timestamp: time.Now(),
-			Task:      task,
-			Message:   fmt.Sprintf("↺ %s unarchived", task.ID),
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.UnarchiveTaskPayload) (*domain.Task, error) {
+			task, err := db.UnarchiveTask(p.ID, p.Actor, p.Reason)
+			if err != nil {
+				return nil, err
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   fmt.Sprintf("↺ %s unarchived", task.ID),
+			})
+			return task, nil
 		})
-
-		data, _ := json.Marshal(task)
-		resp.Data = data
-		return resp
 
 	case protocol.ActionReapStaleTasks:
-		var p protocol.ReapStaleTasksPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		candidates, orphanedIDs, err := db.ReapStaleTasks(req.Scope, req.RepoPath, p.Threshold, p.DryRun, p.Actor, p.Reason)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		for _, oID := range orphanedIDs {
-			if t, err := db.GetTask(oID); err == nil {
-				s.pubsub.Publish(protocol.Event{
-					Type:      protocol.EventTaskUpdated,
-					Timestamp: time.Now(),
-					Task:      t,
-					Message:   fmt.Sprintf("⚠ %s orphaned due to inactivity", t.ID),
-				})
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.ReapStaleTasksPayload) (protocol.ReapStaleTasksResult, error) {
+			candidates, orphanedIDs, err := db.ReapStaleTasks(req.Scope, req.RepoPath, p.Threshold, p.DryRun, p.Actor, p.Reason)
+			if err != nil {
+				return protocol.ReapStaleTasksResult{}, err
 			}
-		}
-
-		result := protocol.ReapStaleTasksResult{
-			Threshold:  p.Threshold,
-			DryRun:     p.DryRun,
-			Candidates: candidates,
-			Orphaned:   orphanedIDs,
-		}
-		data, _ := json.Marshal(result)
-		resp.Data = data
-		return resp
+			for _, oID := range orphanedIDs {
+				if t, err := db.GetTask(oID); err == nil {
+					s.pubsub.Publish(protocol.Event{
+						Type:      protocol.EventTaskUpdated,
+						Timestamp: time.Now(),
+						Task:      t,
+						Message:   fmt.Sprintf("⚠ %s orphaned due to inactivity", t.ID),
+					})
+				}
+			}
+			return protocol.ReapStaleTasksResult{
+				Threshold:  p.Threshold,
+				DryRun:     p.DryRun,
+				Candidates: candidates,
+				Orphaned:   orphanedIDs,
+			}, nil
+		})
 
 	case protocol.ActionListTasks:
-		var p protocol.ListTasksPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(p.Scope, p.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		filter := domain.TaskFilter{
-			Scope:           p.Scope,
-			RepoPath:        p.RepoPath,
-			Status:          p.Status,
-			Statuses:        p.Statuses,
-			Priority:        p.Priority,
-			Tag:             p.Tag,
-			Assignee:        p.Assignee,
-			Search:          p.Search,
-			Sort:            p.Sort,
-			Limit:           p.Limit,
-			IncludeNotes:    p.IncludeNotes,
-			OnlyReady:       p.OnlyReady,
-			OnlyBlocked:     p.OnlyBlocked,
-			OnlyOrphaned:    p.OnlyOrphaned,
-			IncludeArchived: p.IncludeArchived,
-			OnlyArchived:    p.OnlyArchived,
-			DependsOn:       p.DependsOn,
-			Blocks:          p.Blocks,
-		}
-		tasks, err := db.ListTasks(filter)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		data, _ := json.Marshal(tasks)
-		resp.Data = data
-		return resp
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.ListTasksPayload) ([]*domain.Task, error) {
+			if (p.Scope != "" && p.Scope != req.Scope) || (p.RepoPath != "" && p.RepoPath != req.RepoPath) {
+				var err error
+				db, err = s.getDB(p.Scope, p.RepoPath)
+				if err != nil {
+					return nil, err
+				}
+			}
+			return db.ListTasks(p.ToFilter())
+		})
 
 	case protocol.ActionDeleteTask:
-		var p protocol.DeleteTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		if err := db.DeleteTask(p.ID); err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskDeleted,
-			Timestamp: time.Now(),
-			Task:      &domain.Task{ID: p.ID},
-			Message:   fmt.Sprintf("- %s deleted", p.ID),
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.DeleteTaskPayload) (json.RawMessage, error) {
+			if err := db.DeleteTask(p.ID); err != nil {
+				return nil, err
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskDeleted,
+				Timestamp: time.Now(),
+				Task:      &domain.Task{ID: p.ID},
+				Message:   fmt.Sprintf("- %s deleted", p.ID),
+			})
+			return json.RawMessage(`{"status":"deleted"}`), nil
 		})
-
-		resp.Data = json.RawMessage(`{"status":"deleted"}`)
-		return resp
 
 	case protocol.ActionRestoreTask:
-		var p protocol.RestoreTaskPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		var restored *domain.Task
-		if p.ID != "" {
-			restored, err = db.RestoreTaskByID(p.ID)
-			if err != nil {
-				return errorResp(req.ID, err.Error())
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.RestoreTaskPayload) (*domain.Task, error) {
+			var restored *domain.Task
+			var err error
+			if p.ID != "" {
+				restored, err = db.RestoreTaskByID(p.ID)
+				if err != nil {
+					return nil, err
+				}
+			} else if p.Task != nil {
+				if err := db.RestoreTask(p.Task); err != nil {
+					return nil, err
+				}
+				restored = p.Task
+			} else {
+				return nil, errors.New("either id or task must be provided for restore")
 			}
-		} else if p.Task != nil {
-			if err := db.RestoreTask(p.Task); err != nil {
-				return errorResp(req.ID, err.Error())
-			}
-			restored = p.Task
-		} else {
-			return errorResp(req.ID, "either id or task must be provided for restore")
-		}
-
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskCreated,
-			Timestamp: time.Now(),
-			Task:      restored,
-			Message:   fmt.Sprintf("+ %s restored: %q", restored.ID, restored.Title),
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskCreated,
+				Timestamp: time.Now(),
+				Task:      restored,
+				Message:   fmt.Sprintf("+ %s restored: %q", restored.ID, restored.Title),
+			})
+			return restored, nil
 		})
-
-		data, _ := json.Marshal(restored)
-		resp.Data = data
-		return resp
 
 	case protocol.ActionListTombstones:
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		tombstones, err := db.ListTombstones(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		data, _ := json.Marshal(tombstones)
-		resp.Data = data
-		return resp
+		return handleWithDB(s, req, func(db *sqlite.DB, _ struct{}) ([]*domain.Task, error) {
+			return db.ListTombstones(req.Scope, req.RepoPath)
+		})
 
 	case protocol.ActionAddDependency:
-		var p protocol.AddDependencyPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		if err := db.AddDependency(p.TaskID, p.DependsOnID); err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		updatedTask, _ := db.GetTask(p.TaskID)
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskUpdated,
-			Timestamp: time.Now(),
-			Task:      updatedTask,
-			Message:   fmt.Sprintf("🔗 %s linked to depend on %s", p.TaskID, p.DependsOnID),
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.AddDependencyPayload) (json.RawMessage, error) {
+			if err := db.AddDependency(p.TaskID, p.DependsOnID); err != nil {
+				return nil, err
+			}
+			updatedTask, _ := db.GetTask(p.TaskID)
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      updatedTask,
+				Message:   fmt.Sprintf("🔗 %s linked to depend on %s", p.TaskID, p.DependsOnID),
+			})
+			return json.RawMessage(`{"status":"linked"}`), nil
 		})
-
-		resp.Data = json.RawMessage(`{"status":"linked"}`)
-		return resp
 
 	case protocol.ActionRemoveDependency:
-		var p protocol.RemoveDependencyPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		if err := db.RemoveDependency(p.TaskID, p.DependsOnID); err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		updatedTask, _ := db.GetTask(p.TaskID)
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventTaskUpdated,
-			Timestamp: time.Now(),
-			Task:      updatedTask,
-			Message:   fmt.Sprintf("🔓 %s unlinked from %s", p.TaskID, p.DependsOnID),
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.RemoveDependencyPayload) (json.RawMessage, error) {
+			if err := db.RemoveDependency(p.TaskID, p.DependsOnID); err != nil {
+				return nil, err
+			}
+			updatedTask, _ := db.GetTask(p.TaskID)
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      updatedTask,
+				Message:   fmt.Sprintf("🔓 %s unlinked from %s", p.TaskID, p.DependsOnID),
+			})
+			return json.RawMessage(`{"status":"unlinked"}`), nil
 		})
-
-		resp.Data = json.RawMessage(`{"status":"unlinked"}`)
-		return resp
 
 	case protocol.ActionGetDependencies:
-		var p protocol.GetDependenciesPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		task, err := db.GetTask(p.TaskID)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-		data, _ := json.Marshal(protocol.DependenciesData{
-			TaskID:    task.ID,
-			DependsOn: task.DependsOn,
-			BlockedBy: task.BlockedBy,
-			Blocks:    task.Blocks,
-			IsBlocked: task.IsBlocked,
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.GetDependenciesPayload) (protocol.DependenciesData, error) {
+			task, err := db.GetTask(p.TaskID)
+			if err != nil {
+				return protocol.DependenciesData{}, err
+			}
+			return protocol.DependenciesData{
+				TaskID:    task.ID,
+				DependsOn: task.DependsOn,
+				BlockedBy: task.BlockedBy,
+				Blocks:    task.Blocks,
+				IsBlocked: task.IsBlocked,
+			}, nil
 		})
-		resp.Data = data
-		return resp
 
 	case protocol.ActionAttachGit:
-		var p protocol.AttachGitPayload
-		if err := json.Unmarshal(req.Payload, &p); err != nil {
-			return errorResp(req.ID, "invalid payload: "+err.Error())
-		}
-		db, err := s.getDB(req.Scope, req.RepoPath)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
-
-		// Hard completion enforcement: cannot mark done if unfinished dependencies exist
-		if p.MarkDone && !p.Force {
-			if blocked, prereqs, err := db.CheckBlocked(p.TaskID); err == nil && blocked {
-				var titles []string
-				for _, pr := range prereqs {
-					titles = append(titles, fmt.Sprintf("%s [%s] %q", pr.ID, pr.Status, pr.Title))
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.AttachGitPayload) (*domain.Task, error) {
+			if p.MarkDone && !p.Force {
+				if blocked, prereqs, err := db.CheckBlocked(p.TaskID); err == nil && blocked {
+					var titles []string
+					for _, pr := range prereqs {
+						titles = append(titles, fmt.Sprintf("%s [%s] %q", pr.ID, pr.Status, pr.Title))
+					}
+					return nil, fmt.Errorf("cannot mark %s as DONE: blocked by %d unfinished task(s):\n  • %s\n(use --force to override)", p.TaskID, len(prereqs), strings.Join(titles, "\n  • "))
 				}
-				return errorResp(req.ID, fmt.Sprintf("cannot mark %s as DONE: blocked by %d unfinished task(s):\n  • %s\n(use --force to override)", p.TaskID, len(prereqs), strings.Join(titles, "\n  • ")))
 			}
-		}
 
-		task, err := db.AttachGit(p.TaskID, p.CommitSHA, p.CommitMsg, p.DiffStat, p.DiffContent, p.MarkDone)
-		if err != nil {
-			return errorResp(req.ID, err.Error())
-		}
+			task, err := db.AttachGit(p.TaskID, p.CommitSHA, p.CommitMsg, p.DiffStat, p.DiffContent, p.MarkDone)
+			if err != nil {
+				return nil, err
+			}
 
-		msg := fmt.Sprintf("+ %s git info attached (%s)", task.ID, p.CommitSHA)
-		if p.MarkDone {
-			msg = fmt.Sprintf("✓ %s marked DONE (+ %s)", task.ID, p.CommitSHA)
-		}
-		s.pubsub.Publish(protocol.Event{
-			Type:      protocol.EventGitAttached,
-			Timestamp: time.Now(),
-			Task:      task,
-			Message:   msg,
+			msg := fmt.Sprintf("+ %s git info attached (%s)", task.ID, p.CommitSHA)
+			if p.MarkDone {
+				msg = fmt.Sprintf("✓ %s marked DONE (+ %s)", task.ID, p.CommitSHA)
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventGitAttached,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   msg,
+			})
+			return task, nil
 		})
 
-		data, _ := json.Marshal(task)
-		resp.Data = data
-		return resp
-
 	case protocol.ActionShutdown:
-		resp.Data = json.RawMessage(`{"status":"shutting_down"}`)
-		return resp
+		return protocol.Response{
+			ID:      req.ID,
+			Success: true,
+			Data:    json.RawMessage(`{"status":"shutting_down"}`),
+		}
 
 	case protocol.ActionBackupCreate:
 		return s.handleBackupCreate(req)
@@ -864,33 +683,35 @@ func errorResp(id, msg string) protocol.Response {
 	}
 }
 
-func (s *Server) handleBackupCreate(req protocol.Request) protocol.Response {
-	var p protocol.BackupCreatePayload
+// handleWithDB unmarshals payload P (if req.Payload is non-empty), resolves the DB
+// for the request, and invokes fn. On success, it marshals the returned value to JSON in resp.Data.
+func handleWithDB[P any, R any](s *Server, req protocol.Request, fn func(db *sqlite.DB, p P) (R, error)) protocol.Response {
+	var p P
 	if len(req.Payload) > 0 {
-		_ = json.Unmarshal(req.Payload, &p)
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid payload: "+err.Error())
+		}
 	}
 	db, err := s.getDB(req.Scope, req.RepoPath)
 	if err != nil {
 		return errorResp(req.ID, err.Error())
 	}
-	targetPath, err := db.CreateRollingBackup(p.Name, p.MaxSnapshots)
+	res, err := fn(db, p)
 	if err != nil {
-		return errorResp(req.ID, "failed to create backup: "+err.Error())
+		return errorResp(req.ID, err.Error())
 	}
-
-	// Also mirror to central backup vault
-	centralDir := s.cfg.CentralBackupDir(req.RepoPath)
-	_ = os.MkdirAll(centralDir, 0o755)
-	s.ensureCentralRepoMeta(centralDir, req.RepoPath)
-	_, cErr := db.CreateRollingBackupInDir(centralDir, p.Name, p.MaxSnapshots)
-	if cErr != nil {
-		log.Printf("[tkd] Warning: failed to create central backup in %s: %v", centralDir, cErr)
+	var data []byte
+	switch v := any(res).(type) {
+	case json.RawMessage:
+		data = v
+	case []byte:
+		data = v
+	default:
+		data, err = json.Marshal(res)
+		if err != nil {
+			return errorResp(req.ID, "marshal response error: "+err.Error())
+		}
 	}
-
-	data, _ := json.Marshal(map[string]string{
-		"path":    targetPath,
-		"message": fmt.Sprintf("✓ Created backup snapshot: %s (mirrored in central vault)", targetPath),
-	})
 	return protocol.Response{
 		ID:      req.ID,
 		Success: true,
@@ -898,39 +719,54 @@ func (s *Server) handleBackupCreate(req protocol.Request) protocol.Response {
 	}
 }
 
-func (s *Server) handleBackupList(req protocol.Request) protocol.Response {
-	db, err := s.getDB(req.Scope, req.RepoPath)
-	if err != nil {
-		return errorResp(req.ID, err.Error())
-	}
-	localBackups, _ := db.ListBackups()
+func (s *Server) handleBackupCreate(req protocol.Request) protocol.Response {
+	return handleWithDB(s, req, func(db *sqlite.DB, p protocol.BackupCreatePayload) (map[string]string, error) {
+		targetPath, err := db.CreateRollingBackup(p.Name, p.MaxSnapshots)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create backup: %w", err)
+		}
 
-	centralDir := s.cfg.CentralBackupDir(req.RepoPath)
-	centralBackups, _ := sqlite.ListBackupsInDir(centralDir, "central")
+		// Also mirror to central backup vault
+		centralDir := s.cfg.CentralBackupDir(req.RepoPath)
+		_ = os.MkdirAll(centralDir, 0o755)
+		s.ensureCentralRepoMeta(centralDir, req.RepoPath)
+		_, cErr := db.CreateRollingBackupInDir(centralDir, p.Name, p.MaxSnapshots)
+		if cErr != nil {
+			log.Printf("[tkd] Warning: failed to create central backup in %s: %v", centralDir, cErr)
+		}
 
-	all := append([]sqlite.BackupMeta{}, localBackups...)
-	all = append(all, centralBackups...)
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].ModTime.After(all[j].ModTime)
+		return map[string]string{
+			"path":    targetPath,
+			"message": fmt.Sprintf("✓ Created backup snapshot: %s (mirrored in central vault)", targetPath),
+		}, nil
 	})
+}
 
-	res := make([]protocol.BackupInfo, 0, len(all))
-	for _, b := range all {
-		res = append(res, protocol.BackupInfo{
-			Name:     b.Name,
-			Path:     b.Path,
-			Size:     b.Size,
-			ModTime:  b.ModTime,
-			Location: b.Location,
+func (s *Server) handleBackupList(req protocol.Request) protocol.Response {
+	return handleWithDB(s, req, func(db *sqlite.DB, _ struct{}) ([]protocol.BackupInfo, error) {
+		localBackups, _ := db.ListBackups()
+
+		centralDir := s.cfg.CentralBackupDir(req.RepoPath)
+		centralBackups, _ := sqlite.ListBackupsInDir(centralDir, "central")
+
+		all := append([]sqlite.BackupMeta{}, localBackups...)
+		all = append(all, centralBackups...)
+		sort.Slice(all, func(i, j int) bool {
+			return all[i].ModTime.After(all[j].ModTime)
 		})
-	}
 
-	data, _ := json.Marshal(res)
-	return protocol.Response{
-		ID:      req.ID,
-		Success: true,
-		Data:    data,
-	}
+		res := make([]protocol.BackupInfo, 0, len(all))
+		for _, b := range all {
+			res = append(res, protocol.BackupInfo{
+				Name:     b.Name,
+				Path:     b.Path,
+				Size:     b.Size,
+				ModTime:  b.ModTime,
+				Location: b.Location,
+			})
+		}
+		return res, nil
+	})
 }
 
 func (s *Server) handleBackupVerify(req protocol.Request) protocol.Response {

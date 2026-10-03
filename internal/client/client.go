@@ -251,26 +251,10 @@ func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	if repoPath == "" {
 		repoPath = c.RepoPath
 	}
-	p := protocol.ListTasksPayload{
-		Scope:           scope,
-		RepoPath:        repoPath,
-		Status:          filter.Status,
-		Statuses:        filter.Statuses,
-		Priority:        filter.Priority,
-		Tag:             filter.Tag,
-		Assignee:        filter.Assignee,
-		Search:          filter.Search,
-		Sort:            filter.Sort,
-		Limit:           filter.Limit,
-		IncludeNotes:    filter.IncludeNotes,
-		OnlyReady:       filter.OnlyReady,
-		OnlyBlocked:     filter.OnlyBlocked,
-		OnlyOrphaned:    filter.OnlyOrphaned,
-		IncludeArchived: filter.IncludeArchived,
-		OnlyArchived:    filter.OnlyArchived,
-		DependsOn:       filter.DependsOn,
-		Blocks:          filter.Blocks,
-	}
+	f := filter
+	f.Scope = scope
+	f.RepoPath = repoPath
+	p := protocol.FilterToListTasksPayload(f)
 	resp, err := c.call(protocol.ActionListTasks, p)
 	if err != nil {
 		return nil, err
