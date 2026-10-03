@@ -8,16 +8,12 @@ import (
 	"task_cli/internal/domain"
 	"task_cli/internal/termutil"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/charmbracelet/x/term"
 )
 
-var (
-	padRight             = termutil.PadRight
-	truncateWithEllipsis = termutil.Truncate
-)
-
-// tableAgeWidth reserves room for the AGE column, e.g. "3 weeks ago (abc123)".
-const tableAgeWidth = 20
+var truncateWithEllipsis = termutil.Truncate
 
 func renderTaskTable(tasks []*domain.Task) {
 	width := 88
@@ -28,42 +24,14 @@ func renderTaskTable(tasks []*domain.Task) {
 		}
 	}
 
-	var sb strings.Builder
-	sepChar := "─"
-	if IsASCIIOnly() {
-		sepChar = "-"
+	titleW := width - 54
+	if titleW < 24 {
+		titleW = 24
+	} else if titleW > domain.MaxTitleLength+3 {
+		titleW = domain.MaxTitleLength + 3
 	}
 
-	// Column widths: compact layout for <88 columns, otherwise the title column
-	// absorbs the extra horizontal space (capped so very wide terminals stay readable).
-	idW, statusW, priW, tagsW, titleW := 6, 12, 8, 16, 34
-	if width < 88 {
-		statusW, priW, tagsW, titleW = 11, 6, 10, 26
-	} else {
-		fixed := idW + statusW + priW + tagsW + tableAgeWidth + 5 // 5 column gaps
-		if avail := width - fixed; avail > titleW {
-			titleW = avail
-		}
-		if maxW := domain.MaxTitleLength + 3; titleW > maxW {
-			titleW = maxW
-		}
-	}
-	sepWidth := 74
-	if width >= 88 {
-		sepWidth = idW + statusW + priW + titleW + tagsW + 5 + tableAgeWidth
-		if sepWidth > width {
-			sepWidth = width
-		}
-	}
-
-	fmt.Fprintf(&sb, "%s %s %s %s %s %s\n",
-		padRight("ID", idW),
-		padRight("STATUS", statusW),
-		padRight("PRI", priW),
-		padRight("TITLE", titleW),
-		padRight("TAGS", tagsW),
-		"AGE")
-	sb.WriteString(strings.Repeat(sepChar, sepWidth) + "\n")
+	rows := make([][]string, 0, len(tasks))
 	for _, t := range tasks {
 		rawTitle := t.Title
 		if t.IsOrphaned() {
@@ -73,8 +41,8 @@ func renderTaskTable(tasks []*domain.Task) {
 				rawTitle += " 👻"
 			}
 		}
-		title := truncateWithEllipsis(rawTitle, titleW)
-		tags := truncateWithEllipsis(strings.Join(t.Tags, ","), tagsW)
+		title := termutil.Truncate(rawTitle, titleW)
+		tags := termutil.Truncate(strings.Join(t.Tags, ","), 16)
 		age := formatAge(t.CreatedAt)
 		if t.CommitSHA != "" {
 			sha := t.CommitSHA
@@ -87,13 +55,38 @@ func renderTaskTable(tasks []*domain.Task) {
 		if t.IsOrphaned() {
 			status = "orphan"
 		}
-		fmt.Fprintf(&sb, "%s %s %s %s %s %s\n",
-			padRight(t.ID, idW),
-			padRight(status, statusW),
-			padRight(string(t.Priority), priW),
-			padRight(title, titleW),
-			padRight(tags, tagsW),
-			age)
+		rows = append(rows, []string{
+			t.ID,
+			status,
+			string(t.Priority),
+			title,
+			tags,
+			age,
+		})
 	}
-	_ = PrintWithPager(sb.String())
+
+	border := lipgloss.NormalBorder()
+	if IsASCIIOnly() {
+		border = lipgloss.Border{Bottom: "-"}
+	}
+
+	tbl := table.New().
+		Border(border).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderColumn(false).
+		BorderHeader(true).
+		StyleFunc(func(row, _ int) lipgloss.Style {
+			s := lipgloss.NewStyle().PaddingRight(1)
+			if row == table.HeaderRow {
+				return s.Bold(true)
+			}
+			return s
+		}).
+		Headers("ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE").
+		Rows(rows...)
+
+	_ = PrintWithPager(tbl.Render() + "\n")
 }
