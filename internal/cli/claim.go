@@ -28,13 +28,7 @@ To hand off or transfer a task to another collaborator, use 'tk transfer'.`,
 	RunE: func(_ *cobra.Command, args []string) error {
 		taskID := args[0]
 
-		actor := cfg.Actor
-		if claimActor != "" {
-			actor = claimActor
-		}
-		if actor == "" {
-			actor = "anonymous"
-		}
+		actor := resolveActor(claimActor)
 
 		updated, err := taskClient.ClaimTask(taskID, actor, claimForce)
 		if err != nil {

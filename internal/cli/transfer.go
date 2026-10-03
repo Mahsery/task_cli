@@ -40,13 +40,7 @@ to 'in_progress', and appends an audit note documenting the transfer.`,
 		}
 		defer func() { _ = taskClient.Close() }()
 
-		actor := cfg.Actor
-		if transferActor != "" {
-			actor = transferActor
-		}
-		if actor == "" {
-			actor = "anonymous"
-		}
+		actor := resolveActor(transferActor)
 
 		// Inspect current task to report previous assignee
 		existing, err := taskClient.GetTask(taskID)

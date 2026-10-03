@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"task_cli/internal/domain"
-	"task_cli/internal/git"
 
 	"github.com/spf13/cobra"
 )
@@ -51,13 +50,7 @@ var statusCmd = &cobra.Command{
 		}
 		defer func() { _ = taskClient.Close() }()
 
-		actor := cfg.Actor
-		if flagActor != "" {
-			actor = flagActor
-		}
-		if actor == "" {
-			actor = git.GetAuthor()
-		}
+		actor := resolveAuthor(flagActor)
 
 		branch := ""
 		if scope == "local" && repoRoot != "" {

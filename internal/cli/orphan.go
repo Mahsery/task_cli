@@ -52,13 +52,7 @@ When a task is orphaned:
 		}
 		defer func() { _ = taskClient.Close() }()
 
-		actor := cfg.Actor
-		if orphanActor != "" {
-			actor = orphanActor
-		}
-		if actor == "" {
-			actor = "anonymous"
-		}
+		actor := resolveActor(orphanActor)
 
 		// 1. Manually orphan a specific task by ID
 		if len(args) == 1 {
@@ -291,13 +285,7 @@ and tags abandoned or stale open tasks (including unassigned tasks with zero act
 		}
 		defer func() { _ = taskClient.Close() }()
 
-		actor := cfg.Actor
-		if orphanActor != "" {
-			actor = orphanActor
-		}
-		if actor == "" {
-			actor = "anonymous"
-		}
+		actor := resolveActor(orphanActor)
 
 		threshold := 1 * time.Hour
 		if orphanOlderThan != "" {
@@ -331,13 +319,7 @@ commits, or dependency activity within the threshold window.`,
 		}
 		defer func() { _ = taskClient.Close() }()
 
-		actor := cfg.Actor
-		if orphanActor != "" {
-			actor = orphanActor
-		}
-		if actor == "" {
-			actor = "anonymous"
-		}
+		actor := resolveActor(orphanActor)
 
 		threshold := 1 * time.Hour
 		if orphanOlderThan != "" {

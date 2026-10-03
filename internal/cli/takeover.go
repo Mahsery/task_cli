@@ -34,13 +34,7 @@ removes any 'orphaned' tag, and appends an audit note documenting the handover.`
 		}
 		defer func() { _ = taskClient.Close() }()
 
-		actor := cfg.Actor
-		if takeoverActor != "" {
-			actor = takeoverActor
-		}
-		if actor == "" {
-			actor = "anonymous"
-		}
+		actor := resolveActor(takeoverActor)
 
 		// Inspect current task to report previous assignee
 		existing, err := taskClient.GetTask(taskID)

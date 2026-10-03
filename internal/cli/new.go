@@ -8,7 +8,6 @@ import (
 
 	"task_cli/internal/domain"
 	"task_cli/internal/editor"
-	"task_cli/internal/git"
 	"task_cli/internal/protocol"
 
 	"github.com/spf13/cobra"
@@ -68,12 +67,7 @@ and subsequent lines form the description.`,
 				prio = p
 			}
 			if newTags != "" {
-				for _, t := range strings.Split(newTags, ",") {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						tags = append(tags, t)
-					}
-				}
+				tags = splitCommaList(newTags)
 			}
 			assignee = newAssignee
 			desc = newMessage
@@ -134,19 +128,11 @@ and subsequent lines form the description.`,
 			status = s
 		}
 
-		author := cfg.Actor
-		if author == "" {
-			author = git.GetAuthor()
-		}
+		author := resolveAuthor("")
 
 		var dependsOn []string
 		if newDependsOn != "" {
-			for _, d := range strings.Split(newDependsOn, ",") {
-				d = strings.TrimSpace(d)
-				if d != "" {
-					dependsOn = append(dependsOn, d)
-				}
-			}
+			dependsOn = splitCommaList(newDependsOn)
 		}
 
 		task, err := taskClient.CreateTask(protocol.CreateTaskPayload{

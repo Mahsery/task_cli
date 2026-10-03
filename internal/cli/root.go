@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"task_cli/internal/client"
 	"task_cli/internal/config"
@@ -128,4 +129,35 @@ func outputJSON(v any) error {
 	}
 	fmt.Println(string(data))
 	return nil
+}
+
+func resolveActor(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if cfg != nil && cfg.Actor != "" {
+		return cfg.Actor
+	}
+	return "anonymous"
+}
+
+func resolveAuthor(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if cfg != nil && cfg.Actor != "" {
+		return cfg.Actor
+	}
+	return git.GetAuthor()
+}
+
+func splitCommaList(s string) []string {
+	var result []string
+	for _, item := range strings.Split(s, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
 }

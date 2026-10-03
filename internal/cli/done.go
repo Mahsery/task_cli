@@ -69,10 +69,7 @@ Use --diff to snapshot uncommitted working tree changes, or --no-commit to skip 
 		var updated *domain.Task
 		var err error
 
-		author := cfg.Actor
-		if author == "" {
-			author = git.GetAuthor()
-		}
+		author := resolveAuthor("")
 
 		if sha != "" {
 			updated, err = taskClient.AttachGitWithForce(taskID, sha, msg, stat, diff, true, doneForce)

@@ -52,13 +52,7 @@ Archived tasks can be restored anytime with 'tk unarchive <id...>' or 'tk archiv
 		}
 		defer func() { _ = taskClient.Close() }()
 
-		actor := cfg.Actor
-		if archiveActor != "" {
-			actor = archiveActor
-		}
-		if actor == "" {
-			actor = "anonymous"
-		}
+		actor := resolveActor(archiveActor)
 
 		var archivedTasks []*domain.Task
 		for _, arg := range args {
@@ -162,13 +156,7 @@ func runUnarchive(args []string, explicitActor, message string) error {
 	}
 	defer func() { _ = taskClient.Close() }()
 
-	actor := cfg.Actor
-	if explicitActor != "" {
-		actor = explicitActor
-	}
-	if actor == "" {
-		actor = "anonymous"
-	}
+	actor := resolveActor(explicitActor)
 
 	var unarchivedTasks []*domain.Task
 	for _, arg := range args {

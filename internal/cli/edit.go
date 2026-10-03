@@ -6,7 +6,6 @@ import (
 
 	"task_cli/internal/domain"
 	"task_cli/internal/editor"
-	"task_cli/internal/git"
 	"task_cli/internal/protocol"
 
 	"github.com/spf13/cobra"
@@ -47,13 +46,7 @@ opens an interactive buffer with existing values pre-populated.`,
 		}
 
 		if editClaim {
-			actor := cfg.Actor
-			if editAssignee != "" {
-				actor = editAssignee
-			}
-			if actor == "" {
-				actor = git.GetAuthor()
-			}
+			actor := resolveAuthor(editAssignee)
 			claimed, err := taskClient.ClaimTask(taskID, actor, false)
 			if err != nil {
 				return err
@@ -82,11 +75,7 @@ opens an interactive buffer with existing values pre-populated.`,
 
 		var payload protocol.UpdateTaskPayload
 		payload.ID = taskID
-		author := cfg.Actor
-		if author == "" {
-			author = git.GetAuthor()
-		}
-		payload.Author = author
+		payload.Author = resolveAuthor("")
 
 		if hasFlags {
 			if cmd.Flags().Changed("title") && strings.TrimSpace(editTitle) != task.Title {
@@ -111,13 +100,7 @@ opens an interactive buffer with existing values pre-populated.`,
 				payload.Priority = &p
 			}
 			if cmd.Flags().Changed("tags") {
-				var tags []string
-				for _, t := range strings.Split(editTags, ",") {
-					t = strings.TrimSpace(t)
-					if t != "" {
-						tags = append(tags, t)
-					}
-				}
+				tags := splitCommaList(editTags)
 				payload.Tags = &tags
 			}
 			if cmd.Flags().Changed("add-tag") {
