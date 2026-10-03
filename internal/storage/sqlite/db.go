@@ -8,11 +8,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
 )
 
 type DB struct {
-	conn   *sql.DB
+	conn   *sqlx.DB
 	dbPath string
 	mu     sync.Mutex
 }
@@ -32,7 +33,7 @@ func Open(dbPath string) (*DB, error) {
 	// Single writer connection pool for daemon guarantees 0 contention
 	conn.SetMaxOpenConns(1)
 
-	db := &DB{conn: conn, dbPath: dbPath}
+	db := &DB{conn: sqlx.NewDb(conn, "sqlite"), dbPath: dbPath}
 	if err := db.migrate(); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("failed to migrate db: %w", err)

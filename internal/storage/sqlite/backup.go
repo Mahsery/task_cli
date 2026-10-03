@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 type BackupMeta struct {
@@ -211,7 +213,7 @@ func (d *DB) Resurrect(targetPath string) error {
 	}
 	newConn.SetMaxOpenConns(1)
 
-	d.conn = newConn
+	d.conn = sqlx.NewDb(newConn, "sqlite")
 	d.dbPath = targetPath
 	return nil
 }

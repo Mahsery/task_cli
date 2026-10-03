@@ -89,6 +89,22 @@ func FormatAge(t time.Time) string {
 	return fmt.Sprintf("%dy ago", months/12)
 }
 
+// FormatDurationBrief formats a duration into a brief string (e.g. "just now", "15m", "2h", "2h15m").
+func FormatDurationBrief(d time.Duration) string {
+	if d < time.Minute {
+		return "just now"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	if mins == 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dh%dm", hours, mins)
+}
+
 // CompactTreeBranch compacts deep tree branch indentation so it does not exceed maxW visual cells,
 // ensuring the connector and task title remain clearly visible without getting squeezed out.
 func CompactTreeBranch(branch string, maxW int) string {

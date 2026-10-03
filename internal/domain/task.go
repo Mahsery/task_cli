@@ -95,10 +95,10 @@ func ParsePriority(s string) (Priority, error) {
 }
 
 type TaskNote struct {
-	ID        string    `json:"id"`
-	Author    string    `json:"author"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id" db:"id"`
+	Author    string    `json:"author" db:"author"`
+	Content   string    `json:"content" db:"content"`
+	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
 type Task struct {
