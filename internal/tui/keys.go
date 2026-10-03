@@ -52,52 +52,45 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "enter":
 			m.isSearch = false
+			m.filterText = m.input.Value()
+			m.input.Blur()
 			return m, m.fetchTasksCmd()
 		case "esc":
 			m.isSearch = false
 			m.filterText = ""
+			m.input.Reset()
+			m.input.Blur()
 			return m, m.fetchTasksCmd()
-		case "backspace":
-			runes := []rune(m.filterText)
-			if len(runes) > 0 {
-				m.filterText = string(runes[:len(runes)-1])
-				return m, m.fetchTasksCmd()
-			}
 		default:
-			if len(msg.Runes) > 0 {
-				m.filterText += string(msg.Runes)
-				return m, m.fetchTasksCmd()
-			}
+			cmd := m.updateInput(msg)
+			m.filterText = m.input.Value()
+			return m, tea.Batch(cmd, m.fetchTasksCmd())
 		}
-		return m, nil
 	}
 
 	if m.isLinking {
 		switch msg.String() {
 		case "enter":
 			m.isLinking = false
-			prereqID := strings.TrimSpace(m.linkInput)
+			prereqID := strings.TrimSpace(m.input.Value())
+			m.linkInput = prereqID
+			m.input.Blur()
 			if prereqID != "" {
-				targetID := m.linkTaskID
-				return m, m.linkTaskCmd(targetID, prereqID)
+				return m, m.linkTaskCmd(m.linkTaskID, prereqID)
 			}
 			m.statusMsg = "Link cancelled"
 			return m, nil
 		case "esc":
 			m.isLinking = false
+			m.linkInput = ""
+			m.input.Reset()
+			m.input.Blur()
 			m.statusMsg = "Link cancelled"
 			return m, nil
-		case "backspace":
-			runes := []rune(m.linkInput)
-			if len(runes) > 0 {
-				m.linkInput = string(runes[:len(runes)-1])
-			}
-			return m, nil
 		default:
-			if len(msg.Runes) > 0 {
-				m.linkInput += string(msg.Runes)
-			}
-			return m, nil
+			cmd := m.updateInput(msg)
+			m.linkInput = m.input.Value()
+			return m, cmd
 		}
 	}
 
@@ -105,7 +98,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "enter":
 			m.isTagging = false
-			tag := strings.TrimSpace(m.tagInput)
+			tag := strings.TrimSpace(m.input.Value())
+			m.tagInput = tag
+			m.input.Blur()
 			if tag != "" {
 				if m.tagTaskID != "" {
 					targetID := m.tagTaskID
@@ -132,21 +127,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 							m.statusMsg = fmt.Sprintf("Tagged %s with %q (press 'u' to undo)", targetID, tag)
 						}
 						cur.Tags = newTags
-
-						undo := UndoAction{
-							Kind:        UndoTag,
-							Description: fmt.Sprintf("Tag change on %s", targetID),
-							Snapshots: []TaskUndoSnapshot{
-								{
-									Task:         cur,
-									PreviousTags: prevTags,
-								},
-							},
-						}
-						m.undoStack = append(m.undoStack, undo)
-						if len(m.undoStack) > 50 {
-							m.undoStack = m.undoStack[len(m.undoStack)-50:]
-						}
+						m.pushUndo(UndoTag, fmt.Sprintf("Tag change on %s", targetID), TaskUndoSnapshot{
+							Task:         cur,
+							PreviousTags: prevTags,
+						})
 						return m, m.updateTaskTagsCmd(targetID, newTags)
 					}
 				} else if len(m.selected) > 0 {
@@ -175,15 +159,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 							break
 						}
 					}
-					undo := UndoAction{
-						Kind:        UndoTag,
-						Description: fmt.Sprintf("Tag %q on %d tasks", tag, len(ids)),
-						Snapshots:   snapshots,
-					}
-					m.undoStack = append(m.undoStack, undo)
-					if len(m.undoStack) > 50 {
-						m.undoStack = m.undoStack[len(m.undoStack)-50:]
-					}
+					m.pushUndo(UndoTag, fmt.Sprintf("Tag %q on %d tasks", tag, len(ids)), snapshots...)
 					m.statusMsg = fmt.Sprintf("Tagged %d tasks with %q (press 'u' to undo)", len(ids), tag)
 					return m, m.batchTagCmd(ids, tag)
 				}
@@ -193,21 +169,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		case "esc":
 			m.isTagging = false
+			m.tagInput = ""
+			m.input.Reset()
+			m.input.Blur()
 			m.statusMsg = "Tagging cancelled"
 			return m, nil
 
-		case "backspace":
-			runes := []rune(m.tagInput)
-			if len(runes) > 0 {
-				m.tagInput = string(runes[:len(runes)-1])
-			}
-			return m, nil
-
 		default:
-			if len(msg.Runes) > 0 {
-				m.tagInput += string(msg.Runes)
-			}
-			return m, nil
+			cmd := m.updateInput(msg)
+			m.tagInput = m.input.Value()
+			return m, cmd
 		}
 	}
 
@@ -533,9 +504,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.fetchTasksCmd()
 
 	case "/":
+		if m.filterText != "" {
+			m.filterText = ""
+			m.input.Reset()
+			return m, m.fetchTasksCmd()
+		}
 		m.isSearch = true
 		m.prevFilter = m.filterText
 		m.filterText = ""
+		m.focusInput()
 		return m, nil
 
 	case "enter":
@@ -610,19 +587,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					if t.ID != id {
 						continue
 					}
-					var prevArchived *time.Time
-					if t.ArchivedAt != nil {
-						c := *t.ArchivedAt
-						prevArchived = &c
-					}
-					snapshots = append(snapshots, TaskUndoSnapshot{
-						Task:               t,
-						PreviousStatus:     t.Status,
-						PreviousAssignee:   t.Assignee,
-						PreviousClosedAt:   t.ClosedAt,
-						PreviousArchivedAt: prevArchived,
-						PreviousTags:       append([]string(nil), t.Tags...),
-					})
+					snapshots = append(snapshots, cloneTaskSnapshot(t, nil))
 					if targetArchive {
 						t.ArchivedAt = &now
 						t.Status = domain.StatusArchived
@@ -637,55 +602,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if !targetArchive {
 				actionDesc = "Unarchived"
 			}
-			undo := UndoAction{
-				Kind:        UndoArchive,
-				Description: fmt.Sprintf("%s %d tasks", actionDesc, len(ids)),
-				Snapshots:   snapshots,
-			}
-			m.undoStack = append(m.undoStack, undo)
-			if len(m.undoStack) > 50 {
-				m.undoStack = m.undoStack[len(m.undoStack)-50:]
-			}
+			m.pushUndo(UndoArchive, fmt.Sprintf("%s %d tasks", actionDesc, len(ids)), snapshots...)
 			m.statusMsg = fmt.Sprintf("%s %d tasks (press 'u' to undo)", actionDesc, len(ids))
 			return m, m.batchArchiveCmd(ids, targetArchive)
 		}
 		cur := m.currentTask()
 		if cur != nil {
 			now := time.Now()
-			var prevArchived *time.Time
-			if cur.ArchivedAt != nil {
-				c := *cur.ArchivedAt
-				prevArchived = &c
-			}
-			undo := UndoAction{
-				Kind: UndoArchive,
-				Snapshots: []TaskUndoSnapshot{
-					{
-						Task:               cur,
-						PreviousStatus:     cur.Status,
-						PreviousAssignee:   cur.Assignee,
-						PreviousClosedAt:   cur.ClosedAt,
-						PreviousArchivedAt: prevArchived,
-						PreviousTags:       append([]string(nil), cur.Tags...),
-					},
-				},
-			}
+			snap := cloneTaskSnapshot(cur, nil)
 			if cur.IsArchived() {
-				undo.Description = fmt.Sprintf("Unarchived %s", cur.ID)
-				m.undoStack = append(m.undoStack, undo)
-				if len(m.undoStack) > 50 {
-					m.undoStack = m.undoStack[len(m.undoStack)-50:]
-				}
+				m.pushUndo(UndoArchive, fmt.Sprintf("Unarchived %s", cur.ID), snap)
 				cur.ArchivedAt = nil
 				cur.Status = domain.StatusOpen
 				m.statusMsg = fmt.Sprintf("Unarchived %s (press 'u' to undo)", cur.ID)
 				return m, m.unarchiveTaskCmd(cur.ID)
 			}
-			undo.Description = fmt.Sprintf("Archived %s", cur.ID)
-			m.undoStack = append(m.undoStack, undo)
-			if len(m.undoStack) > 50 {
-				m.undoStack = m.undoStack[len(m.undoStack)-50:]
-			}
+			m.pushUndo(UndoArchive, fmt.Sprintf("Archived %s", cur.ID), snap)
 			cur.ArchivedAt = &now
 			cur.Status = domain.StatusArchived
 			m.statusMsg = fmt.Sprintf("Archived %s (press 'u' to undo)", cur.ID)
@@ -708,6 +640,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.isLinking = true
 			m.linkInput = ""
 			m.linkTaskID = cur.ID
+			m.focusInput()
 			m.statusMsg = fmt.Sprintf("Linking %s (enter prerequisite ID)", cur.ID)
 		}
 		return m, nil
@@ -778,6 +711,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.isTagging = true
 			m.tagInput = ""
 			m.tagTaskID = ""
+			m.focusInput()
 			m.statusMsg = fmt.Sprintf("Tagging %d selected tasks (enter tag name)", len(m.selected))
 			return m, nil
 		}
@@ -786,6 +720,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.isTagging = true
 			m.tagInput = ""
 			m.tagTaskID = cur.ID
+			m.focusInput()
 			m.statusMsg = fmt.Sprintf("Tagging %s (enter tag name)", cur.ID)
 		}
 		return m, nil

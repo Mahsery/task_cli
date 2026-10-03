@@ -3,6 +3,8 @@ package tui
 import (
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"task_cli/internal/client"
@@ -97,6 +99,8 @@ type Model struct {
 	tagInput           string
 	tagTaskID          string
 	showArchived       bool
+	input              textinput.Model
+	viewport           viewport.Model
 }
 
 type TreeRow struct {
@@ -106,6 +110,12 @@ type TreeRow struct {
 }
 
 func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
+	ti := textinput.New()
+	ti.Prompt = ""
+	ti.CharLimit = 200
+
+	vp := viewport.New(0, 0)
+
 	return Model{
 		client:             c,
 		editorCmd:          editorCmd,
@@ -117,7 +127,27 @@ func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
 		cursor:             0,
 		scrollOffset:       0,
 		detailScrollOffset: 0,
+		input:              ti,
+		viewport:           vp,
 	}
+}
+
+func (m *Model) focusInput() {
+	m.input = textinput.New()
+	m.input.Prompt = ""
+	m.input.CharLimit = 200
+	_ = m.input.Focus()
+}
+
+func (m *Model) updateInput(msg tea.Msg) tea.Cmd {
+	if m.input.CharLimit == 0 {
+		m.input = textinput.New()
+		m.input.Prompt = ""
+		m.input.CharLimit = 200
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return cmd
 }
 
 type reloadMsg []*domain.Task
