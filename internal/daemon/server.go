@@ -132,7 +132,6 @@ func (s *Server) ensureCentralRepoMeta(centralDir, repoPath string) {
 	}
 }
 
-
 func (s *Server) Start() error {
 	// 1. Prepare unix socket
 	_ = os.MkdirAll(filepath.Dir(s.cfg.SocketPath), 0755)
@@ -1110,4 +1109,3 @@ func copyFile(src, dst string) error {
 	_, err = io.Copy(out, in)
 	return err
 }
-

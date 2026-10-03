@@ -1049,7 +1049,7 @@ func TestTUICompactTreeBranch(t *testing.T) {
 		t.Errorf("c10 contains replacement character: %q", c10)
 	}
 
-	// Last child connector: │   │   └── 
+	// Last child connector: │   │   └──
 	lastBranch := "│   │   └── "
 	c8 := compactTreeBranch(lastBranch, 8)
 	if runewidth.StringWidth(c8) > 8 {
@@ -1559,5 +1559,3 @@ func TestTUIDynamicRepoHeader(t *testing.T) {
 		t.Errorf("Expected 'tk: global' in header for global scope, got:\n%s", view2)
 	}
 }
-
-

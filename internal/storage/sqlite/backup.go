@@ -216,4 +216,3 @@ func (d *DB) Resurrect(targetPath string) error {
 	d.dbPath = targetPath
 	return nil
 }
-

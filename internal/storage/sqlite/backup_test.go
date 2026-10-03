@@ -173,4 +173,3 @@ func TestResurrectUnlinkedDatabase(t *testing.T) {
 		t.Fatalf("expected valid task ID after resurrect")
 	}
 }
-

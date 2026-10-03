@@ -235,7 +235,6 @@ func (c *Client) ClaimTask(id, assignee string, force bool) (*domain.Task, error
 	return &task, nil
 }
 
-
 func (c *Client) Actor() string {
 	if c.cfg != nil && c.cfg.Actor != "" {
 		return c.cfg.Actor

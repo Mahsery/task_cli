@@ -166,4 +166,3 @@ func TestIsOrphaned(t *testing.T) {
 		t.Error("expected archived task to never be considered orphaned")
 	}
 }
-

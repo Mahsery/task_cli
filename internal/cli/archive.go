@@ -113,9 +113,9 @@ var archiveUnarchiveCmd = &cobra.Command{
 }
 
 var unarchiveCmd = &cobra.Command{
-	Use:     "unarchive <id...> [flags]",
-	Short:   "Restore/unarchive specified tasks",
-	Long:    "Restores archived tasks back to their previous active or completed status.",
+	Use:   "unarchive <id...> [flags]",
+	Short: "Restore/unarchive specified tasks",
+	Long:  "Restores archived tasks back to their previous active or completed status.",
 	Example: `  tk unarchive T-1
   tk unarchive T-1 T-2 -m "Resuming work"`,
 	Args: cobra.MinimumNArgs(1),

@@ -102,4 +102,3 @@ func TestDaemonStartAndRestartCommands(t *testing.T) {
 		t.Error("expected --socket flag on daemon restart")
 	}
 }
-

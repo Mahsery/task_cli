@@ -115,9 +115,9 @@ var daemonStartCmd = &cobra.Command{
 }
 
 var daemonRestartCmd = &cobra.Command{
-	Use:   "restart",
-	Short: "Restart the background daemon",
-	Long:  `Stop any active daemon, wait for graceful shutdown, and launch a fresh daemon in the background.`,
+	Use:     "restart",
+	Short:   "Restart the background daemon",
+	Long:    `Stop any active daemon, wait for graceful shutdown, and launch a fresh daemon in the background.`,
 	Example: `  tk daemon restart`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if daemonSocketPath != "" {
@@ -241,4 +241,3 @@ func init() {
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonStatusCmd)
 }
-

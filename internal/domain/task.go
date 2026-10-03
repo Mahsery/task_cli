@@ -102,9 +102,9 @@ type TaskNote struct {
 }
 
 type Task struct {
-	ID          string     `json:"id"`          // e.g. "T-1" (local) or "G-1" (global)
-	Scope       string     `json:"scope"`       // "local" or "global"
-	RepoPath    string     `json:"repo_path"`   // git root path if local
+	ID          string     `json:"id"`        // e.g. "T-1" (local) or "G-1" (global)
+	Scope       string     `json:"scope"`     // "local" or "global"
+	RepoPath    string     `json:"repo_path"` // git root path if local
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	Status      Status     `json:"status"`
@@ -118,10 +118,10 @@ type Task struct {
 	ArchivedAt  *time.Time `json:"archived_at,omitempty"`
 
 	// Git integration (Linux kernel style)
-	CommitSHA   string     `json:"commit_sha,omitempty"`
-	CommitMsg   string     `json:"commit_msg,omitempty"`
-	DiffStat    string     `json:"diff_stat,omitempty"`
-	DiffContent string     `json:"diff_content,omitempty"`
+	CommitSHA   string `json:"commit_sha,omitempty"`
+	CommitMsg   string `json:"commit_msg,omitempty"`
+	DiffStat    string `json:"diff_stat,omitempty"`
+	DiffContent string `json:"diff_content,omitempty"`
 
 	// Dependencies & DAG
 	DependsOn []string `json:"depends_on,omitempty"` // Prerequisite task IDs that must be completed before this task

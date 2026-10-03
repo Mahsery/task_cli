@@ -888,7 +888,6 @@ func formatDurationBrief(d time.Duration) string {
 	return fmt.Sprintf("%dh%dm", hours, mins)
 }
 
-
 func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	var conditions []string
 	var args []any

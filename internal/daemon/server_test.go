@@ -433,4 +433,3 @@ func TestDaemonBackupListAndRestoreLatest(t *testing.T) {
 		t.Fatalf("restore latest failed: %s", restoreResp.Error)
 	}
 }
-

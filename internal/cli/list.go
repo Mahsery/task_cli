@@ -11,12 +11,12 @@ import (
 )
 
 var (
-	listStatus   string
-	listPriority string
-	listTag      string
-	listTagLabel string
-	listAssignee string
-	listSearch   string
+	listStatus    string
+	listPriority  string
+	listTag       string
+	listTagLabel  string
+	listAssignee  string
+	listSearch    string
 	listShort     bool
 	listLimit     int
 	listTree      bool

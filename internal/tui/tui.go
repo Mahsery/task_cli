@@ -3764,4 +3764,3 @@ func compactTreeBranch(branch string, maxW int) string {
 
 	return ellipsis + middle + connector
 }
-

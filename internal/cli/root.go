@@ -16,15 +16,15 @@ import (
 )
 
 var (
-	globalFlag  bool
-	jsonFlag    bool
-	flagSocket  string
-	flagTCP     string
-	flagActor   string
-	cfg         *config.Config
-	taskClient  *client.Client
-	scope       string
-	repoRoot    string
+	globalFlag bool
+	jsonFlag   bool
+	flagSocket string
+	flagTCP    string
+	flagActor  string
+	cfg        *config.Config
+	taskClient *client.Client
+	scope      string
+	repoRoot   string
 )
 
 var RootCmd = &cobra.Command{

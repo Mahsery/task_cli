@@ -86,4 +86,3 @@ func TestSanitizeDiffContentMultiByteUTF8(t *testing.T) {
 		}
 	}
 }
-
