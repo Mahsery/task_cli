@@ -12,6 +12,34 @@ import (
 	"task_cli/internal/storage/sqlite"
 )
 
+func TestOpenDatabaseAfterRepositoryMove(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "tasks.db")
+	db, err := sqlite.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.CreateTask("local", "/old/repo", "Existing task", "", domain.StatusOpen, domain.PriorityNormal, nil, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = openDatabase(dbPath, "local", "/new/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	tasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/new/repo"})
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("existing task hidden after move: tasks=%v err=%v", tasks, err)
+	}
+	next, err := db.CreateTask("local", "/new/repo", "New task", "", domain.StatusOpen, domain.PriorityNormal, nil, "", "")
+	if err != nil || next.ID != "T-2" {
+		t.Fatalf("create after move: task=%v err=%v", next, err)
+	}
+}
+
 func TestDaemonArchiveAndUnarchive(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tk-daemon-test-*")
 	if err != nil {

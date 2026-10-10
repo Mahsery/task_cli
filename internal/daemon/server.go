@@ -86,7 +86,7 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 		}
 	}
 
-	db, err := sqlite.Open(dbPath)
+	db, err := openDatabase(dbPath, scope, repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database at %q: %w", dbPath, err)
 	}
@@ -94,6 +94,13 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 	s.dbs[dbPath] = db
 	go s.syncCentralBackup(db, repoPath)
 	return db, nil
+}
+
+func openDatabase(dbPath, scope, repoPath string) (*sqlite.DB, error) {
+	if scope == "global" || repoPath == "" {
+		return sqlite.Open(dbPath)
+	}
+	return sqlite.OpenRepository(dbPath, repoPath)
 }
 
 func findLatestBackupInDir(dir string) string {
@@ -917,7 +924,7 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	}
 
 	// 6. Reopen DB to verify and cache
-	newDB, err := sqlite.Open(dbPath)
+	newDB, err := openDatabase(dbPath, req.Scope, req.RepoPath)
 	if err != nil {
 		return errorResp(req.ID, "restored database failed to open: "+err.Error())
 	}
