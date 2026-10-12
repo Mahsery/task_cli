@@ -576,3 +576,81 @@ func (c *Client) RestoreBackup(backupPath string) (string, error) {
 	}
 	return res["message"], nil
 }
+
+// callInto performs a request and decodes the response data into out (if non-nil).
+func (c *Client) callInto(action protocol.Action, payload, out any) error {
+	resp, err := c.call(action, payload)
+	if err != nil {
+		return err
+	}
+	if out == nil {
+		return nil
+	}
+	return json.Unmarshal(resp.Data, out)
+}
+
+// ListTopics returns all topics of the client's scope in tree order.
+func (c *Client) ListTopics() ([]*domain.Topic, error) {
+	var topics []*domain.Topic
+	if err := c.callInto(protocol.ActionListTopics, struct{}{}, &topics); err != nil {
+		return nil, err
+	}
+	return topics, nil
+}
+
+// GetTopic resolves a topic by path, unique slug or numeric ID.
+func (c *Client) GetTopic(ref string) (*domain.Topic, error) {
+	var tp domain.Topic
+	if err := c.callInto(protocol.ActionGetTopic, protocol.TopicRefPayload{Ref: ref}, &tp); err != nil {
+		return nil, err
+	}
+	return &tp, nil
+}
+
+func (c *Client) CreateTopic(p protocol.CreateTopicPayload) (*domain.Topic, error) {
+	var tp domain.Topic
+	if err := c.callInto(protocol.ActionCreateTopic, p, &tp); err != nil {
+		return nil, err
+	}
+	return &tp, nil
+}
+
+func (c *Client) UpdateTopic(p protocol.UpdateTopicPayload) (*domain.Topic, error) {
+	var tp domain.Topic
+	if err := c.callInto(protocol.ActionUpdateTopic, p, &tp); err != nil {
+		return nil, err
+	}
+	return &tp, nil
+}
+
+// MoveTopic re-parents a topic; parent "" moves it to the root.
+func (c *Client) MoveTopic(ref, parent string) (*domain.Topic, error) {
+	var tp domain.Topic
+	if err := c.callInto(protocol.ActionMoveTopic, protocol.MoveTopicPayload{Ref: ref, Parent: parent}, &tp); err != nil {
+		return nil, err
+	}
+	return &tp, nil
+}
+
+// DeleteTopic deletes a topic, moving its contents to moveTo when it is not empty.
+func (c *Client) DeleteTopic(ref, moveTo string) error {
+	return c.callInto(protocol.ActionDeleteTopic, protocol.DeleteTopicPayload{Ref: ref, MoveTo: moveTo}, nil)
+}
+
+// MoveItems moves tasks/posts into a topic ("unfiled" clears it).
+func (c *Client) MoveItems(ids []string, topic, actor string) ([]*domain.Task, error) {
+	var moved []*domain.Task
+	if err := c.callInto(protocol.ActionMoveItems, protocol.MoveItemsPayload{IDs: ids, Topic: topic, Actor: actor}, &moved); err != nil {
+		return nil, err
+	}
+	return moved, nil
+}
+
+// PromotePost converts a post into a task in topic, returning the new task and the resolved post.
+func (c *Client) PromotePost(id, topic, author string) (*protocol.PromotePostResult, error) {
+	var res protocol.PromotePostResult
+	if err := c.callInto(protocol.ActionPromotePost, protocol.PromotePostPayload{ID: id, Topic: topic, Author: author}, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}

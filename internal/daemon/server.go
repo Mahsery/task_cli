@@ -315,7 +315,8 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			protocol.ActionDeleteTask, protocol.ActionRestoreTask, protocol.ActionAttachGit,
 			protocol.ActionAddDependency, protocol.ActionRemoveDependency, protocol.ActionOrphanTask,
 			protocol.ActionReapStaleTasks, protocol.ActionTransferTask, protocol.ActionArchiveTask,
-			protocol.ActionUnarchiveTask:
+			protocol.ActionUnarchiveTask, protocol.ActionCreateTopic, protocol.ActionUpdateTopic,
+			protocol.ActionMoveTopic, protocol.ActionDeleteTopic, protocol.ActionMoveItems, protocol.ActionPromotePost:
 			if db, err := s.getDB(req.Scope, req.RepoPath); err == nil {
 				go s.syncCentralBackup(db, req.RepoPath)
 			}
@@ -335,7 +336,11 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 
 	case protocol.ActionCreateTask:
 		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.CreateTaskPayload) (*domain.Task, error) {
-			task, err := db.CreateTask(req.Scope, req.RepoPath, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.Author, p.Assignee, p.DependsOn...)
+			task, err := db.CreateItem(sqlite.CreateItemParams{
+				Scope: req.Scope, RepoPath: req.RepoPath, Kind: p.Kind, Topic: p.Topic,
+				Title: p.Title, Description: p.Description, Status: p.Status, Priority: p.Priority,
+				Tags: p.Tags, Author: p.Author, Assignee: p.Assignee, DependsOn: p.DependsOn,
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -609,6 +614,97 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 				Message:   msg,
 			})
 			return task, nil
+		})
+
+	case protocol.ActionListTopics:
+		return handleWithDB(s, req, func(db *sqlite.DB, _ struct{}) ([]*domain.Topic, error) {
+			return db.ListTopics()
+		})
+
+	case protocol.ActionGetTopic:
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.TopicRefPayload) (*domain.Topic, error) {
+			return db.GetTopic(p.Ref)
+		})
+
+	case protocol.ActionCreateTopic:
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.CreateTopicPayload) (*domain.Topic, error) {
+			tp, err := db.CreateTopic(p.Title, p.Slug, p.Description, p.Kind, p.Parent)
+			if err != nil {
+				return nil, err
+			}
+			s.publishTopics(fmt.Sprintf("+ topic @%s created (%s)", tp.Path, tp.Kind))
+			return tp, nil
+		})
+
+	case protocol.ActionUpdateTopic:
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.UpdateTopicPayload) (*domain.Topic, error) {
+			tp, err := db.UpdateTopic(p.Ref, p.Title, p.Slug, p.Description, p.Kind)
+			if err != nil {
+				return nil, err
+			}
+			s.publishTopics(fmt.Sprintf("~ topic @%s updated", tp.Path))
+			return tp, nil
+		})
+
+	case protocol.ActionMoveTopic:
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.MoveTopicPayload) (*domain.Topic, error) {
+			tp, err := db.MoveTopic(p.Ref, p.Parent)
+			if err != nil {
+				return nil, err
+			}
+			s.publishTopics(fmt.Sprintf("~ topic moved to @%s", tp.Path))
+			return tp, nil
+		})
+
+	case protocol.ActionDeleteTopic:
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.DeleteTopicPayload) (json.RawMessage, error) {
+			if err := db.DeleteTopic(p.Ref, p.MoveTo); err != nil {
+				return nil, err
+			}
+			s.publishTopics(fmt.Sprintf("- topic @%s deleted", domain.NormalizeTopicRef(p.Ref)))
+			return json.RawMessage(`{"status":"deleted"}`), nil
+		})
+
+	case protocol.ActionMoveItems:
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.MoveItemsPayload) ([]*domain.Task, error) {
+			moved, err := db.MoveItems(p.IDs, p.Topic, p.Actor)
+			if err != nil {
+				return nil, err
+			}
+			for _, t := range moved {
+				dest := "unfiled"
+				if t.TopicPath != "" {
+					dest = "@" + t.TopicPath
+				}
+				s.pubsub.Publish(protocol.Event{
+					Type:      protocol.EventTaskUpdated,
+					Timestamp: time.Now(),
+					Task:      t,
+					Message:   fmt.Sprintf("→ %s moved to %s", t.ID, dest),
+				})
+			}
+			return moved, nil
+		})
+
+	case protocol.ActionPromotePost:
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.PromotePostPayload) (protocol.PromotePostResult, error) {
+			task, post, err := db.PromotePost(p.ID, p.Topic, p.Author)
+			if err != nil {
+				return protocol.PromotePostResult{}, err
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskCreated,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   fmt.Sprintf("⇪ %s promoted to %s: %q", post.ID, task.ID, task.Title),
+			})
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      post,
+				Message:   fmt.Sprintf("✓ %s resolved (promoted to %s)", post.ID, task.ID),
+			})
+			return protocol.PromotePostResult{Task: task, Post: post}, nil
 		})
 
 	case protocol.ActionShutdown:
@@ -959,4 +1055,13 @@ func copyFile(src, dst string) (err error) {
 
 	_, err = io.Copy(out, in)
 	return err
+}
+
+// publishTopics notifies subscribers that the topic tree changed.
+func (s *Server) publishTopics(msg string) {
+	s.pubsub.Publish(protocol.Event{
+		Type:      protocol.EventTopicsChanged,
+		Timestamp: time.Now(),
+		Message:   msg,
+	})
 }

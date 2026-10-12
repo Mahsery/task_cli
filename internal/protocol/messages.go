@@ -34,6 +34,14 @@ const (
 	ActionTransferTask     Action = "transfer_task"
 	ActionArchiveTask      Action = "task.archive"
 	ActionUnarchiveTask    Action = "task.unarchive"
+	ActionListTopics       Action = "topic.list"
+	ActionGetTopic         Action = "topic.get"
+	ActionCreateTopic      Action = "topic.create"
+	ActionUpdateTopic      Action = "topic.update"
+	ActionMoveTopic        Action = "topic.move"
+	ActionDeleteTopic      Action = "topic.delete"
+	ActionMoveItems        Action = "item.move"
+	ActionPromotePost      Action = "post.promote"
 )
 
 type Request struct {
@@ -60,6 +68,8 @@ type CreateTaskPayload struct {
 	Author      string          `json:"author"`
 	Assignee    string          `json:"assignee,omitempty"`
 	DependsOn   []string        `json:"depends_on,omitempty"`
+	Kind        domain.ItemKind `json:"kind,omitempty"`
+	Topic       string          `json:"topic,omitempty"`
 }
 
 type UpdateTaskPayload struct {
@@ -106,6 +116,10 @@ type ListTasksPayload struct {
 	OnlyArchived    bool             `json:"only_archived,omitempty"`
 	DependsOn       string           `json:"depends_on,omitempty"`
 	Blocks          string           `json:"blocks,omitempty"`
+	Topic           string           `json:"topic,omitempty"`
+	TopicRecursive  bool             `json:"topic_recursive,omitempty"`
+	Kind            domain.ItemKind  `json:"kind,omitempty"`
+	LinksTo         string           `json:"links_to,omitempty"`
 }
 
 // ToFilter converts ListTasksPayload to a domain.TaskFilter.
@@ -129,6 +143,10 @@ func (p ListTasksPayload) ToFilter() domain.TaskFilter {
 		OnlyArchived:    p.OnlyArchived,
 		DependsOn:       p.DependsOn,
 		Blocks:          p.Blocks,
+		Topic:           p.Topic,
+		TopicRecursive:  p.TopicRecursive,
+		Kind:            p.Kind,
+		LinksTo:         p.LinksTo,
 	}
 }
 
@@ -153,6 +171,10 @@ func FilterToListTasksPayload(filter domain.TaskFilter) ListTasksPayload {
 		OnlyArchived:    filter.OnlyArchived,
 		DependsOn:       filter.DependsOn,
 		Blocks:          filter.Blocks,
+		Topic:           filter.Topic,
+		TopicRecursive:  filter.TopicRecursive,
+		Kind:            filter.Kind,
+		LinksTo:         filter.LinksTo,
 	}
 }
 
@@ -200,11 +222,12 @@ type DependenciesData struct {
 type EventType string
 
 const (
-	EventTaskCreated EventType = "task_created"
-	EventTaskUpdated EventType = "task_updated"
-	EventTaskDeleted EventType = "task_deleted"
-	EventGitAttached EventType = "git_attached"
-	EventSnapshot    EventType = "snapshot"
+	EventTaskCreated   EventType = "task_created"
+	EventTaskUpdated   EventType = "task_updated"
+	EventTaskDeleted   EventType = "task_deleted"
+	EventGitAttached   EventType = "git_attached"
+	EventSnapshot      EventType = "snapshot"
+	EventTopicsChanged EventType = "topics_changed"
 )
 
 type Event struct {
@@ -275,4 +298,51 @@ type UnarchiveTaskPayload struct {
 	ID     string `json:"id"`
 	Actor  string `json:"actor,omitempty"`
 	Reason string `json:"reason,omitempty"`
+}
+
+type TopicRefPayload struct {
+	Ref string `json:"ref"`
+}
+
+type CreateTopicPayload struct {
+	Title       string           `json:"title"`
+	Slug        string           `json:"slug,omitempty"`
+	Description string           `json:"description,omitempty"`
+	Kind        domain.TopicKind `json:"kind,omitempty"`
+	Parent      string           `json:"parent,omitempty"`
+}
+
+type UpdateTopicPayload struct {
+	Ref         string            `json:"ref"`
+	Title       *string           `json:"title,omitempty"`
+	Slug        *string           `json:"slug,omitempty"`
+	Description *string           `json:"description,omitempty"`
+	Kind        *domain.TopicKind `json:"kind,omitempty"`
+}
+
+type MoveTopicPayload struct {
+	Ref    string `json:"ref"`
+	Parent string `json:"parent,omitempty"` // empty = root
+}
+
+type DeleteTopicPayload struct {
+	Ref    string `json:"ref"`
+	MoveTo string `json:"move_to,omitempty"`
+}
+
+type MoveItemsPayload struct {
+	IDs   []string `json:"ids"`
+	Topic string   `json:"topic"` // empty or "unfiled" = no topic
+	Actor string   `json:"actor,omitempty"`
+}
+
+type PromotePostPayload struct {
+	ID     string `json:"id"`
+	Topic  string `json:"topic"`
+	Author string `json:"author,omitempty"`
+}
+
+type PromotePostResult struct {
+	Task *domain.Task `json:"task"`
+	Post *domain.Task `json:"post"`
 }
