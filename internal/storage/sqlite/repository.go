@@ -30,9 +30,9 @@ func (d *DB) relocateRepository(repoPath string) error {
 		INSERT INTO task_sequences (scope, repo_path, last_seq)
 		SELECT 'local', ?, MAX(seq) FROM (
 			SELECT COALESCE(MAX(last_seq), 0) AS seq FROM task_sequences WHERE scope = 'local'
-			UNION ALL SELECT COALESCE(MAX(seq_num), 0) FROM tasks WHERE scope = 'local'
+			UNION ALL SELECT COALESCE(MAX(seq_num), 0) FROM tasks WHERE scope = 'local' AND kind = 'task'
 			UNION ALL SELECT COALESCE(MAX(CAST(substr(id, 3) AS INTEGER)), 0)
-			FROM task_tombstones WHERE scope = 'local'
+			FROM task_tombstones WHERE scope = 'local' AND id LIKE 'T-%'
 		) WHERE true
 		ON CONFLICT(scope, repo_path) DO UPDATE SET last_seq = MAX(last_seq, excluded.last_seq)
 	`, repoPath)

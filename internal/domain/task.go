@@ -130,6 +130,45 @@ type Task struct {
 	IsBlocked bool     `json:"is_blocked,omitempty"` // True if any prerequisite task is not done/closed
 
 	Notes []TaskNote `json:"notes,omitempty"`
+
+	// Organisation: item kind and topic membership (TopicID 0 = unfiled)
+	Kind      ItemKind `json:"kind,omitempty"`
+	TopicID   int64    `json:"topic_id,omitempty"`
+	TopicPath string   `json:"topic,omitempty"` // computed slash path of the topic, e.g. "game/hero-system"
+
+	// Wiki links: outgoing [[...]] targets parsed from description and notes, and incoming backlinks
+	Links     []string `json:"links,omitempty"`
+	Backlinks []string `json:"backlinks,omitempty"`
+}
+
+// IsPost reports whether the item is a board post rather than a task.
+func (t *Task) IsPost() bool {
+	return t != nil && t.Kind == KindPost
+}
+
+// LinkText returns all text that may contain wiki links: the description followed by each note.
+func (t *Task) LinkText() string {
+	if t == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(t.Description)
+	for _, n := range t.Notes {
+		b.WriteString("\n")
+		b.WriteString(n.Content)
+	}
+	return b.String()
+}
+
+// StatusLabel renders the status for display; done posts read as "resolved".
+func (t *Task) StatusLabel() string {
+	if t == nil {
+		return ""
+	}
+	if t.IsPost() && t.Status == StatusDone {
+		return "resolved"
+	}
+	return string(t.Status)
 }
 
 func (t *Task) IsArchived() bool {
@@ -164,7 +203,7 @@ func (t *Task) InactiveDuration() time.Duration {
 }
 
 func (t *Task) IsOrphaned() bool {
-	if t == nil || t.IsArchived() {
+	if t == nil || t.IsArchived() || t.IsPost() {
 		return false
 	}
 	if t.Status == StatusDone || t.Status == StatusClosed {
@@ -218,6 +257,10 @@ type TaskFilter struct {
 	OnlyArchived    bool   // Return only archived tasks
 	DependsOn       string // Filter by prerequisite task ID
 	Blocks          string // Filter by downstream task ID
+	Topic           string // Topic path/slug, or "unfiled" for items without a topic; empty = all topics
+	TopicRecursive  bool   // Include items in descendant topics of Topic
+	Kind            ItemKind
+	LinksTo         string // Only items whose text links to this target (ID or @topic)
 }
 
 // EffectiveStatuses returns the de-duplicated union of Status and Statuses,

@@ -1261,8 +1261,8 @@ func TestSchemaMigration_V3(t *testing.T) {
 	if err := db.conn.QueryRow("PRAGMA user_version;").Scan(&version); err != nil {
 		t.Fatalf("PRAGMA user_version failed: %v", err)
 	}
-	if version != 3 {
-		t.Errorf("expected user_version 3, got %d", version)
+	if version != CurrentSchemaVersion {
+		t.Errorf("expected user_version %d, got %d", CurrentSchemaVersion, version)
 	}
 
 	// Verify idx_tasks_archived exists

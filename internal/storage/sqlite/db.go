@@ -63,7 +63,7 @@ func (d *DB) Checkpoint(mode string) error {
 	return err
 }
 
-const CurrentSchemaVersion = 3
+const CurrentSchemaVersion = 4
 
 func (d *DB) migrate() error {
 	var userVersion int
@@ -93,19 +93,9 @@ func (d *DB) migrate() error {
 
 	// Schema v3 migration: ensure archived_at column and index exist for pre-existing databases before schema exec
 	if userVersion < 3 && tableCount > 0 {
-		var hasArchivedAt bool
-		cols, err := d.conn.Query("PRAGMA table_info(tasks);")
-		if err == nil {
-			for cols.Next() {
-				var cid int
-				var name, ctype string
-				var notnull, pk int
-				var dflt sql.NullString
-				if err := cols.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err == nil && name == "archived_at" {
-					hasArchivedAt = true
-				}
-			}
-			_ = cols.Close()
+		hasArchivedAt, err := d.hasColumn("tasks", "archived_at")
+		if err != nil {
+			return fmt.Errorf("migration to v3 failed (inspect tasks): %w", err)
 		}
 		if !hasArchivedAt {
 			if _, err := d.conn.Exec("ALTER TABLE tasks ADD COLUMN archived_at DATETIME;"); err != nil {
@@ -117,7 +107,40 @@ func (d *DB) migrate() error {
 		}
 	}
 
+	// Schema v4 migration: item kind (task/post) and topic membership columns.
+	if userVersion < 4 && tableCount > 0 {
+		for _, col := range []struct{ name, ddl string }{
+			{"kind", "ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'task';"},
+			{"topic_id", "ALTER TABLE tasks ADD COLUMN topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL;"},
+		} {
+			has, err := d.hasColumn("tasks", col.name)
+			if err != nil {
+				return fmt.Errorf("migration to v4 failed (inspect tasks): %w", err)
+			}
+			if !has {
+				if _, err := d.conn.Exec(col.ddl); err != nil {
+					return fmt.Errorf("migration to v4 failed (add %s): %w", col.name, err)
+				}
+			}
+		}
+	}
+
 	schema := `
+	CREATE TABLE IF NOT EXISTS topics (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		slug TEXT NOT NULL,
+		title TEXT NOT NULL,
+		description TEXT NOT NULL DEFAULT '',
+		kind TEXT NOT NULL DEFAULT 'tasks',
+		parent_id INTEGER REFERENCES topics(id) ON DELETE RESTRICT,
+		position INTEGER NOT NULL DEFAULT 0,
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL,
+		archived_at DATETIME
+	);
+
+	CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_parent_slug ON topics(COALESCE(parent_id, 0), slug);
+
 	CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,
 		scope TEXT NOT NULL,
@@ -137,7 +160,9 @@ func (d *DB) migrate() error {
 		commit_sha TEXT NOT NULL DEFAULT '',
 		commit_msg TEXT NOT NULL DEFAULT '',
 		diff_stat TEXT NOT NULL DEFAULT '',
-		diff_content TEXT NOT NULL DEFAULT ''
+		diff_content TEXT NOT NULL DEFAULT '',
+		kind TEXT NOT NULL DEFAULT 'task',
+		topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_tasks_scope_repo ON tasks(scope, repo_path, status);
@@ -145,6 +170,7 @@ func (d *DB) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_tasks_global_seq ON tasks(scope, seq_num DESC);
 	CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at);
+	CREATE INDEX IF NOT EXISTS idx_tasks_topic ON tasks(topic_id);
 
 	CREATE TABLE IF NOT EXISTS task_notes (
 		id TEXT PRIMARY KEY,
@@ -166,7 +192,13 @@ func (d *DB) migrate() error {
 	INSERT OR IGNORE INTO task_sequences (scope, repo_path, last_seq)
 	SELECT scope, repo_path, COALESCE(MAX(seq_num), 0)
 	FROM tasks
+	WHERE kind = 'task'
 	GROUP BY scope, repo_path;
+
+	CREATE TABLE IF NOT EXISTS post_sequences (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		last_seq INTEGER NOT NULL DEFAULT 0
+	);
 
 	CREATE TABLE IF NOT EXISTS task_tombstones (
 		id TEXT PRIMARY KEY,
@@ -187,10 +219,26 @@ func (d *DB) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_deps_task ON task_dependencies(task_id);
 	CREATE INDEX IF NOT EXISTS idx_deps_parent ON task_dependencies(depends_on_id);
+
+	CREATE TABLE IF NOT EXISTS task_links (
+		from_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+		target TEXT NOT NULL,
+		created_at DATETIME NOT NULL,
+		PRIMARY KEY (from_id, target)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_links_target ON task_links(target);
 	`
 
 	if _, err := d.conn.Exec(schema); err != nil {
 		return err
+	}
+
+	// v4 backfill: build the wiki-link index for all pre-existing items.
+	if userVersion < 4 && tableCount > 0 {
+		if err := d.reindexAllLinks(); err != nil {
+			return fmt.Errorf("migration to v4 failed (index links): %w", err)
+		}
 	}
 
 	if _, err := d.conn.Exec(fmt.Sprintf("PRAGMA user_version = %d;", CurrentSchemaVersion)); err != nil {
@@ -198,4 +246,25 @@ func (d *DB) migrate() error {
 	}
 
 	return d.QuickCheck()
+}
+
+// hasColumn reports whether table has a column with the given name.
+func (d *DB) hasColumn(table, column string) (bool, error) {
+	rows, err := d.conn.Query(fmt.Sprintf("PRAGMA table_info(%s);", table))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
