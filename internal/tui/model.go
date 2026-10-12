@@ -107,6 +107,7 @@ type Model struct {
 	topics        []*domain.Topic
 	topicsLoaded  bool
 	topicPath     string
+	kindFilter    domain.ItemKind // "" = all kinds, domain.KindTask, or domain.KindPost
 	sidebarCursor int
 	sidebarHidden bool
 	collapsed     map[string]bool // collapsed group topic paths

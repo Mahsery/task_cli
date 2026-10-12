@@ -115,6 +115,7 @@ func (m Model) renderFooter(width int) string {
 			key("j/k", "Nav"),
 			key("Enter", "Select"),
 			key("Tab", "Tasks"),
+			key("K", "Kind"),
 			key("N", "New"),
 			key("R", "Rename"),
 			key("D", "Delete"),
@@ -128,11 +129,19 @@ func (m Model) renderFooter(width int) string {
 		statusLabel := theme.CountOpen.Render("[s] Prog")
 		archiveLabel := theme.CountArchived.Render("[A] Arc")
 		if curTask != nil {
-			if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
-				doneLabel = theme.CountDone.Render("[d] Reopen")
-			}
-			if curTask.Status == domain.StatusInProgress {
-				statusLabel = theme.CountOpen.Render("[s] Open")
+			if curTask.IsPost() {
+				if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
+					doneLabel = theme.CountDone.Render("[d] Reopen")
+				} else {
+					doneLabel = theme.CountProg.Render("[d] Resolve")
+				}
+			} else {
+				if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
+					doneLabel = theme.CountDone.Render("[d] Reopen")
+				}
+				if curTask.Status == domain.StatusInProgress {
+					statusLabel = theme.CountOpen.Render("[s] Open")
+				}
 			}
 			if curTask.IsArchived() {
 				archiveLabel = theme.CountArchived.Render("[A] Unarc")
@@ -154,13 +163,20 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = append(candidateKeys, key("<>", "Split"))
 		}
 		candidateKeys = append(candidateKeys,
+			key("K", "Kind"),
+			doneLabel,
+		)
+		if curTask == nil || !curTask.IsPost() {
+			candidateKeys = append(candidateKeys, statusLabel)
+		} else {
+			candidateKeys = append(candidateKeys, key("p", "Promote"))
+		}
+		candidateKeys = append(candidateKeys,
 			key("Enter", "Follow/Diff"),
 			key("[]l", "Link"),
 			key("gf", "Follow"),
 			key("gl", "Insert"),
 			key("gb", "Back"),
-			doneLabel,
-			statusLabel,
 			archiveLabel,
 			theme.DiffSub.Render("[x] Del"),
 			key("L", "Dep"),
@@ -173,11 +189,19 @@ func (m Model) renderFooter(width int) string {
 		statusLabel := theme.CountOpen.Render("[s] Prog")
 		archiveLabel := theme.CountArchived.Render("[A] Arc")
 		if curTask != nil {
-			if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
-				doneLabel = theme.CountDone.Render("[d] Reopen")
-			}
-			if curTask.Status == domain.StatusInProgress {
-				statusLabel = theme.CountOpen.Render("[s] Open")
+			if curTask.IsPost() {
+				if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
+					doneLabel = theme.CountDone.Render("[d] Reopen")
+				} else {
+					doneLabel = theme.CountProg.Render("[d] Resolve")
+				}
+			} else {
+				if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
+					doneLabel = theme.CountDone.Render("[d] Reopen")
+				}
+				if curTask.Status == domain.StatusInProgress {
+					statusLabel = theme.CountOpen.Render("[s] Open")
+				}
 			}
 			if curTask.IsArchived() {
 				archiveLabel = theme.CountArchived.Render("[A] Unarc")
@@ -188,6 +212,8 @@ func (m Model) renderFooter(width int) string {
 		if m.treeViewMode {
 			treeLabel = theme.ModalKey.Render("[t] List")
 		}
+
+		isPost := curTask != nil && curTask.IsPost()
 
 		if width >= 120 {
 			candidateKeys = []string{
@@ -203,22 +229,28 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = append(candidateKeys,
 				treeLabel,
 				key("gt", "Topic"),
+				key("K", "Kind"),
 				key("M", "Move"),
 				key("gl", "Link"),
 				key("Space", "Sel"),
 				key("n", "New"),
 				key("e", "Edit"),
-				key("a", "Claim"),
-				doneLabel,
-				statusLabel,
+			)
+			if isPost {
+				candidateKeys = append(candidateKeys, key("p", "Promote"))
+			} else {
+				candidateKeys = append(candidateKeys, key("a", "Claim"))
+			}
+			candidateKeys = append(candidateKeys, doneLabel)
+			if !isPost {
+				candidateKeys = append(candidateKeys, statusLabel)
+			}
+			candidateKeys = append(candidateKeys,
 				archiveLabel,
 				theme.DiffSub.Render("[x] Del"),
 				key("/", "Find"),
 				theme.Age.Render("[q] Quit"),
 			)
-			if curTask != nil && curTask.IsPost() {
-				candidateKeys = append(candidateKeys[:6], append([]string{key("p", "Promote")}, candidateKeys[6:]...)...)
-			}
 		} else if width >= 80 {
 			candidateKeys = []string{
 				key("j/k", "Nav"),
@@ -232,13 +264,22 @@ func (m Model) renderFooter(width int) string {
 			}
 			candidateKeys = append(candidateKeys,
 				key("gt", "Topic"),
+				key("K", "Kind"),
 				key("M", "Move"),
 				key("Space", "Sel"),
 				key("n", "New"),
 				key("e", "Edit"),
-				key("a", "Claim"),
-				doneLabel,
-				statusLabel,
+			)
+			if isPost {
+				candidateKeys = append(candidateKeys, key("p", "Promote"))
+			} else {
+				candidateKeys = append(candidateKeys, key("a", "Claim"))
+			}
+			candidateKeys = append(candidateKeys, doneLabel)
+			if !isPost {
+				candidateKeys = append(candidateKeys, statusLabel)
+			}
+			candidateKeys = append(candidateKeys,
 				archiveLabel,
 				theme.DiffSub.Render("[x] Del"),
 				key("/", "Find"),
@@ -248,12 +289,17 @@ func (m Model) renderFooter(width int) string {
 			// Ultra-compact footer for narrow screens (< 80 cols)
 			candidateKeys = []string{
 				key("j/k", "Nav"),
-				key("a", "Claim"),
+			}
+			if isPost {
+				candidateKeys = append(candidateKeys, key("p", "Promote"))
+			} else {
+				candidateKeys = append(candidateKeys, key("a", "Claim"))
 			}
 			if undoKey != "" {
 				candidateKeys = append(candidateKeys, undoKey)
 			}
 			candidateKeys = append(candidateKeys,
+				key("K", "Kind"),
 				doneLabel,
 				archiveLabel,
 				theme.DiffSub.Render("[x] Del"),

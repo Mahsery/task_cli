@@ -45,6 +45,13 @@ tk list
 # View open or in-progress tasks
 tk list -s open,in_progress
 
+# Filter tasks or posts specifically, or use convenience shortcuts
+tk list --tasks
+tk list --posts
+tk list -k post
+tk tasks @hero-system
+tk posts @bugs
+
 # Search using boolean DSL
 tk search "priority:urgent OR (bug AND status:open)"
 

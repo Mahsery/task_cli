@@ -424,7 +424,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailScrollOffset = 0
 		}
 
-	case "K", "ctrl+u", "pgup":
+	case "K":
+		cmd := m.cycleKindFilter()
+		return m, cmd
+
+	case "ctrl+u", "pgup":
 		times := 1
 		if chordCount > 0 {
 			times = chordCount

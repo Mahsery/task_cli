@@ -177,9 +177,19 @@ func (m Model) renderHeader(width int) string {
 	}
 
 	var fullModes, compactModes []string
-	if m.treeViewMode {
+	if m.treeViewMode && !m.isBoardView() {
 		fullModes = append(fullModes, theme.ModalTitle.Render("[TREE MODE (t)]"))
 		compactModes = append(compactModes, theme.ModalTitle.Render("[TREE MODE]"))
+	}
+	if m.kindFilter == domain.KindTask {
+		fullModes = append(fullModes, theme.CountProg.Render("[TASKS ONLY (K)]"))
+		compactModes = append(compactModes, theme.CountProg.Render("[TASKS]"))
+	} else if m.kindFilter == domain.KindPost {
+		fullModes = append(fullModes, theme.ModalKey.Render("[POSTS ONLY (K)]"))
+		compactModes = append(compactModes, theme.ModalKey.Render("[POSTS]"))
+	} else if m.isBoardView() {
+		fullModes = append(fullModes, theme.ModalKey.Render("[BOARD]"))
+		compactModes = append(compactModes, theme.ModalKey.Render("[BOARD]"))
 	}
 	if m.showArchived {
 		fullModes = append(fullModes, theme.ArchiveBadge.Render("[ARCHIVE VIEW]"))
@@ -312,9 +322,11 @@ func (m Model) renderTaskRow(row TreeRow, isCursor bool, width, idWidth, statusW
 
 	pointerGlyph := "↪ "
 	ghostGlyph := "⇢ "
+	postGlyph := "▣ "
 	if isASCIIOnly() {
 		pointerGlyph = "-> "
 		ghostGlyph = "~> "
+		postGlyph = "# "
 	}
 
 	treeBranch := row.Prefix
@@ -338,6 +350,9 @@ func (m Model) renderTaskRow(row TreeRow, isCursor bool, width, idWidth, statusW
 		}
 		rawTitle = treeBranch + ghostGlyph + t.Title + ghostTopic
 	} else {
+		if t.IsPost() {
+			rawTitle = treeBranch + postGlyph + t.Title
+		}
 		if t.IsBlocked {
 			rawTitle += " 🔒"
 		} else if t.Status != domain.StatusDone && t.Status != domain.StatusClosed && len(t.DependsOn) > 0 {
@@ -365,6 +380,9 @@ func (m Model) renderTaskRow(row TreeRow, isCursor bool, width, idWidth, statusW
 
 	idStyle := theme.TaskID
 	titleStyle := theme.TaskTitle
+	if t.IsPost() {
+		idStyle = theme.ModalKey
+	}
 	if row.Ghost {
 		idStyle = theme.Age
 		titleStyle = theme.Age

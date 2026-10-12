@@ -24,10 +24,11 @@ type topicOpMsg struct {
 	selectPath *string
 }
 
-// sidebarEntry is one row of the topic sidebar: a virtual entry (All, Unfiled) or a topic.
+// sidebarEntry is one row of the topic sidebar: a virtual entry (All, Tasks, Posts, Unfiled) or a topic.
 type sidebarEntry struct {
 	Label string
 	Path  string // "" = all topics, domain.UnfiledTopic, or a topic path
+	Kind  domain.ItemKind
 	Topic *domain.Topic
 	Depth int
 }
@@ -78,6 +79,8 @@ func topicPathOf(t *domain.Topic) string {
 func (m Model) allSidebarEntries() []sidebarEntry {
 	entries := []sidebarEntry{
 		{Label: "All", Path: ""},
+		{Label: "All Tasks", Path: "", Kind: domain.KindTask},
+		{Label: "All Posts", Path: "", Kind: domain.KindPost},
 		{Label: "Unfiled", Path: domain.UnfiledTopic},
 	}
 	return append(entries, orderedTopics(m.topics)...)
@@ -124,6 +127,12 @@ func (m Model) currentTopic() *domain.Topic {
 
 // isBoardView reports whether the list shows a board topic (flat posts, no tree).
 func (m Model) isBoardView() bool {
+	if m.kindFilter == domain.KindPost {
+		return true
+	}
+	if m.kindFilter == domain.KindTask {
+		return false
+	}
 	t := m.currentTopic()
 	return t != nil && t.Kind == domain.TopicBoard
 }
@@ -143,7 +152,20 @@ func topicGlyph(e sidebarEntry, collapsed bool) string {
 	ascii := isASCIIOnly()
 	if e.Topic == nil {
 		if e.Path == "" {
-			return "*"
+			switch e.Kind {
+			case domain.KindTask:
+				if ascii {
+					return "-"
+				}
+				return "•"
+			case domain.KindPost:
+				if ascii {
+					return "#"
+				}
+				return "▣"
+			default:
+				return "*"
+			}
 		}
 		if ascii {
 			return "0"
@@ -176,7 +198,7 @@ func topicGlyph(e sidebarEntry, collapsed bool) string {
 // syncSidebarCursor puts the sidebar cursor on the currently selected topic.
 func (m *Model) syncSidebarCursor() {
 	for i, e := range m.sidebarEntries() {
-		if e.Path == m.topicPath {
+		if e.Path == m.topicPath && (e.Path != "" || e.Kind == m.kindFilter) {
 			m.sidebarCursor = i
 			return
 		}
@@ -202,7 +224,18 @@ func (m *Model) selectTopic(path string) tea.Cmd {
 	m.related = nil
 	m.missing = nil
 	m.syncSidebarCursor()
-	m.statusMsg = "Topic: " + topicLabel(path)
+	if path == "" {
+		switch m.kindFilter {
+		case domain.KindTask:
+			m.statusMsg = "Filter: all tasks"
+		case domain.KindPost:
+			m.statusMsg = "Filter: all posts"
+		default:
+			m.statusMsg = "Filter: all items"
+		}
+	} else {
+		m.statusMsg = "Topic: " + topicLabel(path)
+	}
 	return m.fetchTasksCmd()
 }
 
@@ -211,14 +244,39 @@ func (m *Model) cycleTopic(delta int) tea.Cmd {
 	entries := m.allSidebarEntries()
 	idx := 0
 	for i, e := range entries {
-		if e.Path == m.topicPath {
+		if e.Path == m.topicPath && (e.Path != "" || e.Kind == m.kindFilter) {
 			idx = i
 			break
 		}
 	}
 	n := len(entries)
 	next := ((idx+delta)%n + n) % n
+	m.kindFilter = entries[next].Kind
 	return m.selectTopic(entries[next].Path)
+}
+
+// cycleKindFilter cycles the item kind filter: "" -> task -> post -> "".
+func (m *Model) cycleKindFilter() tea.Cmd {
+	switch m.kindFilter {
+	case "":
+		m.kindFilter = domain.KindTask
+		m.statusMsg = "Filter: tasks only"
+	case domain.KindTask:
+		m.kindFilter = domain.KindPost
+		m.statusMsg = "Filter: posts only"
+	case domain.KindPost:
+		m.kindFilter = ""
+		m.statusMsg = "Filter: all items"
+	default:
+		m.kindFilter = ""
+		m.statusMsg = "Filter: all items"
+	}
+	m.cursor = 0
+	m.scrollOffset = 0
+	m.detailScrollOffset = 0
+	m.selected = make(map[string]bool)
+	m.syncSidebarCursor()
+	return m.fetchTasksCmd()
 }
 
 // setScope switches between the repository and the global database. The topic
@@ -229,6 +287,7 @@ func (m *Model) setScope(scope string) {
 		m.client.Scope = scope
 	}
 	m.topicPath = ""
+	m.kindFilter = ""
 	m.topics = nil
 	m.sidebarCursor = 0
 	m.cursor = 0
@@ -475,13 +534,14 @@ func (m Model) handleSidebarKey(k string, count int) (Model, tea.Cmd, bool) {
 		if m.sidebarCursor >= len(entries) {
 			return m, nil, true
 		}
-		path := entries[m.sidebarCursor].Path
+		e := entries[m.sidebarCursor]
 		m.activePane = PaneList
-		if path == m.topicPath {
+		if e.Path == m.topicPath && e.Kind == m.kindFilter {
 			m.statusMsg = "Tasks focused"
 			return m, nil, true
 		}
-		cmd := m.selectTopic(path)
+		m.kindFilter = e.Kind
+		cmd := m.selectTopic(e.Path)
 		return m, cmd, true
 	case " ", "space":
 		if t := m.sidebarSelectedTopic(); t != nil && t.Kind == domain.TopicGroup {
@@ -558,7 +618,7 @@ func (m Model) renderSidebar(l paneLayout) []string {
 		switch {
 		case i == m.sidebarCursor && focused:
 			line = theme.RowSelected.Render(line)
-		case e.Path == m.topicPath:
+		case e.Path == m.topicPath && (e.Path != "" || e.Kind == m.kindFilter):
 			line = theme.ActiveHeader.Render(line)
 		case e.Topic == nil:
 			line = theme.DetailLabel.Render(line)

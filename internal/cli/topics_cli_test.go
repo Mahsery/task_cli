@@ -174,3 +174,37 @@ func TestTagDeprecationFlags(t *testing.T) {
 		t.Fatalf("expected deprecation error for list --tag, got: %v", err)
 	}
 }
+
+func TestListPostsAndTasksFlags(t *testing.T) {
+	defer func() {
+		listPosts = false
+		listTasks = false
+		listKind = ""
+	}()
+
+	// Both --posts and --tasks
+	listPosts = true
+	listTasks = true
+	err := listCmd.RunE(listCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "cannot specify both --posts and --tasks") {
+		t.Fatalf("expected error for both --posts and --tasks, got: %v", err)
+	}
+
+	// Conflicting --posts and --kind task
+	listPosts = true
+	listTasks = false
+	listKind = "task"
+	err = listCmd.RunE(listCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "conflicting options") {
+		t.Fatalf("expected conflicting options error for --posts and --kind task, got: %v", err)
+	}
+
+	// Conflicting --tasks and --kind post
+	listPosts = false
+	listTasks = true
+	listKind = "post"
+	err = listCmd.RunE(listCmd, nil)
+	if err == nil || !strings.Contains(err.Error(), "conflicting options") {
+		t.Fatalf("expected conflicting options error for --tasks and --kind post, got: %v", err)
+	}
+}

@@ -520,7 +520,11 @@ func (m Model) detailDoc(detailWidth int) detailDoc {
 	doc.lines = append(doc.lines, theme.NoteTime.Width(detailWidth).Render(latestBadge), strings.Repeat(" ", detailWidth))
 
 	// Task Title
-	for _, tl := range wrapText(t.ID+": "+t.Title, detailWidth-4, "  ") {
+	titlePrefix := t.ID + ": "
+	if t.IsPost() {
+		titlePrefix = t.ID + " [BOARD POST]: "
+	}
+	for _, tl := range wrapText(titlePrefix+t.Title, detailWidth-4, "  ") {
 		doc.lines = append(doc.lines, theme.DetailTitle.Width(detailWidth).Render(tl))
 	}
 
@@ -537,7 +541,9 @@ func (m Model) detailDoc(detailWidth int) detailDoc {
 		theme.DetailLabel.Render("Scope:"), theme.TaskID.Render(t.Scope),
 	)
 	var metaParts []string
-	if t.Kind != "" && t.Kind != domain.KindTask {
+	if t.IsPost() {
+		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Kind:"), theme.ModalKey.Render("board post")))
+	} else if t.Kind != "" && t.Kind != domain.KindTask {
 		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Kind:"), theme.ModalKey.Render(string(t.Kind))))
 	}
 	topicStr := t.TopicPath

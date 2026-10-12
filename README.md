@@ -100,7 +100,9 @@ tk
 | `tk link` | — | `<task-id> <prereq-id...>` | Link a task to depend on prerequisite tasks (alias for `tk dep add`) | `tk link T-2 T-1` |
 | `tk unlink` | — | `<task-id> <prereq-id...>` | Unlink a task from prerequisite tasks (alias for `tk dep rm`) | `tk unlink T-2 T-1` |
 | `tk next` | — | `[--json]` | Identify the next actionable unblocked task to steer developers and AI agents | `tk next`<br>`tk next --json` |
-| `tk list` | `ls` | `[@topic] [-s status] [-p prio] [-T topic] [-a assignee] [-q search] [--tree] [--ready] [--blocked] [--after id] [--blocks id] [--sort order] [--short] [--limit N]` | Query tasks & posts (supports tree view, unblocked ready tasks, and blockers) | `tk list @backend`<br>`tk list --tree`<br>`tk list --ready`<br>`tk list --blocked` |
+| `tk list` | `ls` | `[@topic] [-s status] [-p prio] [-T topic] [-k kind] [--tasks] [--posts] [-a assignee] [-q search] [--tree] [--ready] [--blocked] [--after id] [--blocks id] [--sort order] [--short] [--limit N]` | Query tasks & posts (supports tree view, unblocked ready tasks, and blockers) | `tk list @backend`<br>`tk list --tree`<br>`tk list --ready`<br>`tk list --tasks` |
+| `tk tasks` | — | `[@topic] [flags]` | List execution tasks only (shortcut for `tk list --tasks`) | `tk tasks @hero-system` |
+| `tk posts` | — | `[@topic] [flags]` | List board posts only (shortcut for `tk list --posts`) | `tk posts @bugs` |
 | `tk search` | `find` | `<query...> [-s status] [-p prio] [-a assignee] [--short] [--limit N]` | Search items with boolean DSL (`AND`, `OR`, `NOT`, `topic:`, `kind:`, `links:`, `linkedfrom:`, `s:`, `p:`) | `tk search topic:bugs AND urgent`<br>`tk search links:T-1`<br>`tk search "memory leak" NOT closed` |
 | `tk show` | — | `<id>` | Display metadata, links, backlinks, notes, commit SHA, and diff (forgiving IDs: `1`, `t1`, `T-1`) | `tk show 1`<br>`tk show G-2 --json` |
 | `tk claim` | — | `<id> [--actor actor] [--force]` | Atomically claim a task for the current actor; prevents race conditions | `tk claim 1`<br>`tk claim T-1 --actor bot-1` |
@@ -139,7 +141,8 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `h` / `l` / `←` / `→` | Navigate Panes | Move focus horizontally between panes |
 | `j` / `k` / `↓` / `↑` | Move / Scroll | In **Sidebar**: select topic; in **List**: navigate items; in **Details**: scroll content |
 | `gg` / `G` | Top / Bottom | Jump to top or bottom of the active pane |
-| `Ctrl+D` / `Ctrl+U` / `J` / `K` | Fast Page Scroll | Page scroll content in split view |
+| `Ctrl+D` / `Ctrl+U` / `J` | Fast Page Scroll | Page scroll content down/up in split view |
+| `K` | Cycle Kind Filter | Cycle item kind filter between **All Items**, **Tasks Only**, and **Posts Only** |
 | `gt` | Fuzzy Topic Picker | Open fuzzy topic search modal (`Tab` inside picker toggles repo vs global topics) |
 | `]t` / `[t` | Cycle Topics | Jump to next or previous topic in the tree |
 | `]l` / `[l` | Link Cursor | Move cursor to next / previous `[[...]]` wikilink in the details pane |

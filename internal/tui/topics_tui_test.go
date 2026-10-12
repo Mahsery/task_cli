@@ -34,27 +34,28 @@ func TestTUISidebarTreeOrderAndSelection(t *testing.T) {
 	}
 
 	entries := m.sidebarEntries()
-	if len(entries) < 5 {
-		t.Fatalf("expected at least 5 sidebar entries (All, Unfiled, backend, backend/db, bugs), got %d", len(entries))
+	if len(entries) < 7 {
+		t.Fatalf("expected at least 7 sidebar entries (All, All Tasks, All Posts, Unfiled, backend, backend/db, bugs), got %d", len(entries))
 	}
-	if entries[0].Label != "All" || entries[1].Label != "Unfiled" {
-		t.Fatalf("expected All and Unfiled first, got %s and %s", entries[0].Label, entries[1].Label)
+	if entries[0].Label != "All" || entries[1].Label != "All Tasks" || entries[2].Label != "All Posts" || entries[3].Label != "Unfiled" {
+		t.Fatalf("expected All, All Tasks, All Posts, Unfiled first, got %s, %s, %s, %s",
+			entries[0].Label, entries[1].Label, entries[2].Label, entries[3].Label)
 	}
-	if entries[2].Path != "backend" || entries[3].Path != "backend/db" {
-		t.Fatalf("expected tree order backend -> backend/db, got %s -> %s", entries[2].Path, entries[3].Path)
+	if entries[4].Path != "backend" || entries[5].Path != "backend/db" {
+		t.Fatalf("expected tree order backend -> backend/db, got %s -> %s", entries[4].Path, entries[5].Path)
 	}
-	if entries[3].Depth != 1 {
-		t.Fatalf("expected backend/db depth 1, got %d", entries[3].Depth)
+	if entries[5].Depth != 1 {
+		t.Fatalf("expected backend/db depth 1, got %d", entries[5].Depth)
 	}
 
-	// Press 'j' twice to navigate down to backend
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = mustModel(t, updated)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	m = mustModel(t, updated)
+	// Press 'j' 4 times to navigate down to backend
+	for i := 0; i < 4; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+		m = mustModel(t, updated)
+	}
 
 	// Press Enter to select backend topic
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = mustModel(t, updated)
 
 	if m.topicPath != "backend" {
@@ -62,6 +63,113 @@ func TestTUISidebarTreeOrderAndSelection(t *testing.T) {
 	}
 	if m.activePane != PaneList {
 		t.Fatalf("expected activePane to switch to PaneList after selection, got %d", m.activePane)
+	}
+}
+
+func TestTUIKindFilterCycleAndSelection(t *testing.T) {
+	m := Model{
+		tasks: []*domain.Task{
+			{ID: "T-1", Title: "Task One", Kind: domain.KindTask},
+			{ID: "P-1", Title: "Post One", Kind: domain.KindPost},
+		},
+		width:      140,
+		height:     30,
+		theme:      NewKanagawaTheme(),
+		activePane: PaneList,
+	}
+
+	// Initial state: all kinds
+	if m.kindFilter != "" {
+		t.Fatalf("expected empty kindFilter initially, got %q", m.kindFilter)
+	}
+
+	// Press 'K' to cycle to Tasks Only
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	m = mustModel(t, updated)
+	if m.kindFilter != domain.KindTask {
+		t.Fatalf("expected kindFilter 'task' after 1st K, got %q", m.kindFilter)
+	}
+	if !strings.Contains(m.View(), "TASKS ONLY") {
+		t.Fatalf("expected TASKS ONLY indicator in header view")
+	}
+
+	// Press 'K' to cycle to Posts Only
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	m = mustModel(t, updated)
+	if m.kindFilter != domain.KindPost {
+		t.Fatalf("expected kindFilter 'post' after 2nd K, got %q", m.kindFilter)
+	}
+	if !strings.Contains(m.View(), "POSTS ONLY") {
+		t.Fatalf("expected POSTS ONLY indicator in header view")
+	}
+
+	// Press 'K' to cycle back to All
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	m = mustModel(t, updated)
+	if m.kindFilter != "" {
+		t.Fatalf("expected empty kindFilter after 3rd K, got %q", m.kindFilter)
+	}
+
+	// Test sidebar navigation to All Posts (entry index 2)
+	m.activePane = PaneSidebar
+	m.sidebarCursor = 0 // on "All"
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = mustModel(t, updated) // cursor on "All Tasks"
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m = mustModel(t, updated) // cursor on "All Posts"
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mustModel(t, updated)
+
+	if m.kindFilter != domain.KindPost {
+		t.Fatalf("expected kindFilter 'post' after selecting All Posts in sidebar, got %q", m.kindFilter)
+	}
+	if m.topicPath != "" {
+		t.Fatalf("expected topicPath '' after selecting All Posts in sidebar, got %q", m.topicPath)
+	}
+}
+
+func TestTUIPostRowAndDetailRendering(t *testing.T) {
+	post := &domain.Task{
+		ID:        "P-1",
+		Title:     "Crash on startup",
+		Kind:      domain.KindPost,
+		Status:    domain.StatusOpen,
+		TopicPath: "bugs",
+	}
+
+	m := Model{
+		tasks:      []*domain.Task{post},
+		width:      140,
+		height:     30,
+		theme:      NewKanagawaTheme(),
+		activePane: PaneList,
+		cursor:     0,
+	}
+
+	view := m.View()
+	// Check row glyph
+	if !strings.Contains(view, "▣") && !strings.Contains(view, "#") {
+		t.Fatalf("expected post glyph ▣ or # in task row view:\n%s", view)
+	}
+
+	// Focus detail pane
+	m.activePane = PaneDetail
+	detView := m.View()
+	if !strings.Contains(detView, "[BOARD POST]") {
+		t.Fatalf("expected [BOARD POST] in detail pane title:\n%s", detView)
+	}
+	if !strings.Contains(detView, "Kind:") || !strings.Contains(detView, "board post") {
+		t.Fatalf("expected Kind: board post badge in detail pane:\n%s", detView)
+	}
+	// Check footer labels for posts: [d] Resolve, [p] Promote, no [a] Claim
+	if !strings.Contains(detView, "Resolve") {
+		t.Fatalf("expected [d] Resolve in footer for posts:\n%s", detView)
+	}
+	if !strings.Contains(detView, "Promote") {
+		t.Fatalf("expected [p] Promote in footer for posts:\n%s", detView)
+	}
+	if strings.Contains(detView, "Claim") {
+		t.Fatalf("expected Claim to be omitted in footer for posts:\n%s", detView)
 	}
 }
 

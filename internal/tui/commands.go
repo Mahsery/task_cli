@@ -27,6 +27,7 @@ func (m Model) listFilter() domain.TaskFilter {
 		Search:          m.filterText,
 		IncludeArchived: m.showArchived,
 		Topic:           m.topicPath,
+		Kind:            m.kindFilter,
 	}
 }
 

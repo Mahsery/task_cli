@@ -31,6 +31,7 @@ var (
 	listRecursive bool
 	listKind      string
 	listPosts     bool
+	listTasks     bool
 )
 
 var listCmd = &cobra.Command{
@@ -67,12 +68,27 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
 			treeTopic = listTopicRef
 			return treeCmd.RunE(cmd, nil)
 		}
+		if listPosts && listTasks {
+			return fmt.Errorf("cannot specify both --posts and --tasks")
+		}
+		if listPosts && listKind != "" && listKind != string(domain.KindPost) {
+			return fmt.Errorf("conflicting options: --posts and --kind %s", listKind)
+		}
+		if listTasks && listKind != "" && listKind != string(domain.KindTask) {
+			return fmt.Errorf("conflicting options: --tasks and --kind %s", listKind)
+		}
+		defer func() {
+			listPosts = false
+			listTasks = false
+		}()
 		kind, err := domain.ParseItemKind(listKind)
 		if err != nil {
 			return err
 		}
 		if listPosts {
 			kind = domain.KindPost
+		} else if listTasks {
+			kind = domain.KindTask
 		} else if listKind == "" {
 			kind = ""
 		}
@@ -208,10 +224,51 @@ func init() {
 	listCmd.Flags().BoolVar(&listArchived, "archived", false, "Show archived tasks")
 	listCmd.Flags().StringVarP(&listTopicRef, "topic", "T", "", "Only items in this topic (path, slug or 'unfiled')")
 	listCmd.Flags().BoolVarP(&listRecursive, "recursive", "r", false, "With --topic, include items in sub-topics")
-	listCmd.Flags().StringVar(&listKind, "kind", "", "Only items of this kind (task, post)")
+	listCmd.Flags().StringVarP(&listKind, "kind", "k", "", "Only items of this kind (task, post)")
 	listCmd.Flags().BoolVar(&listPosts, "posts", false, "Only posts (same as --kind post)")
+	listCmd.Flags().BoolVar(&listTasks, "tasks", false, "Only tasks (same as --kind task)")
 	_ = listCmd.Flags().MarkHidden("tag")
 	_ = listCmd.Flags().MarkHidden("label")
+
+	postsCmd.Flags().AddFlagSet(listCmd.Flags())
+	tasksCmd.Flags().AddFlagSet(listCmd.Flags())
+	RootCmd.AddCommand(postsCmd, tasksCmd)
+}
+
+var postsCmd = &cobra.Command{
+	Use:   "posts [@topic] [flags]",
+	Short: "List board posts (shortcut for tk list --posts)",
+	Example: `  tk posts
+  tk posts @bugs
+  tk posts --short`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		listPosts = true
+		listTasks = false
+		for i, a := range args {
+			if !strings.HasPrefix(a, "@") {
+				args[i] = "@" + a
+			}
+		}
+		return listCmd.RunE(cmd, args)
+	},
+}
+
+var tasksCmd = &cobra.Command{
+	Use:   "tasks [@topic] [flags]",
+	Short: "List execution tasks (shortcut for tk list --tasks)",
+	Example: `  tk tasks
+  tk tasks @hero-system
+  tk tasks --short`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		listTasks = true
+		listPosts = false
+		for i, a := range args {
+			if !strings.HasPrefix(a, "@") {
+				args[i] = "@" + a
+			}
+		}
+		return listCmd.RunE(cmd, args)
+	},
 }
 
 func formatAge(t time.Time) string {
