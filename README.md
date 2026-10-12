@@ -62,13 +62,13 @@ make install
 
 ```bash
 # 1. Create a task in current git repo (opens $EDITOR if flags omitted)
-tk new -t "Refactor authentication handler" -p high -l auth,security
+tk new -t "Refactor authentication handler" -p high -T security
 
 # 2. View active tasks in formatted table
 tk list
 
-# 3. Inspect task details, notes, and attached changes
-tk show T-1
+# 3. Inspect task details, notes, and attached changes (forgiving IDs: '1', 't1', 'T-1')
+tk show 1
 
 # 4. Work on your codebase and commit changes
 git commit -am "fix(auth): sanitize JWT claims before signature check"
@@ -86,21 +86,28 @@ tk
 
 | Command | Aliases | Arguments & Flags | Description | Example |
 |---------|:-------:|-------------------|-------------|---------|
-| `tk` | — | — | Launch interactive TUI in terminal; prints help if non-TTY | `tk` |
-| `tk new` | — | `[-t title] [-p prio] [-l tags] [-a assignee] [-m desc]` | Create task via flags, piped stdin, or `$EDITOR` template | `tk new -t "Fix bug" -p high -l ui`<br>`echo "Piped Task" \| tk new` |
-| `tk tree` | `dag` | `[task-id] [-s status] [-r/--reverse] [--all] [--json]` | Render hierarchical tree of task dependencies (`├──`, `└──`, `🔒 BLOCKED`, `⚡ READY`) | `tk tree`<br>`tk tree T-1`<br>`tk tree -r` (breakdown)<br>`tk tree --json` |
+| `tk` | — | — | Launch interactive 3-pane TUI (Topic sidebar, tasks/board, details & links) | `tk` |
+| `tk topic` | `topics` | `[tree\|new\|ls\|mv\|rm\|use\|import-tags]` | Organise work into a tree of topics (boards for posts, task topics, groups) | `tk topic tree`<br>`tk topic new "Bugs" -k board`<br>`tk topic import-tags` |
+| `tk post` | — | `<topic> [title] [-m desc]` | Create a board post (P-n) in a board topic (e.g. bug report or idea) | `tk post bugs "UI glitch on resize"` |
+| `tk reply` | — | `<post-id> [message]` | Add a discussion reply/note to a board post | `tk reply P-1 "Reproduced on Linux"` |
+| `tk promote` | — | `<post-id> [tasks-topic]` | Promote a board post into a full task with dependency tracking | `tk promote P-1 hero-system` |
+| `tk move` | `mv` | `<id...> <topic>` | Move task(s) or post(s) into another topic | `tk move T-1 T-2 @engine` |
+| `tk links` | — | `[id]` | Inspect outgoing Obsidian-style wikilinks and incoming backlinks | `tk links T-1` |
+| `tk go` | — | `<target>` | Resolve and jump to a wikilink target (task, note, line anchor, or topic) | `tk go "T-1#L12"` |
+| `tk new` | — | `[-t title] [-p prio] [-T topic] [-a assignee] [-m desc]` | Create task via flags, piped stdin, or `$EDITOR` template | `tk new -t "Fix bug" -p high -T bugs`<br>`echo "Piped Task" \| tk new` |
+| `tk tree` | `dag` | `[task-id\|@topic] [-s status] [-r/--reverse] [--all] [--json]` | Render hierarchical tree of task dependencies with `↪` pointers and `⇢` ghost rows | `tk tree`<br>`tk tree @hero-system`<br>`tk tree -r` (breakdown)<br>`tk tree --json` |
 | `tk dep` | `deps` | `[add\|rm\|show\|tree]` | Manage task dependencies, blocker links, and inspect prerequisites | `tk dep add T-2 T-1`<br>`tk dep rm T-2 T-1`<br>`tk dep show T-2` |
 | `tk link` | — | `<task-id> <prereq-id...>` | Link a task to depend on prerequisite tasks (alias for `tk dep add`) | `tk link T-2 T-1` |
 | `tk unlink` | — | `<task-id> <prereq-id...>` | Unlink a task from prerequisite tasks (alias for `tk dep rm`) | `tk unlink T-2 T-1` |
 | `tk next` | — | `[--json]` | Identify the next actionable unblocked task to steer developers and AI agents | `tk next`<br>`tk next --json` |
-| `tk list` | `ls` | `[-s status] [-p prio] [-t/-l tag] [-a assignee] [-q search] [--tree] [--ready] [--blocked] [--after id] [--blocks id] [--sort order] [--short] [--limit N]` | Query tasks (supports tree view, unblocked ready tasks, and blockers) | `tk list -s open -p high`<br>`tk list --tree`<br>`tk list --ready`<br>`tk list --blocked` |
-| `tk search` | `find` | `<query...> [-s status] [-p prio] [-l tag] [-a assignee] [--short] [--limit N]` | Search tasks with boolean DSL (`AND`, `OR`, `NOT`, `tag:`, `s:`, `p:`, `a:`, `"exact"`) | `tk search bug AND odin`<br>`tk search tag:security priority:high`<br>`tk search "memory leak" NOT closed` |
-| `tk show` | — | `<id>` | Display task metadata, prerequisites, blockers, notes, commit SHA, and diff | `tk show T-1`<br>`tk show G-2 --json` |
-| `tk claim` | — | `<id> [--actor actor] [--force]` | Atomically claim a task for the current actor; prevents race conditions | `tk claim T-1`<br>`tk claim T-1 --actor bot-1` |
-| `tk takeover` | `take` | `<id> [-m message] [--actor actor] [--force]` | Take over a task from another actor or an orphaned task with attribution | `tk takeover T-1 -m "Taking over"`<br>`tk take T-1` |
-| `tk transfer` | — | `<id> [new-assignee] [--to assignee] [-m note]` | Hand off and transfer task ownership to another actor | `tk transfer T-1 agent-gamma -m "Handing off"`<br>`tk transfer T-1 --to bob` |
+| `tk list` | `ls` | `[@topic] [-s status] [-p prio] [-T topic] [-a assignee] [-q search] [--tree] [--ready] [--blocked] [--after id] [--blocks id] [--sort order] [--short] [--limit N]` | Query tasks & posts (supports tree view, unblocked ready tasks, and blockers) | `tk list @backend`<br>`tk list --tree`<br>`tk list --ready`<br>`tk list --blocked` |
+| `tk search` | `find` | `<query...> [-s status] [-p prio] [-a assignee] [--short] [--limit N]` | Search items with boolean DSL (`AND`, `OR`, `NOT`, `topic:`, `kind:`, `links:`, `linkedfrom:`, `s:`, `p:`) | `tk search topic:bugs AND urgent`<br>`tk search links:T-1`<br>`tk search "memory leak" NOT closed` |
+| `tk show` | — | `<id>` | Display metadata, links, backlinks, notes, commit SHA, and diff (forgiving IDs: `1`, `t1`, `T-1`) | `tk show 1`<br>`tk show G-2 --json` |
+| `tk claim` | — | `<id> [--actor actor] [--force]` | Atomically claim a task for the current actor; prevents race conditions | `tk claim 1`<br>`tk claim T-1 --actor bot-1` |
+| `tk takeover` | `take` | `<id> [-m message] [--actor actor] [--force]` | Take over a task from another actor or an orphaned task with attribution | `tk takeover 1 -m "Taking over"`<br>`tk take T-1` |
+| `tk transfer` | — | `<id> [new-assignee] [--to assignee] [-m note]` | Hand off and transfer task ownership to another actor | `tk transfer 1 agent-gamma -m "Handing off"`<br>`tk transfer T-1 --to bob` |
 | `tk orphan` | — | `[id] [--older-than dur] [--all] [--dry-run] [-l/--list]` | Detect and mark abandoned tasks as orphaned; drops assignee and resets to open (default: 1h) | `tk orphan T-1`<br>`tk orphan reap --dry-run`<br>`tk orphan --all`<br>`tk orphan list` |
-| `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [-l tags] [--add-tag tag] [--remove-tag tag] [--claim] [-a assignee] [-m/-n note] [-d desc]` | Modify task fields via CLI flags, atomically add/remove tags, or open `$EDITOR` | `tk edit T-1 -s in_progress`<br>`tk edit T-1 --add-tag review`<br>`tk edit T-1 --claim`<br>`tk edit T-1 -n "New note"` |
+| `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [--claim] [-a assignee] [-m/-n note] [-d desc]` | Modify task fields via CLI flags, append notes/wikilinks, or open `$EDITOR` | `tk edit T-1 -s in_progress`<br>`tk edit T-1 -m "Relates to [[T-5]]"`<br>`tk edit T-1 --claim` |
 | `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit] [-f/--force]` | Mark task done; enforces prerequisite completion check (override with `-f`) | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 -f` |
 | `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
 | `tk delete` | `rm` | `<id> [-y/--yes] [--force]` | Remove a task to the tombstone archive (prompts unless `-y` or `--force`) | `tk delete T-1`<br>`tk delete -y T-1`<br>`tk rm --force G-4` |
@@ -122,38 +129,41 @@ tk
 
 ---
 
-## TUI Keybindings
+## TUI Keybindings & Vim Motions
 
-Running `tk` without subcommands inside any standard terminal opens the interactive Bubble Tea TUI:
+Running `tk` without subcommands inside any standard terminal opens the interactive Bubble Tea TUI. Wide terminals display a 3-pane layout: **Topic Sidebar** (left), **Item / Tree View** (middle), and **Details & Links** (right).
 
 | Keybinding | Action | Description |
 |:----------:|--------|-------------|
-| `Tab` / `Shift+Tab` | Toggle Active Pane | Switch focus between Tasks List (left) and Details & Messages (right) |
-| `l` / `→` | Focus Details Pane | Move focus from task list into details/messages pane |
-| `h` / `←` | Focus Tasks List | Return focus from details pane back to task list |
-| `>` / `.` / `Alt+→` | Widen Table Pane | Move split divider right (widen task list/tree, narrow details) |
-| `<` / `,` / `Alt+←` | Narrow Table Pane | Move split divider left (narrow task list/tree, widen details) |
-| `=` | Reset Split Ratio | Reset pane split to default (48/52 normal, 56/44 in Tree mode) |
-| `t` | Toggle Tree Mode | Toggle between standard flat tabular list and hierarchical DAG tree view |
-| `L` | Link Dependency Modal | Open interactive modal to make the current task depend on a prerequisite task ID |
-| `j` / `k` / `↓` / `↑` | Move / Scroll | In **List**: navigate task selection; in **Details**: scroll message content line-by-line |
-| `g` / `G` | Top / Bottom | In **List**: jump to first/last task; in **Details**: jump to top/bottom of notes |
-| `Ctrl+D` / `Ctrl+U` / `J` / `K` | Fast Page Scroll | Page scroll details, notes, and patch diff content in split view |
-| `Space` | Multi-Select Toggle | Toggle task selection (`●`/`○` marker) and advance cursor down |
-| `v` | Select / Deselect | Toggle task selection for current row without advancing cursor |
-| `V` | Select All / Deselect | Toggle selection across all currently visible tasks |
+| `Tab` / `Shift+Tab` | Cycle Active Pane | Switch focus between Topic Sidebar, Item List, and Details Pane |
+| `h` / `l` / `←` / `→` | Navigate Panes | Move focus horizontally between panes |
+| `j` / `k` / `↓` / `↑` | Move / Scroll | In **Sidebar**: select topic; in **List**: navigate items; in **Details**: scroll content |
+| `gg` / `G` | Top / Bottom | Jump to top or bottom of the active pane |
+| `Ctrl+D` / `Ctrl+U` / `J` / `K` | Fast Page Scroll | Page scroll content in split view |
+| `gt` | Fuzzy Topic Picker | Open fuzzy topic search modal (`Tab` inside picker toggles repo vs global topics) |
+| `]t` / `[t` | Cycle Topics | Jump to next or previous topic in the tree |
+| `]l` / `[l` | Link Cursor | Move cursor to next / previous `[[...]]` wikilink in the details pane |
+| `Enter` / `gf` | Follow Wikilink | Follow focused wikilink to target task, note anchor, or topic (`{n}gf` jumps to link #n) |
+| `gb` / `gB` | Jump History | Navigate backward / forward through navigation history stack |
+| `gl` | Insert Link Modal | Open modal to select an item and append an Obsidian-style wikilink `[[...]]` |
+| `M` | Move Items / Topic | In **List**: move selected items to another topic; in **Sidebar**: move topic under a new parent |
+| `p` | Promote Post | In **List**: promote selected board post (`P-n`) into a task (`T-n`) |
+| `N` / `R` / `D` | Topic Management | In **Sidebar**: `N` creates topic, `R` renames topic, `D` deletes topic |
+| `t` | Toggle Tree Mode | In **Tasks topic**: toggle between flat list and hierarchical DAG graph tree |
+| `L` | Link Dependency Modal | Open interactive modal to add a prerequisite dependency |
+| `Space` | Multi-Select Toggle | Toggle item selection (`●`/`○` marker) and advance cursor down |
+| `v` / `V` | Select / Select All | Toggle item selection / select all visible items |
 | `u` | Multi-Level Undo | Revert recent mutations (restores deleted tasks, claims, done, status) |
-| `d` | Reversible / Batch Done | Mark task(s) done (enforces prerequisite blockers; warns if blocked) |
-| `s` | Status / Batch Toggle | Cycle status between `open` and `in_progress` for selected tasks |
+| `d` | Done / Batch Done | Mark task(s) done / resolve post(s) (enforces prerequisite blockers) |
+| `s` | Status / Batch Toggle | Cycle status between `open` and `in_progress` |
 | `a` | Claim / Batch Claim | Atomically claim selected task(s) for current actor |
-| `x` | Delete / Batch Delete | Prompt for confirmation (`[y/N]`) and remove selected tasks to tombstones |
-| `n` | New Task | Launch `$EDITOR` with a new task template (supports `--after` to link prerequisites) |
-| `e` | Edit Task | Launch `$EDITOR` with selected task pre-populated |
-| `Enter` | Toggle Diff | Expand or collapse unified patch diff view |
+| `x` | Delete / Batch Delete | Prompt for confirmation (`[y/N]`) and remove selected items |
+| `n` | New Item | Create task in tasks topic or post in board topic |
+| `e` | Edit Item | Launch `$EDITOR` with selected item pre-populated |
 | `/` | Search Filter | Enter live search query (`Enter` applies, `Esc` cancels) |
-| `Esc` / `c` | Reset Filter / Deselect | In **Details**: return to list; in **List**: clear selection or search filter |
+| `Esc` / `c` | Clear Filter / Selection | Return focus to list, clear active search filter, or deselect all items |
 | `S` | Toggle Scope | Switch view between `local` (git repository) and `global` scopes |
-| `r` | Refresh | Re-query tasks from daemon |
+| `r` | Refresh | Re-query tasks and topics from daemon |
 | `q` / `Ctrl+C` | Quit | Exit the TUI |
 
 ---

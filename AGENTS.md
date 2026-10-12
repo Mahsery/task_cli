@@ -54,11 +54,12 @@ tk show <ID>
 
 ### Claiming & Linking Work
 ```bash
-# Create a new scoped task (optionally link prerequisites via --after)
-tk new -t "Descriptive task title" -p urgent -l "backend,storage" --after T-1 -d "Detailed spec..."
+# Create a new scoped task (optionally specify topic via -T and link prerequisites via --after)
+tk new -t "Descriptive task title" -p urgent -T backend --after T-1 -d "Detailed spec..."
 
-# Atomically claim a task as your agent identity
-tk claim <ID> --actor "agent-antigravity"
+# Forgiving IDs: 't15', 'T15', 't-15', or '15' normalize automatically to 'T-15' (or 'G-15' in global)
+tk show 15
+tk claim 15 --actor "agent-antigravity"
 
 # Link dependencies (T-2 depends on T-1; T-1 blocks T-2)
 tk link T-2 T-1
@@ -70,11 +71,11 @@ tk dep show <ID>
 
 ### Updating & Documenting Progress
 ```bash
-# Append progress notes or milestone logs
-tk edit <ID> -m "Implemented atomic backup mechanism; running test suite."
+# Append progress notes or milestone logs (supports Obsidian-style [[T-15]] wikilinks)
+tk edit <ID> -m "Implemented atomic backup mechanism; relates to [[T-12#L40]]."
 
-# Add or remove tags
-tk edit <ID> --add-tag "tested" --remove-tag "blocked"
+# Move task(s) or post(s) to another topic
+tk move <ID> <topic>
 
 # Reassign if delegating or handing off
 tk edit <ID> --assignee "reviewer-agent"
