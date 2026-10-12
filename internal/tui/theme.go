@@ -68,6 +68,10 @@ type Theme struct {
 	TaskID            lipgloss.Style
 	TaskTitle         lipgloss.Style
 	Tag               lipgloss.Style
+	Link              lipgloss.Style
+	LinkFocused       lipgloss.Style
+	LinkBroken        lipgloss.Style
+	LinkStale         lipgloss.Style
 	Age               lipgloss.Style
 	CommitSHA         lipgloss.Style
 	DetailID          lipgloss.Style
@@ -199,6 +203,23 @@ func NewKanagawaTheme() Theme {
 
 		Tag: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(OniViolet)),
+
+		Link: lipgloss.NewStyle().
+			Underline(true).
+			Foreground(lipgloss.Color(WaveAqua2)),
+
+		LinkFocused: lipgloss.NewStyle().
+			Underline(true).
+			Bold(true).
+			Foreground(lipgloss.Color(SurimiOrange)),
+
+		LinkBroken: lipgloss.NewStyle().
+			Underline(true).
+			Foreground(lipgloss.Color(DragonRed)),
+
+		LinkStale: lipgloss.NewStyle().
+			Underline(true).
+			Foreground(lipgloss.Color(DragonGray3)),
 
 		Age: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(FujiGray)),

@@ -103,11 +103,25 @@ func (m Model) renderFooter(width int) string {
 			theme.CountOpen.Render(fmt.Sprintf("[a] Claim(%d)", selCount)),
 			theme.CountArchived.Render(fmt.Sprintf("[A] Arc(%d)", selCount)),
 			theme.DiffSub.Render(fmt.Sprintf("[x] Del(%d)", selCount)),
-			key("m", fmt.Sprintf("Tag(%d)", selCount)),
+			key("M", fmt.Sprintf("Move(%d)", selCount)),
 			key("Space", "Sel"),
 			theme.FilterIndicator.Render("[Esc] Clear"),
 			theme.Age.Render("[q] Quit"),
 		)
+	} else if m.activePane == PaneSidebar {
+		sideBadge := theme.BatchBadge.Render("TOPICS")
+		candidateKeys = []string{
+			sideBadge,
+			key("j/k", "Nav"),
+			key("Enter", "Select"),
+			key("Tab", "Tasks"),
+			key("N", "New"),
+			key("R", "Rename"),
+			key("D", "Delete"),
+			key("M", "Move"),
+			key("Space", "Fold"),
+			theme.Age.Render("[q] Quit"),
+		}
 	} else if m.activePane == PaneDetail {
 		curTask := m.currentTask()
 		doneLabel := theme.CountProg.Render("[d] Done")
@@ -140,13 +154,16 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = append(candidateKeys, key("<>", "Split"))
 		}
 		candidateKeys = append(candidateKeys,
-			key("Enter", "Diff"),
+			key("Enter", "Follow/Diff"),
+			key("[]l", "Link"),
+			key("gf", "Follow"),
+			key("gl", "Insert"),
+			key("gb", "Back"),
 			doneLabel,
 			statusLabel,
 			archiveLabel,
 			theme.DiffSub.Render("[x] Del"),
-			key("L", "Link"),
-			key("m", "Tag"),
+			key("L", "Dep"),
 			theme.Age.Render("[q] Quit"),
 		)
 	} else {
@@ -185,7 +202,9 @@ func (m Model) renderFooter(width int) string {
 			}
 			candidateKeys = append(candidateKeys,
 				treeLabel,
-				key("L", "Link"),
+				key("gt", "Topic"),
+				key("M", "Move"),
+				key("gl", "Link"),
 				key("Space", "Sel"),
 				key("n", "New"),
 				key("e", "Edit"),
@@ -197,6 +216,9 @@ func (m Model) renderFooter(width int) string {
 				key("/", "Find"),
 				theme.Age.Render("[q] Quit"),
 			)
+			if curTask != nil && curTask.IsPost() {
+				candidateKeys = append(candidateKeys[:6], append([]string{key("p", "Promote")}, candidateKeys[6:]...)...)
+			}
 		} else if width >= 80 {
 			candidateKeys = []string{
 				key("j/k", "Nav"),
@@ -209,6 +231,8 @@ func (m Model) renderFooter(width int) string {
 				candidateKeys = append(candidateKeys, key("<>", "Split"))
 			}
 			candidateKeys = append(candidateKeys,
+				key("gt", "Topic"),
+				key("M", "Move"),
 				key("Space", "Sel"),
 				key("n", "New"),
 				key("e", "Edit"),

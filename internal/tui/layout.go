@@ -39,6 +39,8 @@ type paneLayout struct {
 
 	width, height int
 
+	sidebarWidth int // 0 when hidden / stacked
+
 	listWidth  int
 	listHeight int // column header + rule + task rows + optional pagination line
 	rows       int // visible task rows
@@ -97,8 +99,15 @@ func (m Model) layout() paneLayout {
 	taskCount := len(m.tasks)
 
 	if l.split {
-		l.listWidth = m.splitListWidth(width)
-		l.detailWidth = width - l.listWidth - splitDividerWidth
+		if !m.sidebarHidden && width >= splitMinWidth+15 {
+			l.sidebarWidth = min(max(width*18/100, 18), 26)
+		}
+		availWidth := width
+		if l.sidebarWidth > 0 {
+			availWidth -= l.sidebarWidth + splitDividerWidth
+		}
+		l.listWidth = m.splitListWidth(availWidth)
+		l.detailWidth = availWidth - l.listWidth - splitDividerWidth
 		l.listHeight = body
 		l.detailHeight = body
 	} else {

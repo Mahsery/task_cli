@@ -18,12 +18,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reloadMsg:
 		m.applyReload(msg)
-		return m, nil
+		return m, m.fetchRelatedCmd()
 
 	case reloadErrMsg:
 		m.applyReload(msg.tasks)
 		m.err = msg.err
 		m.statusMsg = fmt.Sprintf("Error: %v", msg.err)
+		return m, m.fetchRelatedCmd()
+
+	case topicsMsg:
+		m.applyTopics(msg)
+		return m, nil
+
+	case topicOpMsg:
+		m.statusMsg = msg.status
+		var cmds []tea.Cmd
+		cmds = append(cmds, m.fetchTopicsCmd())
+		if msg.selectPath != nil {
+			cmds = append(cmds, m.selectTopic(*msg.selectPath))
+		}
+		return m, tea.Sequence(cmds...)
+
+	case relatedMsg:
+		m.applyRelated(msg)
 		return m, nil
 
 	case taskDetailMsg:
@@ -62,6 +79,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // applyReload installs a fresh task list, keeping cursor/scroll valid and pruning stale selections.
 func (m *Model) applyReload(tasks []*domain.Task) {
 	m.tasks = tasks
+	if m.isBoardView() {
+		sortBoard(m.tasks)
+	}
 	m.clampScroll()
 	if len(m.selected) > 0 {
 		taskSet := make(map[string]bool, len(m.tasks))
@@ -73,5 +93,10 @@ func (m *Model) applyReload(tasks []*domain.Task) {
 				delete(m.selected, id)
 			}
 		}
+	}
+	if m.pendingSelect != nil {
+		target := m.pendingSelect
+		m.pendingSelect = nil
+		m.selectItem(target)
 	}
 }

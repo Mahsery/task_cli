@@ -480,11 +480,13 @@ func TestTUIIndependentContentScrolling(t *testing.T) {
 		t.Errorf("Expected detailScrollOffset to be 7 after 'J', got %d", m.detailScrollOffset)
 	}
 
-	// 'g' jumps to top (0)
+	// 'gg' jumps to top (0)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = mustModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	m = mustModel(t, updated)
 	if m.detailScrollOffset != 0 {
-		t.Errorf("Expected detailScrollOffset to reset to 0 after 'g', got %d", m.detailScrollOffset)
+		t.Errorf("Expected detailScrollOffset to reset to 0 after 'gg', got %d", m.detailScrollOffset)
 	}
 
 	// Test rendered output in PaneDetail:
@@ -1341,11 +1343,13 @@ func TestTUIVimMovementChords(t *testing.T) {
 		t.Fatalf("Expected cursor 29 (last line) after 'G', got %d", m.cursor)
 	}
 
-	// 6. Test g jumps to top (line 0)
+	// 6. Test gg jumps to top (line 0)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	m = mustModel(t, updated)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	m = mustModel(t, updated)
 	if m.cursor != 0 {
-		t.Fatalf("Expected cursor 0 after 'g', got %d", m.cursor)
+		t.Fatalf("Expected cursor 0 after 'gg', got %d", m.cursor)
 	}
 
 	// 7. Test Esc cancels chord
@@ -1427,46 +1431,20 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 		t.Fatalf("Expected empty undoStack after undo, got %d", len(m.undoStack))
 	}
 
-	// 5. Test Quick Tagging with single-key 'm'
+	// 5. Verify tag modal is no longer reachable via 'm' or 'T'
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}})
 	m = mustModel(t, updated)
-	if !m.isTagging {
-		t.Fatalf("Expected isTagging to be true after pressing 'm'")
-	}
-	// Type tag "urgent"
-	for _, r := range "urgent" {
-		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-		m = mustModel(t, updated)
-	}
-	// Press Enter to apply tag
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = mustModel(t, updated)
-	if m.isTagging {
-		t.Fatalf("Expected isTagging to be false after Enter")
-	}
-	hasTag := false
-	for _, tag := range m.tasks[0].Tags {
-		if tag == "urgent" {
-			hasTag = true
-			break
-		}
-	}
-	if !hasTag {
-		t.Fatalf("Expected task T-1 to have tag 'urgent', got %v", m.tasks[0].Tags)
+	if m.picker != nil || m.topicForm != nil {
+		t.Fatalf("Expected no modal on pressing 'm'")
 	}
 
-	// 6. Undo 'u' reverts quick tag
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	// 6. Test 'gl' opens insert link modal
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	m = mustModel(t, updated)
-	hasTag = false
-	for _, tag := range m.tasks[0].Tags {
-		if tag == "urgent" {
-			hasTag = true
-			break
-		}
-	}
-	if hasTag {
-		t.Fatalf("Expected tag 'urgent' to be reverted via 'u', got %v", m.tasks[0].Tags)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m = mustModel(t, updated)
+	if m.picker == nil || m.picker.kind != pickInsertLink {
+		t.Fatalf("Expected picker to be pickInsertLink after pressing 'gl'")
 	}
 }
 

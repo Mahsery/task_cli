@@ -104,50 +104,6 @@ func (m Model) renderLinkModal(termWidth, _ int) string {
 	return theme.ModalBox.Width(boxWidth).Render(inner)
 }
 
-func (m Model) renderTagModal(termWidth, _ int) string {
-	theme := m.theme
-	boxWidth := 56
-	if termWidth > 0 && termWidth-6 < boxWidth {
-		boxWidth = termWidth - 6
-	}
-	if boxWidth < 36 {
-		boxWidth = 36
-	}
-
-	contentWidth := boxWidth - 4
-	var lines []string
-
-	titleStr := theme.ModalTitle.Render(" QUICK TAG TASK ")
-	lines = append(lines, titleStr, "")
-
-	var promptStr string
-	if m.tagTaskID != "" {
-		promptStr = fmt.Sprintf("Add or toggle tag for task %s:", m.tagTaskID)
-	} else {
-		promptStr = fmt.Sprintf("Add tag for %d selected tasks:", len(m.selected))
-	}
-	for _, pw := range wrapText(promptStr, contentWidth, "") {
-		lines = append(lines, theme.ModalPrompt.Render(pw))
-	}
-	lines = append(lines, "")
-
-	inputStr := fmt.Sprintf("  Tag: %s_", m.tagInput)
-	lines = append(lines, theme.SearchPrompt.Render(inputStr), "")
-
-	hint := "Type tag name to add (or toggle off if already present)."
-	for _, hw := range wrapText(hint, contentWidth, "") {
-		lines = append(lines, theme.ModalDesc.Render(hw))
-	}
-	lines = append(lines, "")
-
-	confirmKey := theme.ModalKey.Render("[Enter]") + " " + theme.ModalPrompt.Render("Apply")
-	cancelKey := theme.ModalCancel.Render("[Esc]") + " " + theme.ModalPrompt.Render("Cancel")
-	lines = append(lines, fmt.Sprintf("%s    %s", confirmKey, cancelKey))
-
-	inner := strings.Join(lines, "\n")
-	return theme.ModalBox.Width(boxWidth).Render(inner)
-}
-
 func (m Model) overlayModal(bg string, dlg *ConfirmDialog) string {
 	width := m.width
 	if width <= 0 {

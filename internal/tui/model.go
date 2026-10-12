@@ -16,6 +16,7 @@ type Pane int
 const (
 	PaneList Pane = iota
 	PaneDetail
+	PaneSidebar
 )
 
 type ConfirmKind int
@@ -26,6 +27,7 @@ const (
 	ConfirmReopen
 	ConfirmStatus
 	ConfirmClaim
+	ConfirmDeleteTopic
 )
 
 type ConfirmDialog struct {
@@ -37,6 +39,9 @@ type ConfirmDialog struct {
 	IsBatch        bool
 	TargetStatus   domain.Status
 	TargetAssignee string
+	// TopicRef and MoveTo are only used by ConfirmDeleteTopic.
+	TopicRef string
+	MoveTo   string
 }
 
 type UndoKind int
@@ -45,7 +50,6 @@ const (
 	UndoStatusChange UndoKind = iota
 	UndoClaim
 	UndoDelete
-	UndoTag
 	UndoArchive
 )
 
@@ -55,7 +59,6 @@ type TaskUndoSnapshot struct {
 	PreviousAssignee   string
 	PreviousClosedAt   *time.Time
 	PreviousArchivedAt *time.Time
-	PreviousTags       []string
 }
 
 type UndoAction struct {
@@ -95,18 +98,48 @@ type Model struct {
 	linkInput          string
 	linkTaskID         string
 	chordBuffer        string
-	isTagging          bool
-	tagInput           string
-	tagTaskID          string
 	showArchived       bool
 	input              textinput.Model
 	viewport           viewport.Model
+
+	// Topics (see topics.go). topicPath is the list filter: "" = all topics,
+	// domain.UnfiledTopic, or a topic path such as "game/hero-system".
+	topics        []*domain.Topic
+	topicsLoaded  bool
+	topicPath     string
+	sidebarCursor int
+	sidebarHidden bool
+	collapsed     map[string]bool // collapsed group topic paths
+
+	// Two-key commands (g…, ]…, […): the pending prefix and the count typed before it.
+	pendingPrefix string
+	prefixCount   int
+
+	// Items outside the visible list: cross-topic dependencies (ghost rows) and
+	// link targets, plus link targets confirmed not to exist (see links.go).
+	related map[string]*domain.Task
+	missing map[string]bool
+
+	// Link navigation in the detail pane (see links.go and history.go).
+	linkCursor    int    // 1-based focused link, 0 = none
+	linkCursorFor string // item the link cursor belongs to
+	anchor        *detailAnchor
+	pendingSelect *navTarget
+	backStack     []navEntry
+	fwdStack      []navEntry
+
+	picker    *picker
+	topicForm *topicForm
 }
 
 type TreeRow struct {
 	Task   *domain.Task
 	Prefix string
 	Depth  int
+	// Pointer marks a task already rendered in full above (multi-parent DAG node).
+	Pointer bool
+	// Ghost marks a task that lives outside the current topic (cross-topic dependency).
+	Ghost bool
 }
 
 func NewModel(c *client.Client, editorCmd, scope, repoPath string) Model {
@@ -158,6 +191,7 @@ type statusMsg string
 
 type errMsg error
 
+// Init loads topics before tasks: the client connection is not safe for concurrent use.
 func (m Model) Init() tea.Cmd {
-	return m.fetchTasksCmd()
+	return tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd())
 }

@@ -24,10 +24,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if dlg := m.activeConfirmDialog(); dlg != nil {
 		k := msg.String()
 		if k == "y" || k == "Y" || k == "enter" {
-			undo := m.buildUndoAction(dlg)
-			m.undoStack = append(m.undoStack, undo)
-			if len(m.undoStack) > 50 {
-				m.undoStack = m.undoStack[len(m.undoStack)-50:]
+			if dlg.Kind != ConfirmDeleteTopic {
+				undo := m.buildUndoAction(dlg)
+				m.undoStack = append(m.undoStack, undo)
+				if len(m.undoStack) > 50 {
+					m.undoStack = m.undoStack[len(m.undoStack)-50:]
+				}
 			}
 
 			m.confirmDialog = nil
@@ -94,96 +96,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if m.isTagging {
-		switch msg.String() {
-		case "enter":
-			m.isTagging = false
-			tag := strings.TrimSpace(m.input.Value())
-			m.tagInput = tag
-			m.input.Blur()
-			if tag != "" {
-				if m.tagTaskID != "" {
-					targetID := m.tagTaskID
-					cur := m.currentTask()
-					if cur != nil && cur.ID == targetID {
-						prevTags := append([]string(nil), cur.Tags...)
-						exists := false
-						for _, t := range cur.Tags {
-							if t == tag {
-								exists = true
-								break
-							}
-						}
-						var newTags []string
-						if exists {
-							for _, t := range cur.Tags {
-								if t != tag {
-									newTags = append(newTags, t)
-								}
-							}
-							m.statusMsg = fmt.Sprintf("Removed tag %q from %s (press 'u' to undo)", tag, targetID)
-						} else {
-							newTags = append(append(make([]string, 0, len(cur.Tags)+1), cur.Tags...), tag)
-							m.statusMsg = fmt.Sprintf("Tagged %s with %q (press 'u' to undo)", targetID, tag)
-						}
-						cur.Tags = newTags
-						m.pushUndo(UndoTag, fmt.Sprintf("Tag change on %s", targetID), TaskUndoSnapshot{
-							Task:         cur,
-							PreviousTags: prevTags,
-						})
-						return m, m.updateTaskTagsCmd(targetID, newTags)
-					}
-				} else if len(m.selected) > 0 {
-					ids := m.getSelectedIDs()
-					var snapshots []TaskUndoSnapshot
-					for _, id := range ids {
-						for _, t := range m.tasks {
-							if t.ID != id {
-								continue
-							}
-							prevTags := append([]string(nil), t.Tags...)
-							snapshots = append(snapshots, TaskUndoSnapshot{
-								Task:         t,
-								PreviousTags: prevTags,
-							})
-							exists := false
-							for _, exTag := range t.Tags {
-								if exTag == tag {
-									exists = true
-									break
-								}
-							}
-							if !exists {
-								t.Tags = append(t.Tags, tag)
-							}
-							break
-						}
-					}
-					m.pushUndo(UndoTag, fmt.Sprintf("Tag %q on %d tasks", tag, len(ids)), snapshots...)
-					m.statusMsg = fmt.Sprintf("Tagged %d tasks with %q (press 'u' to undo)", len(ids), tag)
-					return m, m.batchTagCmd(ids, tag)
-				}
-			}
-			m.statusMsg = "Tagging cancelled"
-			return m, nil
-
-		case "esc":
-			m.isTagging = false
-			m.tagInput = ""
-			m.input.Reset()
-			m.input.Blur()
-			m.statusMsg = "Tagging cancelled"
-			return m, nil
-
-		default:
-			cmd := m.updateInput(msg)
-			m.tagInput = m.input.Value()
-			return m, cmd
-		}
+	if m.topicForm != nil {
+		return m.handleTopicFormKey(msg)
 	}
 
-	// Vim Movement Chords: Accumulate numeric prefix in normal navigation mode
+	if m.picker != nil {
+		return m.handlePickerKey(msg)
+	}
+
 	kStr := msg.String()
+
+	// Vim Movement Chords: Accumulate numeric prefix in normal navigation mode
 	if len(kStr) == 1 && kStr[0] >= '0' && kStr[0] <= '9' {
 		if kStr[0] != '0' || m.chordBuffer != "" {
 			m.chordBuffer += kStr
@@ -191,8 +114,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if (kStr == "esc" || kStr == "c") && m.chordBuffer != "" {
+	if (kStr == "esc" || kStr == "c") && (m.chordBuffer != "" || m.pendingPrefix != "") {
 		m.chordBuffer = ""
+		m.pendingPrefix = ""
+		m.prefixCount = 0
 		m.statusMsg = "Chord cancelled"
 		return m, nil
 	}
@@ -204,35 +129,129 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.chordBuffer = ""
 	}
 
+	// Two-key chords: ]l, ]t, [l, [t, gt, gl, gf, gb, gB, gg
+	if m.pendingPrefix != "" {
+		prefix := m.pendingPrefix
+		count := m.prefixCount
+		m.pendingPrefix = ""
+		m.prefixCount = 0
+		switch prefix {
+		case "]":
+			switch kStr {
+			case "l":
+				m.moveLinkCursor(1, count)
+				return m, nil
+			case "t":
+				cmd := m.cycleTopic(max(count, 1))
+				return m, cmd
+			}
+		case "[":
+			switch kStr {
+			case "l":
+				m.moveLinkCursor(-1, count)
+				return m, nil
+			case "t":
+				cmd := m.cycleTopic(-max(count, 1))
+				return m, cmd
+			}
+		case "g":
+			switch kStr {
+			case "t":
+				m.openPicker(pickGoTopic, nil, "")
+				return m, nil
+			case "l":
+				cur := m.currentTask()
+				if cur != nil {
+					m.openPicker(pickInsertLink, []string{cur.ID}, "")
+				}
+				return m, nil
+			case "f":
+				cmd := m.followLink(count)
+				return m, cmd
+			case "b":
+				cmd := m.historyBack()
+				return m, cmd
+			case "B":
+				cmd := m.historyForward()
+				return m, cmd
+			case "g":
+				if m.activePane == PaneSidebar {
+					m.sidebarCursor = 0
+					return m, nil
+				}
+				if m.activePane == PaneDetail {
+					m.detailScrollOffset = 0
+					return m, nil
+				}
+				m.cursor = 0
+				m.scrollOffset = 0
+				m.detailScrollOffset = 0
+				return m, nil
+			}
+		}
+		return m, nil
+	}
+
+	if m.activePane == PaneSidebar {
+		updated, cmd, consumed := m.handleSidebarKey(kStr, chordCount)
+		if consumed {
+			return updated, cmd
+		}
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 
 	case "tab":
-		if m.activePane == PaneList {
+		l := m.layout()
+		switch m.activePane {
+		case PaneSidebar:
+			m.activePane = PaneList
+			m.statusMsg = "Tasks focused"
+		case PaneList:
 			m.activePane = PaneDetail
 			maxOffset := m.maxDetailScrollOffset()
 			if m.detailScrollOffset > maxOffset {
 				m.detailScrollOffset = maxOffset
 			}
 			m.statusMsg = "Details focused"
-		} else {
-			m.activePane = PaneList
-			m.statusMsg = "Tasks focused"
+		case PaneDetail:
+			if l.sidebarWidth > 0 {
+				m.activePane = PaneSidebar
+				m.statusMsg = "Topics focused"
+			} else {
+				m.activePane = PaneList
+				m.statusMsg = "Tasks focused"
+			}
 		}
 		return m, nil
 
 	case "shift+tab":
-		if m.activePane == PaneDetail {
-			m.activePane = PaneList
-			m.statusMsg = "Tasks focused"
-		} else {
+		l := m.layout()
+		switch m.activePane {
+		case PaneSidebar:
 			m.activePane = PaneDetail
 			maxOffset := m.maxDetailScrollOffset()
 			if m.detailScrollOffset > maxOffset {
 				m.detailScrollOffset = maxOffset
 			}
 			m.statusMsg = "Details focused"
+		case PaneList:
+			if l.sidebarWidth > 0 {
+				m.activePane = PaneSidebar
+				m.statusMsg = "Topics focused"
+			} else {
+				m.activePane = PaneDetail
+				maxOffset := m.maxDetailScrollOffset()
+				if m.detailScrollOffset > maxOffset {
+					m.detailScrollOffset = maxOffset
+				}
+				m.statusMsg = "Details focused"
+			}
+		case PaneDetail:
+			m.activePane = PaneList
+			m.statusMsg = "Tasks focused"
 		}
 		return m, nil
 
@@ -253,6 +272,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Tasks focused"
 			return m, nil
 		}
+		l := m.layout()
+		if m.activePane == PaneList && l.sidebarWidth > 0 {
+			m.activePane = PaneSidebar
+			m.statusMsg = "Topics focused"
+			return m, nil
+		}
+
+	case "]", "[", "g":
+		m.pendingPrefix = msg.String()
+		m.prefixCount = chordCount
+		return m, nil
 
 	case ">", ".", "alt+right", "alt+l":
 		if m.isSplitView() {
@@ -319,7 +349,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailScrollOffset = 0
 		}
 
-	case "g", "home":
+	case "home":
 		if m.activePane == PaneDetail {
 			m.detailScrollOffset = 0
 			return m, nil
@@ -366,7 +396,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailScrollOffset = 0
 		}
 
-	case "J", "ctrl+d", "]", "pgdown":
+	case "J", "ctrl+d", "pgdown":
 		times := 1
 		if chordCount > 0 {
 			times = chordCount
@@ -394,7 +424,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailScrollOffset = 0
 		}
 
-	case "K", "ctrl+u", "[", "pgup":
+	case "K", "ctrl+u", "pgup":
 		times := 1
 		if chordCount > 0 {
 			times = chordCount
@@ -516,6 +546,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
+		if m.activePane == PaneDetail && m.focusedLinkIndex() > 0 {
+			cmd := m.followLink(m.focusedLinkIndex())
+			return m, cmd
+		}
 		m.showDiff = !m.showDiff
 		maxOffset := m.maxDetailScrollOffset()
 		if m.detailScrollOffset > maxOffset {
@@ -706,22 +740,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.updateStatusCmd(cur.ID, newStatus)
 		}
 
-	case "m", "T":
+	case "M":
 		if len(m.selected) > 0 {
-			m.isTagging = true
-			m.tagInput = ""
-			m.tagTaskID = ""
-			m.focusInput()
-			m.statusMsg = fmt.Sprintf("Tagging %d selected tasks (enter tag name)", len(m.selected))
-			return m, nil
+			m.openPicker(pickMoveItems, m.getSelectedIDs(), "")
+		} else if cur := m.currentTask(); cur != nil {
+			m.openPicker(pickMoveItems, []string{cur.ID}, "")
 		}
+		return m, nil
+
+	case "p":
 		cur := m.currentTask()
-		if cur != nil {
-			m.isTagging = true
-			m.tagInput = ""
-			m.tagTaskID = cur.ID
-			m.focusInput()
-			m.statusMsg = fmt.Sprintf("Tagging %s (enter tag name)", cur.ID)
+		if cur != nil && cur.IsPost() {
+			m.openPicker(pickPromote, []string{cur.ID}, "")
+		} else if cur != nil {
+			m.statusMsg = "Only posts can be promoted to tasks"
 		}
 		return m, nil
 
@@ -760,17 +792,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 			}
-		case UndoTag:
-			for _, snap := range lastUndo.Snapshots {
-				if snap.Task != nil {
-					snap.Task.Tags = append([]string(nil), snap.PreviousTags...)
-				}
-				for _, t := range m.tasks {
-					if snap.Task != nil && t.ID == snap.Task.ID {
-						t.Tags = append([]string(nil), snap.PreviousTags...)
-					}
-				}
-			}
 		case UndoArchive:
 			for _, snap := range lastUndo.Snapshots {
 				if snap.Task != nil {
@@ -789,8 +810,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.executeUndoCmd(lastUndo)
 
 	case "n":
-		// Create new task via editor
-		tmpPath, err := editor.CreateNewTaskFile("")
+		// Create new task/post via editor
+		top := m.topicPath
+		if top == domain.UnfiledTopic {
+			top = ""
+		}
+		tmpPath, err := editor.CreateNewTaskFileInTopic("", top)
 		if err != nil {
 			return m, func() tea.Msg { return errMsg(err) }
 		}
@@ -808,14 +833,23 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
 			}
+			kind := domain.KindTask
+			if m.isBoardView() {
+				kind = domain.KindPost
+			}
+			destTopic := parsed.Topic
+			if destTopic == "" {
+				destTopic = top
+			}
 			_, err = m.client.CreateTask(protocol.CreateTaskPayload{
 				Title:       parsed.Title,
 				Description: parsed.Description,
 				Status:      domain.StatusOpen,
 				Priority:    parsed.Priority,
-				Tags:        parsed.Tags,
 				Author:      m.resolveActor(),
 				Assignee:    parsed.Assignee,
+				Kind:        kind,
+				Topic:       destTopic,
 			})
 			if err != nil {
 				return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
@@ -856,13 +890,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					Description: &parsed.Description,
 					Status:      &parsed.Status,
 					Priority:    &parsed.Priority,
-					Tags:        &parsed.Tags,
 					Assignee:    &parsed.Assignee,
 					AddNote:     addNote,
 					Author:      m.resolveActor(),
 				})
 				if err != nil {
 					return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
+				}
+				if parsed.Topic != "" && parsed.Topic != t.TopicPath {
+					_, _ = m.client.MoveItems([]string{t.ID}, parsed.Topic, m.resolveActor())
 				}
 				_ = os.Remove(tmpPath)
 				return m.fetchTasksCmd()()

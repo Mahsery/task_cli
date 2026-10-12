@@ -85,7 +85,6 @@ func cloneTaskSnapshot(t, fullTask *domain.Task) TaskUndoSnapshot {
 		PreviousAssignee:   t.Assignee,
 		PreviousClosedAt:   prevClosed,
 		PreviousArchivedAt: prevArchived,
-		PreviousTags:       append([]string(nil), t.Tags...),
 	}
 }
 
@@ -223,6 +222,10 @@ func (m Model) executeConfirmedDialog(dlg *ConfirmDialog) (tea.Model, tea.Cmd) {
 			m.statusMsg = fmt.Sprintf("Claimed %s as %s (press 'u' to undo)", dlg.TargetIDs[0], dlg.TargetAssignee)
 			return m, m.claimTaskCmd(dlg.TargetIDs[0])
 		}
+
+	case ConfirmDeleteTopic:
+		m.statusMsg = fmt.Sprintf("Deleting topic @%s...", dlg.TopicRef)
+		return m, m.deleteTopicCmd(dlg.TopicRef, dlg.MoveTo)
 	}
 	return m, nil
 }
@@ -264,19 +267,6 @@ func (m Model) executeUndoCmd(undo UndoAction) tea.Cmd {
 				_, err := m.client.RestoreTask(snap.Task)
 				if err != nil {
 					return errMsg(fmt.Errorf("failed to restore %s: %w", snap.Task.ID, err))
-				}
-			}
-		case UndoTag:
-			for _, snap := range undo.Snapshots {
-				note := "Undo: reverted tags"
-				prevTags := snap.PreviousTags
-				_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
-					ID:      snap.Task.ID,
-					Tags:    &prevTags,
-					AddNote: &note,
-				})
-				if err != nil {
-					return errMsg(fmt.Errorf("failed to restore tags on %s: %w", snap.Task.ID, err))
 				}
 			}
 		case UndoArchive:

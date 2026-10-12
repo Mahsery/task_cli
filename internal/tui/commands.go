@@ -26,6 +26,7 @@ func (m Model) listFilter() domain.TaskFilter {
 		RepoPath:        m.repoPath,
 		Search:          m.filterText,
 		IncludeArchived: m.showArchived,
+		Topic:           m.topicPath,
 	}
 }
 
@@ -157,31 +158,6 @@ func (m Model) claimTaskCmd(taskID string) tea.Cmd {
 			return errMsg(err)
 		}
 		return m.reloadAfter(nil)
-	}
-}
-
-func (m Model) updateTaskTagsCmd(taskID string, tags []string) tea.Cmd {
-	return func() tea.Msg {
-		if m.client == nil {
-			return nil
-		}
-		if _, err := m.client.UpdateTask(protocol.UpdateTaskPayload{ID: taskID, Tags: &tags}); err != nil {
-			return errMsg(err)
-		}
-		return m.reloadAfter(nil)
-	}
-}
-
-func (m Model) batchTagCmd(ids []string, tag string) tea.Cmd {
-	return func() tea.Msg {
-		if m.client == nil {
-			return nil
-		}
-		err := runBatch("tag", ids, func(id string) error {
-			_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{ID: id, AddTags: []string{tag}})
-			return err
-		})
-		return m.reloadAfter(err)
 	}
 }
 

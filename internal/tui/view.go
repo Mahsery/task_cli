@@ -22,13 +22,25 @@ func (m Model) View() string {
 	listLines := m.renderListPane(l)
 	detailLines := m.renderDetailPane(l)
 	if l.split {
-		divStyle := m.theme.Border
-		if m.activePane == PaneDetail {
-			divStyle = m.theme.ActiveBorder
+		div1 := m.theme.Border.Render("│")
+		div2 := m.theme.Border.Render("│")
+		switch m.activePane {
+		case PaneSidebar:
+			div1 = m.theme.ActiveBorder.Render("│")
+		case PaneDetail:
+			div2 = m.theme.ActiveBorder.Render("│")
 		}
-		divider := divStyle.Render("│")
+		var sidebarLines []string
+		if l.sidebarWidth > 0 {
+			sidebarLines = m.renderSidebar(l)
+		}
 		for i := range listLines {
-			lines = append(lines, listLines[i]+divider+detailLines[i])
+			line := ""
+			if l.sidebarWidth > 0 && i < len(sidebarLines) {
+				line = sidebarLines[i] + div1
+			}
+			line += listLines[i] + div2 + detailLines[i]
+			lines = append(lines, line)
 		}
 	} else {
 		lines = append(lines, listLines...)
@@ -44,8 +56,11 @@ func (m Model) View() string {
 	if m.isLinking {
 		return m.overlayModalString(rawView, m.renderLinkModal(l.width, l.height))
 	}
-	if m.isTagging {
-		return m.overlayModalString(rawView, m.renderTagModal(l.width, l.height))
+	if m.topicForm != nil {
+		return m.overlayModalString(rawView, m.renderTopicForm(l.width))
+	}
+	if m.picker != nil {
+		return m.overlayModalString(rawView, m.renderPicker(l.width, l.height))
 	}
 	return rawView
 }
@@ -136,6 +151,8 @@ func (m Model) renderHeader(width int) string {
 		scopeBadge = theme.ScopeGlobal.Render("[global]")
 	}
 
+	topicBadge := theme.ActiveHeader.Render("[" + topicLabel(m.topicPath) + "]")
+
 	orphanStyle := theme.CountOrphanedZero
 	if c.orphaned > 0 {
 		orphanStyle = theme.CountOrphaned
@@ -162,7 +179,7 @@ func (m Model) renderHeader(width int) string {
 	var fullModes, compactModes []string
 	if m.treeViewMode {
 		fullModes = append(fullModes, theme.ModalTitle.Render("[TREE MODE (t)]"))
-		compactModes = append(compactModes, theme.ModalTitle.Render("[tree]"))
+		compactModes = append(compactModes, theme.ModalTitle.Render("[TREE MODE]"))
 	}
 	if m.showArchived {
 		fullModes = append(fullModes, theme.ArchiveBadge.Render("[ARCHIVE VIEW]"))
@@ -179,7 +196,7 @@ func (m Model) renderHeader(width int) string {
 	}
 
 	sep := "  ─  "
-	full := title + " " + scopeBadge
+	full := title + " " + scopeBadge + " " + topicBadge
 	for _, md := range fullModes {
 		full += sep + md
 	}
@@ -192,7 +209,7 @@ func (m Model) renderHeader(width int) string {
 	text := full
 	if ansi.StringWidth(full) > inner {
 		// Compact form: the query comes right after the title so typed input is never cut off.
-		text = title
+		text = title + " " + topicBadge
 		if compactQuery != "" {
 			text += " " + compactQuery
 		}
@@ -213,30 +230,32 @@ func (m Model) renderListPane(l paneLayout) []string {
 	if width < 60 {
 		ageWidth = 7
 	}
-	tagsWidth := 0
-	tagsThreshold := 65
-	if m.treeViewMode {
-		tagsThreshold = 80
+	topicWidth := 0
+	topicThreshold := 65
+	if m.treeActive() {
+		topicThreshold = 80
 	}
-	switch {
-	case width >= 110:
-		tagsWidth = 16
-	case width >= tagsThreshold:
-		tagsWidth = 10
+	if m.topicPath == "" || m.topicPath == domain.UnfiledTopic {
+		switch {
+		case width >= 110:
+			topicWidth = 16
+		case width >= topicThreshold:
+			topicWidth = 10
+		}
 	}
 	fixed := 2 + idWidth + 1 + statusWidth + 1 + priWidth + 1 + 1 + ageWidth
-	if tagsWidth > 0 {
-		fixed += tagsWidth + 1
+	if topicWidth > 0 {
+		fixed += topicWidth + 1
 	}
 	titleWidth := max(width-fixed, 12)
 
 	colTitle := "TITLE"
-	if m.treeViewMode {
+	if m.treeActive() {
 		colTitle = "TREE / TITLE"
 	}
 	cols := []string{padRight("ID", idWidth), padRight("STATUS", statusWidth), padRight("PRI", priWidth), padRight(colTitle, titleWidth)}
-	if tagsWidth > 0 {
-		cols = append(cols, padRight("TAGS", tagsWidth))
+	if topicWidth > 0 {
+		cols = append(cols, padRight("TOPIC", topicWidth))
 	}
 	cols = append(cols, padRight("AGE", ageWidth))
 	colHeader := "  " + strings.Join(cols, " ")
@@ -250,42 +269,20 @@ func (m Model) renderListPane(l paneLayout) []string {
 		theme.Border.Render(strings.Repeat("─", width)),
 	}
 
-	if len(m.tasks) == 0 {
-		lines = append(lines, theme.RowNormal.Render("  No tasks found. Press 'n' to create a new task."))
+	rows := m.displayRows()
+	if len(rows) == 0 {
+		lines = append(lines, theme.RowNormal.Render("  No items found. Press 'n' to create."))
 		return fitBlock(lines, width, l.listHeight)
 	}
 
-	displayTasks := m.tasks
-	displayPrefixes := make([]string, len(m.tasks))
-	if m.treeViewMode {
-		treeRows := m.getTreeRows()
-		displayTasks = make([]*domain.Task, len(treeRows))
-		displayPrefixes = make([]string, len(treeRows))
-		for i, r := range treeRows {
-			displayTasks[i] = r.Task
-			displayPrefixes[i] = r.Prefix
-		}
-	}
-
-	endIdx := min(m.scrollOffset+l.rows, len(displayTasks))
+	endIdx := min(m.scrollOffset+l.rows, len(rows))
 	for i := m.scrollOffset; i < endIdx; i++ {
-		t := displayTasks[i]
-		treeBranch := displayPrefixes[i]
-		if m.treeViewMode && treeBranch != "" {
-			maxBranch := titleWidth - 10
-			if maxBranch < 6 {
-				maxBranch = titleWidth / 2
-			}
-			if maxBranch > 0 && runewidth.StringWidth(treeBranch) > maxBranch {
-				treeBranch = compactTreeBranch(treeBranch, maxBranch)
-			}
-		}
 		isCursor := i == m.cursor
-		lines = append(lines, m.renderTaskRow(t, treeBranch, isCursor, width, idWidth, statusWidth, priWidth, titleWidth, tagsWidth, ageWidth))
+		lines = append(lines, m.renderTaskRow(rows[i], isCursor, width, idWidth, statusWidth, priWidth, titleWidth, topicWidth, ageWidth))
 	}
 
 	if l.paginated {
-		pagination := fmt.Sprintf("  ── Showing %d-%d of %d (▲/▼) ──", m.scrollOffset+1, endIdx, len(displayTasks))
+		pagination := fmt.Sprintf("  ── Showing %d-%d of %d (▲/▼) ──", m.scrollOffset+1, endIdx, len(rows))
 		// Pin the indicator to the last line of the pane so it never moves.
 		lines = fitBlock(lines, width, l.listHeight-1)
 		lines = append(lines, theme.FooterDesc.Render(fitLine(pagination, width)))
@@ -294,8 +291,9 @@ func (m Model) renderListPane(l paneLayout) []string {
 	return fitBlock(lines, width, l.listHeight)
 }
 
-func (m Model) renderTaskRow(t *domain.Task, treeBranch string, isCursor bool, width, idWidth, statusWidth, priWidth, titleWidth, tagsWidth, ageWidth int) string {
+func (m Model) renderTaskRow(row TreeRow, isCursor bool, width, idWidth, statusWidth, priWidth, titleWidth, topicWidth, ageWidth int) string {
 	theme := m.theme
+	t := row.Task
 	prefix := "  "
 	if len(m.selected) > 0 {
 		isSel := m.selected[t.ID]
@@ -312,14 +310,42 @@ func (m Model) renderTaskRow(t *domain.Task, treeBranch string, isCursor bool, w
 		prefix = theme.Cursor.Render("► ")
 	}
 
-	rawTitle := treeBranch + t.Title
-	if t.IsBlocked {
-		rawTitle += " 🔒"
-	} else if t.Status != domain.StatusDone && t.Status != domain.StatusClosed && len(t.DependsOn) > 0 {
-		rawTitle += " ⚡"
+	pointerGlyph := "↪ "
+	ghostGlyph := "⇢ "
+	if isASCIIOnly() {
+		pointerGlyph = "-> "
+		ghostGlyph = "~> "
 	}
-	if t.IsOrphaned() {
-		rawTitle += " 👻"
+
+	treeBranch := row.Prefix
+	if treeBranch != "" {
+		maxBranch := titleWidth - 10
+		if maxBranch < 6 {
+			maxBranch = titleWidth / 2
+		}
+		if maxBranch > 0 && runewidth.StringWidth(treeBranch) > maxBranch {
+			treeBranch = compactTreeBranch(treeBranch, maxBranch)
+		}
+	}
+
+	rawTitle := treeBranch + t.Title
+	if row.Pointer {
+		rawTitle = treeBranch + pointerGlyph + t.ID + " (shown above)"
+	} else if row.Ghost {
+		ghostTopic := ""
+		if t.TopicPath != "" {
+			ghostTopic = " @" + t.TopicPath
+		}
+		rawTitle = treeBranch + ghostGlyph + t.Title + ghostTopic
+	} else {
+		if t.IsBlocked {
+			rawTitle += " 🔒"
+		} else if t.Status != domain.StatusDone && t.Status != domain.StatusClosed && len(t.DependsOn) > 0 {
+			rawTitle += " ⚡"
+		}
+		if t.IsOrphaned() {
+			rawTitle += " 👻"
+		}
 	}
 
 	age := timeAgo(t.CreatedAt)
@@ -330,22 +356,33 @@ func (m Model) renderTaskRow(t *domain.Task, treeBranch string, isCursor bool, w
 		}
 		age = fmt.Sprintf("%s (%s)", age, sha)
 	}
-	statusText := string(t.Status)
+	statusText := t.StatusLabel()
 	statusStyle := StatusStyle(t.Status)
 	if t.IsOrphaned() {
 		statusText = "orphan"
 		statusStyle = theme.CountOrphaned
 	}
 
+	idStyle := theme.TaskID
+	titleStyle := theme.TaskTitle
+	if row.Ghost {
+		idStyle = theme.Age
+		titleStyle = theme.Age
+		statusStyle = theme.Age
+	}
+
 	cells := []string{
-		theme.TaskID.Render(padRight(truncateToWidth(t.ID, idWidth), idWidth)),
+		idStyle.Render(padRight(truncateToWidth(t.ID, idWidth), idWidth)),
 		statusStyle.Render(padRight(truncateToWidth(statusText, statusWidth), statusWidth)),
 		PriorityStyle(t.Priority).Render(padRight(truncateToWidth(string(t.Priority), priWidth), priWidth)),
-		theme.TaskTitle.Render(padRight(truncateToWidth(rawTitle, titleWidth), titleWidth)),
+		titleStyle.Render(padRight(truncateToWidth(rawTitle, titleWidth), titleWidth)),
 	}
-	if tagsWidth > 0 {
-		tags := truncateToWidth(strings.Join(t.Tags, ","), tagsWidth)
-		cells = append(cells, theme.Tag.Render(padRight(tags, tagsWidth)))
+	if topicWidth > 0 {
+		topStr := t.TopicPath
+		if topStr == "" {
+			topStr = domain.UnfiledTopic
+		}
+		cells = append(cells, theme.Tag.Render(padRight(truncateToWidth("@"+topStr, topicWidth), topicWidth)))
 	}
 	cells = append(cells, theme.Age.Render(padRight(truncateToWidth(age, ageWidth), ageWidth)))
 
