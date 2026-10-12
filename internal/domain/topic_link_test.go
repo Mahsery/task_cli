@@ -168,3 +168,29 @@ func TestPostsNeverOrphaned(t *testing.T) {
 		t.Error("done tasks should read as done")
 	}
 }
+
+func TestWikiLinkAnchorText(t *testing.T) {
+	task := &Task{Title: "T", Description: "one\ntwo\nthree", Notes: []TaskNote{{Content: "n1"}, {Content: "n2"}}}
+	cases := []struct {
+		inner, want string
+		ok          bool
+	}{
+		{"T-1", "T", true},
+		{"T-1#L2", "two", true},
+		{"T-1#L2-L3", "two\nthree", true},
+		{"T-1#L3-L9", "three", false},
+		{"T-1#L4", "", false},
+		{"T-1#n2", "n2", true},
+		{"T-1#n3", "", false},
+	}
+	for _, c := range cases {
+		l, err := ParseWikiLink(c.inner, ScopeLocal)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := l.AnchorText(task)
+		if got != c.want || ok != c.ok {
+			t.Errorf("%s: AnchorText=%q,%v want %q,%v", c.inner, got, ok, c.want, c.ok)
+		}
+	}
+}

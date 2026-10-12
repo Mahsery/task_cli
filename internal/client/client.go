@@ -110,6 +110,7 @@ func (c *Client) call(action protocol.Action, payload any) (*protocol.Response, 
 
 	var payloadBytes []byte
 	var err error
+	payload = c.normalizePayload(payload)
 	if payload != nil {
 		payloadBytes, err = json.Marshal(payload)
 		if err != nil {
@@ -653,4 +654,93 @@ func (c *Client) PromotePost(id, topic, author string) (*protocol.PromotePostRes
 		return nil, err
 	}
 	return &res, nil
+}
+
+// nid canonicalises a forgiving item reference ("t15", "15") for the client's scope.
+// Unparseable input is passed through unchanged so the daemon reports "not found".
+func (c *Client) nid(id string) string {
+	if n, err := domain.NormalizeID(id, c.Scope); err == nil {
+		return n
+	}
+	return id
+}
+
+func (c *Client) nids(ids []string) []string {
+	if ids == nil {
+		return nil
+	}
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = c.nid(id)
+	}
+	return out
+}
+
+// normalizePayload canonicalises every item ID carried by a request payload so all
+// callers (CLI, TUI, scripts) accept t15 / T15 / t-15 / 15 interchangeably.
+func (c *Client) normalizePayload(payload any) any {
+	switch p := payload.(type) {
+	case protocol.GetTaskPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	case protocol.UpdateTaskPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	case protocol.ClaimTaskPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	case protocol.DeleteTaskPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	case protocol.RestoreTaskPayload:
+		if p.ID != "" && p.ID != "latest" {
+			p.ID = c.nid(p.ID)
+		}
+		return p
+	case protocol.ArchiveTaskPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	case protocol.UnarchiveTaskPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	case protocol.OrphanTaskPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	case protocol.TransferTaskPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	case protocol.AddDependencyPayload:
+		p.TaskID, p.DependsOnID = c.nid(p.TaskID), c.nid(p.DependsOnID)
+		return p
+	case protocol.RemoveDependencyPayload:
+		p.TaskID, p.DependsOnID = c.nid(p.TaskID), c.nid(p.DependsOnID)
+		return p
+	case protocol.GetDependenciesPayload:
+		p.TaskID = c.nid(p.TaskID)
+		return p
+	case protocol.AttachGitPayload:
+		p.TaskID = c.nid(p.TaskID)
+		return p
+	case protocol.CreateTaskPayload:
+		p.DependsOn = c.nids(p.DependsOn)
+		return p
+	case protocol.ListTasksPayload:
+		if p.DependsOn != "" {
+			p.DependsOn = c.nid(p.DependsOn)
+		}
+		if p.Blocks != "" {
+			p.Blocks = c.nid(p.Blocks)
+		}
+		if p.LinksTo != "" && !strings.HasPrefix(p.LinksTo, "@") {
+			p.LinksTo = c.nid(p.LinksTo)
+		}
+		return p
+	case protocol.MoveItemsPayload:
+		p.IDs = c.nids(p.IDs)
+		return p
+	case protocol.PromotePostPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	}
+	return payload
 }

@@ -164,3 +164,40 @@ func TestArchiveAndUnarchiveMock(t *testing.T) {
 
 	<-done
 }
+
+func TestNormalizePayloadCanonicalisesIDs(t *testing.T) {
+	c := &Client{Scope: "local"}
+	got := normalized(t, c, protocol.GetTaskPayload{ID: "t15"})
+	if got.ID != "T-15" {
+		t.Errorf("GetTask id = %q", got.ID)
+	}
+	dep := normalized(t, c, protocol.AddDependencyPayload{TaskID: "15", DependsOnID: "t-3"})
+	if dep.TaskID != "T-15" || dep.DependsOnID != "T-3" {
+		t.Errorf("dep = %+v", dep)
+	}
+	mv := normalized(t, c, protocol.MoveItemsPayload{IDs: []string{"p2", "T9"}})
+	if mv.IDs[0] != "P-2" || mv.IDs[1] != "T-9" {
+		t.Errorf("move ids = %v", mv.IDs)
+	}
+	bad := normalized(t, c, protocol.GetTaskPayload{ID: "garbage"})
+	if bad.ID != "garbage" {
+		t.Errorf("invalid ids must pass through unchanged, got %q", bad.ID)
+	}
+	g := &Client{Scope: "global"}
+	if gid := normalized(t, g, protocol.GetTaskPayload{ID: "7"}).ID; gid != "G-7" {
+		t.Errorf("global bare number = %q", gid)
+	}
+	lst := normalized(t, c, protocol.ListTasksPayload{LinksTo: "@hero"})
+	if lst.LinksTo != "@hero" {
+		t.Errorf("topic link targets must not be touched: %q", lst.LinksTo)
+	}
+}
+
+func normalized[T any](t *testing.T, c *Client, p T) T {
+	t.Helper()
+	out, ok := c.normalizePayload(p).(T)
+	if !ok {
+		t.Fatalf("normalizePayload changed payload type for %T", p)
+	}
+	return out
+}

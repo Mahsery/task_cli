@@ -216,3 +216,35 @@ func LinkTargets(links []WikiLink) []string {
 	}
 	return out
 }
+
+// AnchorText returns the text a link's anchor points at inside task t:
+// the referenced description line(s) or note. ok is false when the anchor is out
+// of range (a "stale" link); links without an anchor return the title.
+func (l WikiLink) AnchorText(t *Task) (text string, ok bool) {
+	if t == nil {
+		return "", false
+	}
+	switch {
+	case l.Note > 0:
+		if l.Note > len(t.Notes) {
+			return "", false
+		}
+		return t.Notes[l.Note-1].Content, true
+	case l.LineStart > 0:
+		lines := strings.Split(t.Description, "\n")
+		if l.LineStart > len(lines) {
+			return "", false
+		}
+		end := l.LineStart
+		if l.LineEnd > end {
+			end = l.LineEnd
+		}
+		stale := false
+		if end > len(lines) {
+			end = len(lines)
+			stale = true
+		}
+		return strings.Join(lines[l.LineStart-1:end], "\n"), !stale
+	}
+	return t.Title, true
+}
