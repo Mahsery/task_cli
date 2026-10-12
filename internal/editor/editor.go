@@ -10,17 +10,24 @@ import (
 )
 
 type ParsedNewTask struct {
-	Title       string
-	Priority    domain.Priority
+	Title    string
+	Priority domain.Priority
+	// Topic is the destination topic path/slug ("" = caller default).
+	Topic string
+	// Tags is parsed from legacy "# Tags:" headers only; tags are deprecated
+	// in favour of topics and new templates no longer emit the header.
 	Tags        []string
 	Assignee    string
 	Description string
 }
 
 type ParsedEditTask struct {
-	Title       string
-	Status      domain.Status
-	Priority    domain.Priority
+	Title    string
+	Status   domain.Status
+	Priority domain.Priority
+	// Topic is the item's topic path after editing ("" or "unfiled" = no topic).
+	Topic string
+	// Tags mirrors the original tags unless a legacy "# Tags:" header is present.
 	Tags        []string
 	Assignee    string
 	Description string
@@ -47,13 +54,19 @@ func writeTempFile(pattern, content string) (string, error) {
 }
 
 func CreateNewTaskFile(initialTitle string) (string, error) {
+	return CreateNewTaskFileInTopic(initialTitle, "")
+}
+
+// CreateNewTaskFileInTopic writes a new-task template whose "# Topic:" header
+// is pre-filled with topic (empty = leave unfiled / caller default).
+func CreateNewTaskFileInTopic(initialTitle, topic string) (string, error) {
 	template := fmt.Sprintf(`# Title: %s
 # Priority: normal (low | normal | high | urgent)
-# Tags: 
+# Topic: %s
 # Assignee: 
 
 Write task description here...
-`, initialTitle)
+`, initialTitle, topic)
 
 	return writeTempFile("tk-new-*.md", template)
 }
@@ -73,7 +86,7 @@ func CreateEditTaskFile(task *domain.Task) (string, error) {
 		fmt.Fprintf(&sb, "# Status: %s (open | in_progress | done | closed)\n", task.Status)
 	}
 	fmt.Fprintf(&sb, "# Priority: %s (low | normal | high | urgent)\n", task.Priority)
-	fmt.Fprintf(&sb, "# Tags: %s\n", strings.Join(task.Tags, ", "))
+	fmt.Fprintf(&sb, "# Topic: %s\n", editTopicValue(task))
 	if task.IsOrphaned() && task.Assignee != "" {
 		fmt.Fprintf(&sb, "# Assignee: %s [STALE / TIMED OUT]\n\n", task.Assignee)
 	} else {
@@ -83,6 +96,14 @@ func CreateEditTaskFile(task *domain.Task) (string, error) {
 	sb.WriteString("\n\n# --- Add new notes/comments below (optional) ---\n")
 
 	return writeTempFile(fmt.Sprintf("tk-edit-%s-*.md", task.ID), sb.String())
+}
+
+// editTopicValue is the "# Topic:" header value for an existing item.
+func editTopicValue(task *domain.Task) string {
+	if task.TopicPath == "" {
+		return domain.UnfiledTopic
+	}
+	return task.TopicPath
 }
 
 func BuildEditorCmd(editorCmd, filePath string) *exec.Cmd {
@@ -196,6 +217,8 @@ func ParseNewTaskContent(content string) (*ParsedNewTask, error) {
 						}
 						res.Priority = p
 					}
+				case "# topic":
+					res.Topic = val
 				case "# tags":
 					if val != "" {
 						for _, p := range strings.Split(val, ",") {
@@ -239,6 +262,7 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 		Title:    orig.Title,
 		Status:   orig.Status,
 		Priority: orig.Priority,
+		Topic:    editTopicValue(orig),
 		Tags:     orig.Tags,
 		Assignee: orig.Assignee,
 	}
@@ -294,6 +318,11 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 						}
 						res.Priority = p
 					}
+				case "# topic":
+					if val == "" {
+						val = domain.UnfiledTopic
+					}
+					res.Topic = val
 				case "# tags":
 					var tags []string
 					if val != "" {

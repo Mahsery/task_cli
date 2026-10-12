@@ -112,6 +112,7 @@ func (d *DB) migrate() error {
 		for _, col := range []struct{ name, ddl string }{
 			{"kind", "ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'task';"},
 			{"topic_id", "ALTER TABLE tasks ADD COLUMN topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL;"},
+			{"orphaned_at", "ALTER TABLE tasks ADD COLUMN orphaned_at DATETIME;"},
 		} {
 			has, err := d.hasColumn("tasks", col.name)
 			if err != nil {
@@ -162,7 +163,8 @@ func (d *DB) migrate() error {
 		diff_stat TEXT NOT NULL DEFAULT '',
 		diff_content TEXT NOT NULL DEFAULT '',
 		kind TEXT NOT NULL DEFAULT 'task',
-		topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL
+		topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
+		orphaned_at DATETIME
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_tasks_scope_repo ON tasks(scope, repo_path, status);
@@ -234,8 +236,17 @@ func (d *DB) migrate() error {
 		return err
 	}
 
-	// v4 backfill: build the wiki-link index for all pre-existing items.
+	// v4 backfill: convert the legacy "orphaned" tag into orphaned_at, then build
+	// the wiki-link index for all pre-existing items.
 	if userVersion < 4 && tableCount > 0 {
+		if _, err := d.conn.Exec(`
+			UPDATE tasks SET
+				orphaned_at = COALESCE(orphaned_at, updated_at),
+				tags = (SELECT COALESCE(json_group_array(value), '[]') FROM json_each(tasks.tags) WHERE lower(value) NOT IN ('orphaned', 'orphan'))
+			WHERE json_valid(tags) AND EXISTS (SELECT 1 FROM json_each(tasks.tags) WHERE lower(value) IN ('orphaned', 'orphan'))
+		`); err != nil {
+			return fmt.Errorf("migration to v4 failed (orphan marker): %w", err)
+		}
 		if err := d.reindexAllLinks(); err != nil {
 			return fmt.Errorf("migration to v4 failed (index links): %w", err)
 		}

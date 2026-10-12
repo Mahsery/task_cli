@@ -32,14 +32,16 @@ var editCmd = &cobra.Command{
 Providing flags updates the specified fields directly; omitting all flags
 opens an interactive buffer with existing values pre-populated.`,
 	Example: `  tk edit T-1 -s in_progress -p urgent
-  tk edit T-1 --add-tag review
-  tk edit T-1 --remove-tag bug
   tk edit T-1 --claim
   tk edit T-1 -m "Patch sent to mailing list"
   tk edit T-1          # Opens full task buffer in $EDITOR`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		taskID := args[0]
+		if cmd.Flags().Changed("tags") || cmd.Flags().Changed("add-tag") || cmd.Flags().Changed("remove-tag") {
+			return fmt.Errorf("tags were replaced by topics; use 'tk move' / 'tk topic' / 'tk topic import-tags'")
+		}
+
+		taskID := normID(args[0])
 		task, err := taskClient.GetTask(taskID)
 		if err != nil {
 			return err
@@ -99,16 +101,6 @@ opens an interactive buffer with existing values pre-populated.`,
 				}
 				payload.Priority = &p
 			}
-			if cmd.Flags().Changed("tags") {
-				tags := splitCommaList(editTags)
-				payload.Tags = &tags
-			}
-			if cmd.Flags().Changed("add-tag") {
-				payload.AddTags = []string{strings.TrimSpace(editAddTag)}
-			}
-			if cmd.Flags().Changed("remove-tag") {
-				payload.RemoveTags = []string{strings.TrimSpace(editRemoveTag)}
-			}
 			if cmd.Flags().Changed("assignee") && !editClaim {
 				payload.Assignee = &editAssignee
 			}
@@ -167,4 +159,7 @@ func init() {
 	editCmd.Flags().StringVarP(&editNote, "note", "m", "", "Append a note/comment")
 	editCmd.Flags().StringVarP(&editNoteAlias, "comment", "n", "", "Append a note/comment (alias for -m, --note)")
 	editCmd.Flags().StringVarP(&editDescription, "desc", "d", "", "Update description")
+	_ = editCmd.Flags().MarkHidden("tags")
+	_ = editCmd.Flags().MarkHidden("add-tag")
+	_ = editCmd.Flags().MarkHidden("remove-tag")
 }

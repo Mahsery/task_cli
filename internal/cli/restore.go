@@ -38,7 +38,7 @@ With --db (or -d), restores the entire task database from the latest or specifie
 			return runRestoreList()
 		}
 
-		taskID := strings.ToUpper(strings.TrimSpace(args[0]))
+		taskID := normID(args[0])
 		task, err := taskClient.RestoreTaskByID(taskID)
 		if err != nil {
 			return fmt.Errorf("failed to restore %s: %w", taskID, err)
@@ -68,18 +68,20 @@ func runRestoreList() error {
 		return nil
 	}
 
-	fmt.Printf("%-8s %-12s %-10s %-40s %s\n", "ID", "STATUS", "PRIORITY", "TITLE", "TAGS")
+	fmt.Printf("%-8s %-12s %-10s %-40s %s\n", "ID", "STATUS", "PRIORITY", "TITLE", "TOPIC")
 	fmt.Println(strings.Repeat("─", 88))
 	for _, t := range tombstones {
-		tagsStr := ""
-		if len(t.Tags) > 0 {
-			tagsStr = fmt.Sprintf("[%s]", strings.Join(t.Tags, ", "))
+		topicStr := "-"
+		if t.TopicPath != "" {
+			topicStr = "@" + t.TopicPath
+		} else if len(t.Tags) > 0 {
+			topicStr = fmt.Sprintf("[%s]", strings.Join(t.Tags, ", "))
 		}
 		title := t.Title
 		if len(title) > 38 {
 			title = title[:35] + "..."
 		}
-		fmt.Printf("%-8s %-12s %-10s %-40s %s\n", t.ID, t.Status, t.Priority, title, tagsStr)
+		fmt.Printf("%-8s %-12s %-10s %-40s %s\n", t.ID, t.Status, t.Priority, title, topicStr)
 	}
 	return nil
 }

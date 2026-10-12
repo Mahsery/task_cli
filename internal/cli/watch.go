@@ -393,7 +393,7 @@ func writeTaskTable(sb *strings.Builder, tasks []*domain.Task, isActiveTable boo
 
 	otherHeader := "ASSIGNEE"
 	if !isActiveTable {
-		otherHeader = "TAGS"
+		otherHeader = "TOPIC"
 	}
 
 	hdr := fmt.Sprintf("%-7s %-8s %-*s %-*s %7s", "ID", "PRI", titleCol, "TITLE", otherCol, otherHeader, "AGE")
@@ -412,8 +412,11 @@ func writeTaskTable(sb *strings.Builder, tasks []*domain.Task, isActiveTable boo
 				otherVal = "-"
 			}
 		} else {
-			otherVal = strings.Join(t.Tags, ",")
-			if otherVal == "" {
+			if t.TopicPath != "" {
+				otherVal = "@" + t.TopicPath
+			} else if len(t.Tags) > 0 {
+				otherVal = strings.Join(t.Tags, ",")
+			} else {
 				otherVal = "-"
 			}
 		}

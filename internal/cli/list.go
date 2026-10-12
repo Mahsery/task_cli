@@ -27,26 +27,54 @@ var (
 	listBlocks    string
 	listOrphaned  bool
 	listArchived  bool
+	listTopicRef  string
+	listRecursive bool
+	listKind      string
+	listPosts     bool
 )
 
 var listCmd = &cobra.Command{
-	Use:     "list [flags]",
+	Use:     "list [@topic] [flags]",
 	Aliases: []string{"ls"},
-	Short:   "List tasks (formatted table, one-liners, or JSON)",
-	Long: `List tasks matching the specified status, priority, tag, assignee, or text query.
-Renders an aligned tabular view by default, or single-line summaries with --short.`,
+	Short:   "List tasks and posts (formatted table, one-liners, or JSON)",
+	Long: `List tasks and posts matching the specified topic, status, priority, assignee, or text query.
+Renders an aligned tabular view by default, or single-line summaries with --short.
+A positional @topic (or --topic) limits the list to one topic; add -r to include sub-topics.`,
 	Example: `  tk list
+  tk ls @hero-system
+  tk ls @game -r
+  tk ls -T bug-reports --posts
+  tk ls -T unfiled
   tk ls -s open -p high
   tk list -s open,in_progress
-  tk list -t backend -q "jwt"
-  tk ls -l backend --short
+  tk list @backend -q "jwt"
+  tk ls @backend --short
   tk list -a alice
   tk ls --orphaned
   tk ls --short --limit 10
   tk -g list --json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("tag") || cmd.Flags().Changed("label") {
+			return fmt.Errorf("tags were replaced by topics; use -T / --topic / 'tk topic'")
+		}
+		for _, a := range args {
+			if !strings.HasPrefix(a, "@") {
+				return fmt.Errorf("unexpected argument %q (topics are written as @topic)", a)
+			}
+			listTopicRef = a
+		}
 		if listTree {
-			return treeCmd.RunE(cmd, args)
+			treeTopic = listTopicRef
+			return treeCmd.RunE(cmd, nil)
+		}
+		kind, err := domain.ParseItemKind(listKind)
+		if err != nil {
+			return err
+		}
+		if listPosts {
+			kind = domain.KindPost
+		} else if listKind == "" {
+			kind = ""
 		}
 
 		tagFilter := listTag
@@ -67,8 +95,11 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 			OnlyOrphaned:    listOrphaned,
 			OnlyArchived:    listArchived,
 			IncludeArchived: listArchived,
-			DependsOn:       listDependsOn,
-			Blocks:          listBlocks,
+			DependsOn:       normIDIfSet(listDependsOn),
+			Blocks:          normIDIfSet(listBlocks),
+			Topic:           listTopicRef,
+			TopicRecursive:  listRecursive,
+			Kind:            kind,
 		}
 
 		if err := applyStatusFilter(&filter, listStatus); err != nil {
@@ -103,6 +134,10 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 				fmt.Printf("No archived tasks found in %s.\n", scopeDesc)
 				return nil
 			}
+			if listTopicRef != "" {
+				fmt.Printf("No matching items in @%s.\n", domain.NormalizeTopicRef(listTopicRef))
+				return nil
+			}
 			fmt.Printf("No tasks found in %s.\n\n", scopeDesc)
 			fmt.Println("Get started:")
 			fmt.Println("  tk new -t \"Task title\"    Create your first task")
@@ -116,7 +151,7 @@ Renders an aligned tabular view by default, or single-line summaries with --shor
 		if listShort {
 			var sb strings.Builder
 			for _, t := range tasks {
-				dispStatus := string(t.Status)
+				dispStatus := t.StatusLabel()
 				if t.IsOrphaned() {
 					dispStatus = "orphan"
 				}
@@ -171,6 +206,12 @@ func init() {
 	listCmd.Flags().StringVar(&listBlocks, "blocks", "", "Show tasks that are prerequisite blockers for the specified task ID")
 	listCmd.Flags().BoolVar(&listOrphaned, "orphaned", false, "Show only tasks marked as orphaned")
 	listCmd.Flags().BoolVar(&listArchived, "archived", false, "Show archived tasks")
+	listCmd.Flags().StringVarP(&listTopicRef, "topic", "T", "", "Only items in this topic (path, slug or 'unfiled')")
+	listCmd.Flags().BoolVarP(&listRecursive, "recursive", "r", false, "With --topic, include items in sub-topics")
+	listCmd.Flags().StringVar(&listKind, "kind", "", "Only items of this kind (task, post)")
+	listCmd.Flags().BoolVar(&listPosts, "posts", false, "Only posts (same as --kind post)")
+	_ = listCmd.Flags().MarkHidden("tag")
+	_ = listCmd.Flags().MarkHidden("label")
 }
 
 func formatAge(t time.Time) string {

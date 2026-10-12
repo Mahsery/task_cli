@@ -925,15 +925,13 @@ func TestOrphanTask(t *testing.T) {
 		t.Errorf("expected status open, got %s", orphaned.Status)
 	}
 
-	hasOrphanTag := false
+	if orphaned.OrphanedAt == nil || !orphaned.IsOrphaned() {
+		t.Errorf("expected orphaned_at marker to be set and the task classified as orphaned")
+	}
 	for _, tag := range orphaned.Tags {
 		if tag == "orphaned" {
-			hasOrphanTag = true
-			break
+			t.Errorf("orphaning must no longer write the legacy 'orphaned' tag: %v", orphaned.Tags)
 		}
-	}
-	if !hasOrphanTag {
-		t.Errorf("expected 'orphaned' tag in tags %v", orphaned.Tags)
 	}
 
 	// Verify note was added

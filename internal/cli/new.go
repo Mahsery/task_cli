@@ -22,6 +22,7 @@ var (
 	newMessage     string
 	newDescription string
 	newDependsOn   string
+	newTopic       string
 )
 
 var newCmd = &cobra.Command{
@@ -31,11 +32,16 @@ var newCmd = &cobra.Command{
 If no flags are provided and input is not piped, opens $EDITOR with a template.
 Supports piped input from stdin, where the first line becomes the title
 and subsequent lines form the description.`,
-	Example: `  tk new -t "Fix auth crash" -p high -l bug,auth
+	Example: `  tk new -t "Fix auth crash" -p high -T bugs
   tk new -t "Refactor storage" -m "Migrate to WAL mode"
   echo -e "Update docs\nInclude quickstart" | tk new
+  tk new -t "Ultimate ability" -T hero-system --after T-12
   tk new              # Opens interactive editor ($EDITOR)`,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if cmd.Flags().Changed("tags") {
+			return fmt.Errorf("tags were replaced by topics; use -T/--topic or 'tk topic import-tags'")
+		}
+
 		var title string
 		var prio = domain.PriorityNormal
 		var tags []string
@@ -52,7 +58,6 @@ and subsequent lines form the description.`,
 
 		hasFlags := cmd.Flags().Changed("title") ||
 			cmd.Flags().Changed("priority") ||
-			cmd.Flags().Changed("tags") ||
 			cmd.Flags().Changed("assignee") ||
 			cmd.Flags().Changed("message") ||
 			cmd.Flags().Changed("desc")
@@ -132,7 +137,12 @@ and subsequent lines form the description.`,
 
 		var dependsOn []string
 		if newDependsOn != "" {
-			dependsOn = splitCommaList(newDependsOn)
+			dependsOn = normIDs(splitCommaList(newDependsOn))
+		}
+
+		topic := newTopic
+		if !cmd.Flags().Changed("topic") {
+			topic = defaultTopicFor(domain.KindTask)
 		}
 
 		task, err := taskClient.CreateTask(protocol.CreateTaskPayload{
@@ -144,6 +154,7 @@ and subsequent lines form the description.`,
 			Author:      author,
 			Assignee:    assignee,
 			DependsOn:   dependsOn,
+			Topic:       topic,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create task: %w", err)
@@ -153,7 +164,7 @@ and subsequent lines form the description.`,
 			return outputJSON(task)
 		}
 
-		fmt.Printf("✓ Created %s: %s\n", task.ID, task.Title)
+		fmt.Printf("✓ Created %s: %s%s\n", task.ID, task.Title, topicSuffix(task))
 		if len(task.DependsOn) > 0 {
 			if task.IsBlocked {
 				fmt.Printf("  🔒 Blocked by unfinished prerequisite(s): [%s]\n", strings.Join(task.BlockedBy, ", "))
@@ -175,4 +186,6 @@ func init() {
 	newCmd.Flags().StringVarP(&newDescription, "desc", "d", "", "Task description")
 	newCmd.Flags().StringVar(&newDependsOn, "after", "", "Comma-separated list of prerequisite task IDs that this task depends on")
 	newCmd.Flags().StringVar(&newDependsOn, "depends-on", "", "Alias for --after")
+	newCmd.Flags().StringVarP(&newTopic, "topic", "T", "", "Tasks topic to create the task in (default: 'tk topic use' topic, else unfiled)")
+	_ = newCmd.Flags().MarkHidden("tags")
 }

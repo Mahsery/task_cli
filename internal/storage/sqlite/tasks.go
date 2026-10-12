@@ -190,17 +190,17 @@ type rowScanner interface {
 
 const (
 	taskColumns = `id, scope, repo_path, title, description, status, priority, tags, author, assignee,
-	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id`
+	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id, orphaned_at`
 
 	taskColumnsSummary = `id, scope, repo_path, title, description, status, priority, tags, author, assignee,
-	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, '' AS diff_content, kind, topic_id`
+	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, '' AS diff_content, kind, topic_id, orphaned_at`
 )
 
 func taskColumnsPrefixed(prefix string) string {
 	cols := []string{
 		"id", "scope", "repo_path", "title", "description", "status", "priority", "tags", "author", "assignee",
 		"created_at", "updated_at", "closed_at", "archived_at", "commit_sha", "commit_msg", "diff_stat", "diff_content",
-		"kind", "topic_id",
+		"kind", "topic_id", "orphaned_at",
 	}
 	if prefix == "" {
 		return strings.Join(cols, ", ")
@@ -213,7 +213,7 @@ func taskColumnsPrefixed(prefix string) string {
 
 func scanTask(s rowScanner, task *domain.Task) error {
 	var statusStr, priorityStr, tagsJSON, kindStr string
-	var closedAt, archivedAt sql.NullTime
+	var closedAt, archivedAt, orphanedAt sql.NullTime
 	var topicID sql.NullInt64
 
 	err := s.Scan(
@@ -221,7 +221,7 @@ func scanTask(s rowScanner, task *domain.Task) error {
 		&statusStr, &priorityStr, &tagsJSON, &task.Author, &task.Assignee,
 		&task.CreatedAt, &task.UpdatedAt, &closedAt, &archivedAt,
 		&task.CommitSHA, &task.CommitMsg, &task.DiffStat, &task.DiffContent,
-		&kindStr, &topicID,
+		&kindStr, &topicID, &orphanedAt,
 	)
 	if err != nil {
 		return err
@@ -233,6 +233,9 @@ func scanTask(s rowScanner, task *domain.Task) error {
 	}
 	if topicID.Valid {
 		task.TopicID = topicID.Int64
+	}
+	if orphanedAt.Valid {
+		task.OrphanedAt = &orphanedAt.Time
 	}
 
 	task.Status = domain.Status(statusStr)
@@ -563,7 +566,7 @@ func (d *DB) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
 		newStatus = string(domain.StatusInProgress)
 	}
 
-	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, tags = ?, updated_at = ? WHERE id = ?"
+	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, tags = ?, orphaned_at = NULL, updated_at = ? WHERE id = ?"
 	if _, err := tx.Exec(updateSQL, assignee, newStatus, string(newTagsBytes), now, id); err != nil {
 		return nil, fmt.Errorf("failed to claim task: %w", err)
 	}
@@ -591,39 +594,22 @@ func (d *DB) orphanTaskLocked(id, actor, reason string, now time.Time) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var currentAssignee, currentStatus, currentTagsJSON string
-	query := "SELECT assignee, status, tags FROM tasks WHERE id = ?"
-	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus, &currentTagsJSON); err != nil {
+	var currentAssignee, currentStatus string
+	query := "SELECT assignee, status FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("task %s not found", id)
 		}
 		return fmt.Errorf("failed to query task: %w", err)
 	}
 
-	var tags []string
-	if err := json.Unmarshal([]byte(currentTagsJSON), &tags); err != nil {
-		tags = []string{}
-	}
-
-	hasOrphanTag := false
-	for _, tag := range tags {
-		if strings.EqualFold(tag, "orphaned") {
-			hasOrphanTag = true
-			break
-		}
-	}
-	if !hasOrphanTag {
-		tags = append(tags, "orphaned")
-	}
-	newTagsBytes, _ := json.Marshal(tags)
-
 	newStatus := currentStatus
 	if currentStatus == string(domain.StatusInProgress) {
 		newStatus = string(domain.StatusOpen)
 	}
 
-	updateSQL := "UPDATE tasks SET assignee = '', status = ?, tags = ?, updated_at = ? WHERE id = ?"
-	if _, err := tx.Exec(updateSQL, newStatus, string(newTagsBytes), now, id); err != nil {
+	updateSQL := "UPDATE tasks SET assignee = '', status = ?, orphaned_at = ?, updated_at = ? WHERE id = ?"
+	if _, err := tx.Exec(updateSQL, newStatus, now, now, id); err != nil {
 		return fmt.Errorf("failed to orphan task: %w", err)
 	}
 
@@ -711,7 +697,7 @@ func (d *DB) TransferTask(id, fromActor, toAssignee, note string, _ bool) (*doma
 		newStatus = string(domain.StatusInProgress)
 	}
 
-	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, tags = ?, updated_at = ? WHERE id = ?"
+	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, tags = ?, orphaned_at = NULL, updated_at = ? WHERE id = ?"
 	if _, err := tx.Exec(updateSQL, toAssignee, newStatus, string(newTagsBytes), now, id); err != nil {
 		return nil, fmt.Errorf("failed to transfer task: %w", err)
 	}
@@ -1169,7 +1155,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 	if filter.OnlyReady || filter.OnlyBlocked || filter.OnlyOrphaned || statusUnionOrphan || filter.DependsOn != "" || filter.Blocks != "" {
 		var filtered []*domain.Task
 		for _, t := range tasks {
-			if filter.OnlyReady && (t.Status != domain.StatusOpen || t.IsBlocked) {
+			if filter.OnlyReady && (t.Status != domain.StatusOpen || t.IsBlocked || t.IsPost()) {
 				continue
 			}
 			if filter.OnlyBlocked && !t.IsBlocked {
@@ -1328,9 +1314,12 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		tagsJSON = []byte("[]")
 	}
 
-	var closedAt, archivedAt any
+	var closedAt, archivedAt, orphanedAt any
 	if task.ClosedAt != nil {
 		closedAt = *task.ClosedAt
+	}
+	if task.OrphanedAt != nil {
+		orphanedAt = *task.OrphanedAt
 	}
 	if task.ArchivedAt != nil {
 		archivedAt = *task.ArchivedAt
@@ -1366,8 +1355,8 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 	insertSQL := `
 	INSERT INTO tasks (
 		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at, archived_at,
-		commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id, orphaned_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		scope = excluded.scope,
 		repo_path = excluded.repo_path,
@@ -1388,13 +1377,14 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		diff_stat = excluded.diff_stat,
 		diff_content = excluded.diff_content,
 		kind = excluded.kind,
-		topic_id = excluded.topic_id
+		topic_id = excluded.topic_id,
+		orphaned_at = excluded.orphaned_at
 	`
 	_, err = tx.Exec(insertSQL,
 		task.ID, task.Scope, task.RepoPath, seqNum, task.Title, task.Description,
 		string(task.Status), string(task.Priority), string(tagsJSON), task.Author, task.Assignee,
 		task.CreatedAt, task.UpdatedAt, closedAt, archivedAt,
-		task.CommitSHA, task.CommitMsg, task.DiffStat, task.DiffContent, string(kind), topicID,
+		task.CommitSHA, task.CommitMsg, task.DiffStat, task.DiffContent, string(kind), topicID, orphanedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert restored task: %w", err)

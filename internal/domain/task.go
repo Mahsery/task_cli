@@ -116,6 +116,7 @@ type Task struct {
 	UpdatedAt   time.Time  `json:"updated_at"`
 	ClosedAt    *time.Time `json:"closed_at,omitempty"`
 	ArchivedAt  *time.Time `json:"archived_at,omitempty"`
+	OrphanedAt  *time.Time `json:"orphaned_at,omitempty"` // set when the task was explicitly orphaned/reaped; cleared on claim
 
 	// Git integration (Linux kernel style)
 	CommitSHA   string `json:"commit_sha,omitempty"`
@@ -212,6 +213,10 @@ func (t *Task) IsOrphaned() bool {
 	if strings.EqualFold(string(t.Status), "orphan") || strings.EqualFold(string(t.Status), "orphaned") {
 		return true
 	}
+	if t.OrphanedAt != nil {
+		return true
+	}
+	// Legacy marker from before schema v4 (tags are being phased out).
 	for _, tag := range t.Tags {
 		if strings.EqualFold(tag, "orphaned") || strings.EqualFold(tag, "orphan") {
 			return true

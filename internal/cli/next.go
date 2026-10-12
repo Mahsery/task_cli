@@ -65,7 +65,9 @@ Ideal for AI agents, CI runners, and developers asking 'what should I work on ne
 			fmt.Println(strings.Repeat(sep, 80))
 			fmt.Printf("Title:    %s\n", target.Title)
 			fmt.Printf("Status:   %-12s Priority: %-12s\n", strings.ToUpper(string(target.Status)), strings.ToUpper(string(target.Priority)))
-			if len(target.Tags) > 0 {
+			if target.TopicPath != "" {
+				fmt.Printf("Topic:    @%s\n", target.TopicPath)
+			} else if len(target.Tags) > 0 {
 				fmt.Printf("Tags:     [%s]\n", strings.Join(target.Tags, ", "))
 			}
 			if target.Assignee != "" {

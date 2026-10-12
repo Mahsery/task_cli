@@ -417,3 +417,60 @@ func TestMigrationFromV3AddsTopicsAndIndexesLinks(t *testing.T) {
 		t.Errorf("expected a pre-upgrade snapshot, found %v", matches)
 	}
 }
+
+func TestOrphanMarkerSetByOrphanAndClearedByClaim(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+	it := mustItem(t, db, CreateItemParams{Title: "work", Assignee: "a", Status: domain.StatusInProgress, Tags: []string{"keep"}})
+	orphaned, err := db.OrphanTask(it.ID, "reaper", "gone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orphaned.OrphanedAt == nil || !orphaned.IsOrphaned() || !reflect.DeepEqual(orphaned.Tags, []string{"keep"}) {
+		t.Fatalf("orphan marker wrong: at=%v tags=%v", orphaned.OrphanedAt, orphaned.Tags)
+	}
+	claimed, err := db.ClaimTask(it.ID, "b", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.OrphanedAt != nil || claimed.IsOrphaned() {
+		t.Error("claiming must clear the orphan marker")
+	}
+}
+
+func TestMigrationConvertsLegacyOrphanTag(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "v3.db")
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.Exec(`
+	CREATE TABLE tasks (id TEXT PRIMARY KEY, scope TEXT NOT NULL, repo_path TEXT NOT NULL DEFAULT '', seq_num INTEGER NOT NULL DEFAULT 0,
+		title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', priority TEXT NOT NULL DEFAULT 'normal',
+		tags TEXT NOT NULL DEFAULT '[]', author TEXT NOT NULL DEFAULT '', assignee TEXT NOT NULL DEFAULT '', created_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL, closed_at DATETIME, archived_at DATETIME, commit_sha TEXT NOT NULL DEFAULT '',
+		commit_msg TEXT NOT NULL DEFAULT '', diff_stat TEXT NOT NULL DEFAULT '', diff_content TEXT NOT NULL DEFAULT '');
+	INSERT INTO tasks (id, scope, seq_num, title, tags, created_at, updated_at) VALUES
+		('T-1', 'local', 1, 'stale', '["bug","orphaned"]', '2026-01-01', '2026-01-02'),
+		('T-2', 'local', 2, 'fine', '["bug"]', '2026-01-01', '2026-01-02');
+	PRAGMA user_version = 3;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	one, _ := db.GetTask("T-1")
+	if one.OrphanedAt == nil || !reflect.DeepEqual(one.Tags, []string{"bug"}) {
+		t.Errorf("legacy tag should become orphaned_at and be stripped: at=%v tags=%v", one.OrphanedAt, one.Tags)
+	}
+	two, _ := db.GetTask("T-2")
+	if two.OrphanedAt != nil || !reflect.DeepEqual(two.Tags, []string{"bug"}) {
+		t.Errorf("untagged task must be untouched: at=%v tags=%v", two.OrphanedAt, two.Tags)
+	}
+}
