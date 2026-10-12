@@ -161,11 +161,6 @@ func isTaskOrphaned(t *domain.Task) bool {
 	if t == nil || t.IsArchived() {
 		return false
 	}
-	for _, tag := range t.Tags {
-		if strings.EqualFold(tag, "orphaned") {
-			return true
-		}
-	}
 	return t.IsOrphaned()
 }
 

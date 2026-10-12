@@ -34,8 +34,8 @@ on each specified prerequisite task. Cycles in dependencies are strictly rejecte
   tk dep add T-3 T-1 T-2`,
 	Args: cobra.MinimumNArgs(2),
 	RunE: func(_ *cobra.Command, args []string) error {
-		taskID := args[0]
-		prereqs := args[1:]
+		taskID := normID(args[0])
+		prereqs := normIDs(args[1:])
 
 		for _, prereqID := range prereqs {
 			if err := taskClient.AddDependency(taskID, prereqID); err != nil {
@@ -55,8 +55,8 @@ var depRmCmd = &cobra.Command{
 	Example: `  tk dep rm T-2 T-1`,
 	Args:    cobra.MinimumNArgs(2),
 	RunE: func(_ *cobra.Command, args []string) error {
-		taskID := args[0]
-		prereqs := args[1:]
+		taskID := normID(args[0])
+		prereqs := normIDs(args[1:])
 
 		for _, prereqID := range prereqs {
 			if err := taskClient.RemoveDependency(taskID, prereqID); err != nil {
@@ -76,7 +76,7 @@ var depShowCmd = &cobra.Command{
 	Example: `  tk dep show T-2`,
 	Args:    cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
-		taskID := args[0]
+		taskID := normID(args[0])
 		task, err := taskClient.GetTask(taskID)
 		if err != nil {
 			return err

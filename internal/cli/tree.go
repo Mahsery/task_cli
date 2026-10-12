@@ -13,16 +13,29 @@ var (
 	treeStatus  string
 	treeReverse bool
 	treeAll     bool
+	treeTopic   string
 )
 
 // TreeNode represents a node in the tree hierarchy for JSON and rendering.
+//
+// Dependencies form a graph (a task may unblock many tasks and depend on many),
+// so a task reachable along several paths is rendered in full once; later
+// occurrences are Pointer nodes. When a topic is selected, related tasks that
+// live in other topics appear as Ghost leaf nodes, and roots list their
+// out-of-topic prerequisites in After.
 type TreeNode struct {
 	Task     *domain.Task `json:"task"`
 	Children []*TreeNode  `json:"children,omitempty"`
+	Pointer  bool         `json:"pointer,omitempty"`
+	Ghost    bool         `json:"ghost,omitempty"`
+	After    []string     `json:"after,omitempty"`
 }
 
+// ghostLookup resolves a task outside the rendered set (nil disables ghost nodes).
+type ghostLookup func(id string) *domain.Task
+
 var treeCmd = &cobra.Command{
-	Use:     "tree [task-id] [flags]",
+	Use:     "tree [task-id|@topic] [flags]",
 	Aliases: []string{"dag"},
 	Short:   "Render hierarchical dependency tree of tasks",
 	Long: `Display tasks in a hierarchical tree view based on dependency relationships.
@@ -32,16 +45,38 @@ Use --reverse to view prerequisite breakdown (tasks flow into the prerequisites 
   tk tree T-1                  # View subtree rooted at T-1
   tk tree -r                   # Reverse view: tasks -> required prerequisites
   tk tree -s open,in_progress  # View active tasks only
+  tk tree @hero-system         # One topic; cross-topic deps shown as ⇢ ghost nodes
   tk tree --json               # Export hierarchical tree as JSON`,
 	RunE: func(_ *cobra.Command, args []string) error {
 		var rootID string
 		if len(args) > 0 {
-			rootID = args[0]
+			if strings.HasPrefix(args[0], "@") {
+				treeTopic = args[0]
+			} else {
+				rootID = normID(args[0])
+			}
 		}
 
 		filter := domain.TaskFilter{
 			Scope:    scope,
 			RepoPath: repoRoot,
+			Topic:    treeTopic,
+			Kind:     domain.KindTask,
+		}
+		var lookup ghostLookup
+		if treeTopic != "" {
+			cache := map[string]*domain.Task{}
+			lookup = func(id string) *domain.Task {
+				if t, ok := cache[id]; ok {
+					return t
+				}
+				t, err := taskClient.GetTask(id)
+				if err != nil {
+					t = nil
+				}
+				cache[id] = t
+				return t
+			}
 		}
 		if err := applyStatusFilter(&filter, treeStatus); err != nil {
 			return err
@@ -74,9 +109,9 @@ Use --reverse to view prerequisite breakdown (tasks flow into the prerequisites 
 				rootTask = rt
 				taskMap[rootID] = rt
 			}
-			roots = append(roots, buildSubtree(rootTask, taskMap, treeReverse, make(map[string]bool), make(map[string]bool)))
+			roots = append(roots, buildSubtree(rootTask, taskMap, treeReverse, make(map[string]bool), make(map[string]bool), lookup))
 		} else {
-			roots = buildForest(tasks, taskMap, treeReverse)
+			roots = buildForestWith(tasks, taskMap, treeReverse, lookup)
 		}
 
 		if jsonFlag {
@@ -85,6 +120,9 @@ Use --reverse to view prerequisite breakdown (tasks flow into the prerequisites 
 
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Task Dependency Tree (%s scope)\n", scope)
+		if treeTopic != "" {
+			fmt.Fprintf(&sb, "Topic: @%s  (⇢ = task in another topic, ↪ = shown above)\n", domain.NormalizeTopicRef(treeTopic))
+		}
 		if treeReverse {
 			sb.WriteString("Mode: Prerequisite Breakdown (Task -> Needs)\n")
 		} else {
@@ -106,6 +144,10 @@ Use --reverse to view prerequisite breakdown (tasks flow into the prerequisites 
 }
 
 func buildForest(tasks []*domain.Task, taskMap map[string]*domain.Task, reverse bool) []*TreeNode {
+	return buildForestWith(tasks, taskMap, reverse, nil)
+}
+
+func buildForestWith(tasks []*domain.Task, taskMap map[string]*domain.Task, reverse bool, ghost ghostLookup) []*TreeNode {
 	var roots []*TreeNode
 	visited := make(map[string]bool)
 
@@ -140,7 +182,7 @@ func buildForest(tasks []*domain.Task, taskMap map[string]*domain.Task, reverse 
 
 		if isRoot && !visited[t.ID] {
 			branchVisited := make(map[string]bool)
-			node := buildSubtree(t, taskMap, reverse, branchVisited, visited)
+			node := buildSubtree(t, taskMap, reverse, branchVisited, visited, ghost)
 			roots = append(roots, node)
 		}
 	}
@@ -149,14 +191,34 @@ func buildForest(tasks []*domain.Task, taskMap map[string]*domain.Task, reverse 
 	for _, t := range tasks {
 		if !visited[t.ID] {
 			branchVisited := make(map[string]bool)
-			roots = append(roots, buildSubtree(t, taskMap, reverse, branchVisited, visited))
+			roots = append(roots, buildSubtree(t, taskMap, reverse, branchVisited, visited, ghost))
+		}
+	}
+
+	// Roots whose upstream lives in other topics: name those tasks.
+	if ghost != nil {
+		for _, r := range roots {
+			upstream := r.Task.DependsOn
+			if reverse {
+				upstream = r.Task.Blocks
+			}
+			for _, id := range upstream {
+				if _, in := taskMap[id]; in {
+					continue
+				}
+				label := id
+				if g := ghost(id); g != nil && g.TopicPath != "" {
+					label += " @" + g.TopicPath
+				}
+				r.After = append(r.After, label)
+			}
 		}
 	}
 
 	return roots
 }
 
-func buildSubtree(task *domain.Task, taskMap map[string]*domain.Task, reverse bool, branchVisited, allVisited map[string]bool) *TreeNode {
+func buildSubtree(task *domain.Task, taskMap map[string]*domain.Task, reverse bool, branchVisited, allVisited map[string]bool, ghost ghostLookup) *TreeNode {
 	node := &TreeNode{Task: task}
 	branchVisited[task.ID] = true
 	allVisited[task.ID] = true
@@ -171,17 +233,27 @@ func buildSubtree(task *domain.Task, taskMap map[string]*domain.Task, reverse bo
 	for _, cid := range childIDs {
 		childTask, ok := taskMap[cid]
 		if !ok {
+			if ghost != nil {
+				if g := ghost(cid); g != nil {
+					node.Children = append(node.Children, &TreeNode{Task: g, Ghost: true})
+				}
+			}
 			continue
 		}
 		// Prevent cycle loops in branch rendering
 		if branchVisited[cid] {
 			continue
 		}
+		// Already rendered via another parent: point at it instead of repeating the subtree.
+		if allVisited[cid] {
+			node.Children = append(node.Children, &TreeNode{Task: childTask, Pointer: true})
+			continue
+		}
 		childBranchVisited := make(map[string]bool, len(branchVisited)+1)
 		for k, v := range branchVisited {
 			childBranchVisited[k] = v
 		}
-		childNode := buildSubtree(childTask, taskMap, reverse, childBranchVisited, allVisited)
+		childNode := buildSubtree(childTask, taskMap, reverse, childBranchVisited, allVisited, ghost)
 		node.Children = append(node.Children, childNode)
 	}
 
@@ -211,6 +283,23 @@ func renderTreeNode(sb *strings.Builder, node *TreeNode, prefix string, isLast, 
 	}
 
 	t := node.Task
+	if node.Pointer || node.Ghost {
+		glyph, suffix := "↪", "(shown above)"
+		if ascii {
+			glyph = "->"
+		}
+		if node.Ghost {
+			glyph, suffix = "⇢", fmt.Sprintf("[%s] @%s", strings.ToUpper(t.StatusLabel()), t.TopicPath)
+			if t.TopicPath == "" {
+				suffix = fmt.Sprintf("[%s] (unfiled)", strings.ToUpper(t.StatusLabel()))
+			}
+			if ascii {
+				glyph = "=>"
+			}
+		}
+		fmt.Fprintf(sb, "%s%s %s %s %s\n", linePrefix, glyph, t.ID, t.Title, suffix)
+		return
+	}
 	statusBadge := fmt.Sprintf("[%s]", strings.ToUpper(string(t.Status)))
 	blockBadge := ""
 	if t.IsBlocked {
@@ -230,8 +319,12 @@ func renderTreeNode(sb *strings.Builder, node *TreeNode, prefix string, isLast, 
 	}
 
 	tagsStr := ""
-	if len(t.Tags) > 0 {
-		tagsStr = fmt.Sprintf(" [%s]", strings.Join(t.Tags, ", "))
+	if len(node.After) > 0 {
+		arrow := "⇠"
+		if ascii {
+			arrow = "<="
+		}
+		tagsStr = fmt.Sprintf(" %s after %s", arrow, strings.Join(node.After, ", "))
 	}
 
 	prioStr := fmt.Sprintf("(%s)", t.Priority)
@@ -262,6 +355,7 @@ func init() {
 	treeCmd.Flags().StringVarP(&treeStatus, "status", "s", "", "Filter tasks by status, comma-separated for multiple (open, in_progress, done, closed, orphan)")
 	treeCmd.Flags().BoolVarP(&treeReverse, "reverse", "r", false, "Show reverse tree (prerequisite breakdown)")
 	treeCmd.Flags().BoolVarP(&treeAll, "all", "a", false, "Include closed and done tasks")
+	treeCmd.Flags().StringVarP(&treeTopic, "topic", "T", "", "Only tasks in this topic; related tasks elsewhere appear as ghost nodes")
 
 	// Add 'tree' as subcommand of depCmd too: 'tk dep tree'
 	depCmd.AddCommand(treeCmd)

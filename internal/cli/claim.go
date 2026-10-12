@@ -26,7 +26,7 @@ To hand off or transfer a task to another collaborator, use 'tk transfer'.`,
   tk takeover T-1 -m "Taking over implementation"`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
-		taskID := args[0]
+		taskID := normID(args[0])
 
 		actor := resolveActor(claimActor)
 

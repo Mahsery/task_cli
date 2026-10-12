@@ -194,3 +194,37 @@ func TestSearchDSLNilGuards(t *testing.T) {
 		t.Error("nil notNode should evaluate to true safely")
 	}
 }
+
+func TestTopicKindAndLinkQualifiers(t *testing.T) {
+	hero := &domain.Task{ID: "T-1", Scope: "local", Kind: domain.KindTask, TopicPath: "game/hero-system", Links: []string{"P-2", "@ui"}}
+	post := &domain.Task{ID: "P-2", Scope: "local", Kind: domain.KindPost, TopicPath: "bug-reports", Backlinks: []string{"T-1"}}
+	loose := &domain.Task{ID: "T-3", Scope: "local"}
+
+	cases := []struct {
+		q    string
+		task *domain.Task
+		want bool
+	}{
+		{"topic:game", hero, true},
+		{"topic:game/hero-system", hero, true},
+		{"topic:hero-system", hero, true},
+		{"topic:hero", hero, false},
+		{"topic:@Bug-Reports", post, true},
+		{"topic:unfiled", loose, true},
+		{"topic:unfiled", hero, false},
+		{"kind:post", post, true},
+		{"kind:post", hero, false},
+		{"kind:task", loose, true},
+		{"links:p2", hero, true},
+		{"links:@ui", hero, true},
+		{"links:T-9", hero, false},
+		{"linkedfrom:t1", post, true},
+		{"kind:post AND topic:bug-reports", post, true},
+		{"NOT kind:post", hero, true},
+	}
+	for _, c := range cases {
+		if got := Compile(c.q).Match(c.task); got != c.want {
+			t.Errorf("%q on %s = %v, want %v", c.q, c.task.ID, got, c.want)
+		}
+	}
+}

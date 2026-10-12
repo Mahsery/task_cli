@@ -31,7 +31,7 @@ Use --diff to snapshot uncommitted working tree changes, or --no-commit to skip 
   tk done T-1 --no-commit      # Mark done without attaching git info`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
-		taskID := args[0]
+		taskID := normID(args[0])
 
 		var sha, msg, stat, diff string
 		autoHead := false

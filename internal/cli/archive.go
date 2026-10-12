@@ -56,7 +56,7 @@ Archived tasks can be restored anytime with 'tk unarchive <id...>' or 'tk archiv
 
 		var archivedTasks []*domain.Task
 		for _, arg := range args {
-			id := strings.TrimSpace(arg)
+			id := normID(strings.TrimSpace(arg))
 			if id == "" {
 				continue
 			}
@@ -160,7 +160,7 @@ func runUnarchive(args []string, explicitActor, message string) error {
 
 	var unarchivedTasks []*domain.Task
 	for _, arg := range args {
-		id := strings.TrimSpace(arg)
+		id := normID(strings.TrimSpace(arg))
 		if id == "" {
 			continue
 		}

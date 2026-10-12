@@ -56,7 +56,7 @@ When a task is orphaned:
 
 		// 1. Manually orphan a specific task by ID
 		if len(args) == 1 {
-			taskID := args[0]
+			taskID := normID(args[0])
 			task, err := taskClient.OrphanTask(taskID, actor, orphanMessage)
 			if err != nil {
 				return err

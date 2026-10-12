@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"task_cli/internal/domain"
 	"task_cli/internal/termutil"
@@ -42,7 +41,11 @@ func renderTaskTable(tasks []*domain.Task) {
 			}
 		}
 		title := termutil.Truncate(rawTitle, titleW)
-		tags := termutil.Truncate(strings.Join(t.Tags, ","), 16)
+		topic := "-"
+		if t.TopicPath != "" {
+			topic = "@" + t.TopicPath
+		}
+		topic = termutil.Truncate(topic, 18)
 		age := formatAge(t.CreatedAt)
 		if t.CommitSHA != "" {
 			sha := t.CommitSHA
@@ -51,7 +54,7 @@ func renderTaskTable(tasks []*domain.Task) {
 			}
 			age = fmt.Sprintf("%s (%s)", age, sha)
 		}
-		status := string(t.Status)
+		status := t.StatusLabel()
 		if t.IsOrphaned() {
 			status = "orphan"
 		}
@@ -60,7 +63,7 @@ func renderTaskTable(tasks []*domain.Task) {
 			status,
 			string(t.Priority),
 			title,
-			tags,
+			topic,
 			age,
 		})
 	}
@@ -85,7 +88,7 @@ func renderTaskTable(tasks []*domain.Task) {
 			}
 			return s
 		}).
-		Headers("ID", "STATUS", "PRI", "TITLE", "TAGS", "AGE").
+		Headers("ID", "STATUS", "PRI", "TITLE", "TOPIC", "AGE").
 		Rows(rows...)
 
 	_ = PrintWithPager(tbl.Render() + "\n")

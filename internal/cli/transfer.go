@@ -26,7 +26,7 @@ to 'in_progress', and appends an audit note documenting the transfer.`,
   tk transfer T-1 --to bob -m "Need help with frontend UI"`,
 	Args: cobra.RangeArgs(1, 2),
 	RunE: func(_ *cobra.Command, args []string) error {
-		taskID := args[0]
+		taskID := normID(args[0])
 		newAssignee := transferTo
 		if len(args) == 2 {
 			newAssignee = args[1]

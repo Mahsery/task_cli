@@ -209,6 +209,29 @@ func (n *termNode) Eval(task *domain.Task) bool {
 	case "id":
 		return strings.Contains(strings.ToLower(task.ID), target)
 
+	case "topic", "in":
+		ref := domain.NormalizeTopicRef(target)
+		if ref == domain.UnfiledTopic {
+			return task.TopicPath == ""
+		}
+		// Matches the topic itself or any sub-topic: topic:game matches game/hero-system.
+		return task.TopicPath == ref || strings.HasPrefix(task.TopicPath, ref+"/") ||
+			strings.HasSuffix(task.TopicPath, "/"+ref) || strings.Contains(task.TopicPath, "/"+ref+"/")
+
+	case "kind", "type":
+		kind := task.Kind
+		if kind == "" {
+			kind = domain.KindTask
+		}
+		want, err := domain.ParseItemKind(target)
+		return err == nil && kind == want
+
+	case "links", "linksto", "link":
+		return containsLinkTarget(task.Links, target, task.Scope)
+
+	case "linkedfrom", "backlink", "backlinks":
+		return containsLinkTarget(task.Backlinks, target, task.Scope)
+
 	default:
 		// General match: ID, Title, Description, Tags, Assignee, Author, Notes, Orphaned state
 		if (target == "orphan" || target == "orphaned") && task.IsOrphaned() {
@@ -357,7 +380,8 @@ func (p *parser) parsePrimary() Node {
 			field := strings.ToLower(val[:idx])
 			termVal := val[idx+1:]
 			switch field {
-			case "tag", "t", "status", "s", "priority", "pri", "p", "assignee", "a", "author", "id":
+			case "tag", "t", "status", "s", "priority", "pri", "p", "assignee", "a", "author", "id",
+				"topic", "in", "kind", "type", "links", "linksto", "link", "linkedfrom", "backlink", "backlinks":
 				return &termNode{field: field, val: termVal}
 			}
 		}
@@ -410,4 +434,19 @@ func (q *Query) Match(task *domain.Task) bool {
 // If query is empty, it returns true.
 func Match(query string, task *domain.Task) bool {
 	return Compile(query).Match(task)
+}
+
+// containsLinkTarget reports whether targets contains the (forgivingly written) item ID or @topic.
+func containsLinkTarget(targets []string, want, scope string) bool {
+	if strings.HasPrefix(want, "@") {
+		want = "@" + domain.NormalizeTopicRef(want)
+	} else if id, err := domain.NormalizeID(want, scope); err == nil {
+		want = id
+	}
+	for _, t := range targets {
+		if strings.EqualFold(t, want) {
+			return true
+		}
+	}
+	return false
 }

@@ -27,7 +27,7 @@ removes any 'orphaned' tag, and appends an audit note documenting the handover.`
   tk takeover T-1 --actor agent-antigravity -m "Steering subtask"`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
-		taskID := args[0]
+		taskID := normID(args[0])
 
 		if err := taskClient.Connect(); err != nil {
 			return fmt.Errorf("failed to connect to daemon: %w", err)
