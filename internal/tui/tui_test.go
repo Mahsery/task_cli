@@ -792,6 +792,9 @@ func TestTUIUndoStackOperations(t *testing.T) {
 	if !strings.Contains(m.statusMsg, "Undid:") {
 		t.Errorf("Expected statusMsg to contain 'Undid:', got %q", m.statusMsg)
 	}
+	if m.tasks[0].Assignee != "initial-author" {
+		t.Errorf("Expected task assignee to be restored to 'initial-author', got %q", m.tasks[0].Assignee)
+	}
 }
 
 func TestTUIModalFloatingWindowRendering(t *testing.T) {

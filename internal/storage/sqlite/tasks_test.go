@@ -42,21 +42,66 @@ func TestCreateAndGetTask(t *testing.T) {
 		t.Fatalf("unexpected error creating task: %v", err)
 	}
 
-	if task.ID != "T-1" {
-		t.Errorf("expected ID T-1, got %s", task.ID)
+	assertTaskFields := func(item *domain.Task, source string) {
+		t.Helper()
+		if item.ID != "T-1" {
+			t.Errorf("[%s] expected ID 'T-1', got %s", source, item.ID)
+		}
+		if item.Scope != "local" {
+			t.Errorf("[%s] expected Scope 'local', got %s", source, item.Scope)
+		}
+		if item.RepoPath != "/repo/test" {
+			t.Errorf("[%s] expected RepoPath '/repo/test', got %s", source, item.RepoPath)
+		}
+		if item.Title != "Test Task 1" {
+			t.Errorf("[%s] expected Title 'Test Task 1', got %s", source, item.Title)
+		}
+		if item.Description != "Description here" {
+			t.Errorf("[%s] expected Description 'Description here', got %s", source, item.Description)
+		}
+		if item.Status != domain.StatusOpen {
+			t.Errorf("[%s] expected Status 'open', got %s", source, item.Status)
+		}
+		if item.Priority != domain.PriorityHigh {
+			t.Errorf("[%s] expected Priority 'high', got %s", source, item.Priority)
+		}
+		if len(item.Tags) != 1 || item.Tags[0] != "bug" {
+			t.Errorf("[%s] expected Tags ['bug'], got %v", source, item.Tags)
+		}
+		if item.Author != "Alice <alice@test.com>" {
+			t.Errorf("[%s] expected Author 'Alice <alice@test.com>', got %s", source, item.Author)
+		}
+		if item.Assignee != "" {
+			t.Errorf("[%s] expected empty Assignee, got %s", source, item.Assignee)
+		}
+		if item.Kind != domain.KindTask {
+			t.Errorf("[%s] expected Kind 'task', got %s", source, item.Kind)
+		}
+		if item.ClosedAt != nil {
+			t.Errorf("[%s] expected ClosedAt nil, got %v", source, item.ClosedAt)
+		}
+		if item.ArchivedAt != nil {
+			t.Errorf("[%s] expected ArchivedAt nil, got %v", source, item.ArchivedAt)
+		}
+		if item.OrphanedAt != nil {
+			t.Errorf("[%s] expected OrphanedAt nil, got %v", source, item.OrphanedAt)
+		}
+		if item.CreatedAt.IsZero() {
+			t.Errorf("[%s] expected non-zero CreatedAt", source)
+		}
+		if item.UpdatedAt.IsZero() {
+			t.Errorf("[%s] expected non-zero UpdatedAt", source)
+		}
 	}
-	if task.Title != "Test Task 1" {
-		t.Errorf("expected title 'Test Task 1', got %s", task.Title)
-	}
+
+	assertTaskFields(task, "created")
 
 	// Fetch task
 	fetched, err := db.GetTask(task.ID)
 	if err != nil {
 		t.Fatalf("unexpected error fetching task: %v", err)
 	}
-	if fetched.ID != task.ID {
-		t.Errorf("expected ID %s, got %s", task.ID, fetched.ID)
-	}
+	assertTaskFields(fetched, "fetched")
 }
 
 func TestUpdateTaskAndNotes(t *testing.T) {
@@ -818,6 +863,122 @@ func TestTaskDependenciesAndCycleDetection(t *testing.T) {
 	}
 	if t3AfterRm.IsBlocked {
 		t.Fatalf("expected T-3 to not be blocked after removing dependency")
+	}
+}
+
+func TestTaskDependencies_DiamondDAGAndCycleInvariants(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Diamond DAG:
+	//       T-1 (Root Prereq)
+	//       / \
+	//    T-2   T-3 (Parallel Branches)
+	//       \ /
+	//       T-4 (Sink)
+
+	t1, err := db.CreateTask("local", "/repo/test", "T1: Database Schema", "", domain.StatusOpen, domain.PriorityUrgent, nil, "Architect", "")
+	if err != nil {
+		t.Fatalf("failed to create T1: %v", err)
+	}
+	t2, err := db.CreateTask("local", "/repo/test", "T2: Backend Service", "", domain.StatusOpen, domain.PriorityHigh, nil, "Dev1", "")
+	if err != nil {
+		t.Fatalf("failed to create T2: %v", err)
+	}
+	t3, err := db.CreateTask("local", "/repo/test", "T3: Worker Queue", "", domain.StatusOpen, domain.PriorityHigh, nil, "Dev2", "")
+	if err != nil {
+		t.Fatalf("failed to create T3: %v", err)
+	}
+	t4, err := db.CreateTask("local", "/repo/test", "T4: End-to-End Integration", "", domain.StatusOpen, domain.PriorityNormal, nil, "QA", "")
+	if err != nil {
+		t.Fatalf("failed to create T4: %v", err)
+	}
+
+	// Link dependencies
+	if err := db.AddDependency(t2.ID, t1.ID); err != nil {
+		t.Fatalf("failed to link T2 -> T1: %v", err)
+	}
+	if err := db.AddDependency(t3.ID, t1.ID); err != nil {
+		t.Fatalf("failed to link T3 -> T1: %v", err)
+	}
+	if err := db.AddDependency(t4.ID, t2.ID); err != nil {
+		t.Fatalf("failed to link T4 -> T2: %v", err)
+	}
+	if err := db.AddDependency(t4.ID, t3.ID); err != nil {
+		t.Fatalf("failed to link T4 -> T3: %v", err)
+	}
+
+	// 1. Initial State Assertions
+	t1F, _ := db.GetTask(t1.ID)
+	t2F, _ := db.GetTask(t2.ID)
+	t3F, _ := db.GetTask(t3.ID)
+	t4F, _ := db.GetTask(t4.ID)
+
+	if t1F.IsBlocked {
+		t.Errorf("T1 should not be blocked")
+	}
+	if len(t1F.Blocks) != 2 {
+		t.Errorf("T1 should block 2 tasks (T2, T3), got %v", t1F.Blocks)
+	}
+
+	if !t2F.IsBlocked || len(t2F.BlockedBy) != 1 || t2F.BlockedBy[0] != t1.ID {
+		t.Errorf("T2 should be blocked by T1, got IsBlocked=%v BlockedBy=%v", t2F.IsBlocked, t2F.BlockedBy)
+	}
+	if !t3F.IsBlocked || len(t3F.BlockedBy) != 1 || t3F.BlockedBy[0] != t1.ID {
+		t.Errorf("T3 should be blocked by T1, got IsBlocked=%v BlockedBy=%v", t3F.IsBlocked, t3F.BlockedBy)
+	}
+
+	if !t4F.IsBlocked || len(t4F.BlockedBy) != 2 {
+		t.Errorf("T4 should be blocked by 2 tasks (T2, T3), got IsBlocked=%v BlockedBy=%v", t4F.IsBlocked, t4F.BlockedBy)
+	}
+
+	// 2. Cycle Invariant Checks on Diamond
+	// Linking T1 -> T4 should be rejected (T1 -> T4 -> T2 -> T1 cycle)
+	if err := db.AddDependency(t1.ID, t4.ID); err == nil {
+		t.Errorf("expected cycle detection error when linking T1 -> T4, got nil")
+	}
+	// Linking T2 -> T4 should be rejected
+	if err := db.AddDependency(t2.ID, t4.ID); err == nil {
+		t.Errorf("expected cycle detection error when linking T2 -> T4, got nil")
+	}
+
+	// 3. Mark T1 DONE
+	if _, err := db.AttachGit(t1.ID, "c111", "T1 done", "1 file changed", "+10", true); err != nil {
+		t.Fatalf("failed to complete T1: %v", err)
+	}
+
+	t2F, _ = db.GetTask(t2.ID)
+	t3F, _ = db.GetTask(t3.ID)
+	t4F, _ = db.GetTask(t4.ID)
+
+	if t2F.IsBlocked {
+		t.Errorf("T2 should be unblocked after T1 done, got BlockedBy=%v", t2F.BlockedBy)
+	}
+	if t3F.IsBlocked {
+		t.Errorf("T3 should be unblocked after T1 done, got BlockedBy=%v", t3F.BlockedBy)
+	}
+	if !t4F.IsBlocked || len(t4F.BlockedBy) != 2 {
+		t.Errorf("T4 must still be blocked by T2 and T3, got IsBlocked=%v BlockedBy=%v", t4F.IsBlocked, t4F.BlockedBy)
+	}
+
+	// 4. Mark only T2 DONE (One branch resolved, one branch pending)
+	if _, err := db.AttachGit(t2.ID, "c222", "T2 done", "1 file changed", "+20", true); err != nil {
+		t.Fatalf("failed to complete T2: %v", err)
+	}
+
+	t4F, _ = db.GetTask(t4.ID)
+	if !t4F.IsBlocked || len(t4F.BlockedBy) != 1 || t4F.BlockedBy[0] != t3.ID {
+		t.Errorf("T4 must still be blocked exclusively by pending branch T3, got IsBlocked=%v BlockedBy=%v", t4F.IsBlocked, t4F.BlockedBy)
+	}
+
+	// 5. Mark T3 DONE (Both branches resolved)
+	if _, err := db.AttachGit(t3.ID, "c333", "T3 done", "1 file changed", "+30", true); err != nil {
+		t.Fatalf("failed to complete T3: %v", err)
+	}
+
+	t4F, _ = db.GetTask(t4.ID)
+	if t4F.IsBlocked || len(t4F.BlockedBy) != 0 {
+		t.Errorf("T4 must now be fully unblocked, got IsBlocked=%v BlockedBy=%v", t4F.IsBlocked, t4F.BlockedBy)
 	}
 }
 
