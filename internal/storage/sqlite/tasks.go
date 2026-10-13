@@ -60,14 +60,33 @@ func itemPrefix(scope string, kind domain.ItemKind) string {
 func (d *DB) CreateItem(p CreateItemParams) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.invalidateTopicCacheLocked()
 	return d.createItemLocked(p)
 }
 
 func (d *DB) createItemLocked(p CreateItemParams) (*domain.Task, error) {
-	title, err := domain.NormalizeTitle(p.Title)
+	tx, err := d.conn.Beginx()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	taskID, err := d.createItemInTxLocked(tx, p)
 	if err != nil {
 		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit %s insert: %w", p.Kind, err)
+	}
+	d.invalidateTopicCacheLocked()
+
+	return d.getTaskLocked(d.conn, taskID)
+}
+
+func (d *DB) createItemInTxLocked(tx *sqlx.Tx, p CreateItemParams) (string, error) {
+	title, err := domain.NormalizeTitle(p.Title)
+	if err != nil {
+		return "", err
 	}
 	if p.Kind == "" {
 		p.Kind = domain.KindTask
@@ -79,7 +98,7 @@ func (d *DB) createItemLocked(p CreateItemParams) (*domain.Task, error) {
 		p.Priority = domain.PriorityNormal
 	}
 	if p.Kind == domain.KindPost && len(p.DependsOn) > 0 {
-		return nil, fmt.Errorf("posts cannot have dependencies (promote the post to a task first)")
+		return "", fmt.Errorf("posts cannot have dependencies (promote the post to a task first)")
 	}
 
 	tags := p.Tags
@@ -88,7 +107,7 @@ func (d *DB) createItemLocked(p CreateItemParams) (*domain.Task, error) {
 	}
 	tagsJSON, err := json.Marshal(tags)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal tags: %w", err)
+		return "", fmt.Errorf("failed to marshal tags: %w", err)
 	}
 
 	scope, repoPath := p.Scope, p.RepoPath
@@ -97,15 +116,9 @@ func (d *DB) createItemLocked(p CreateItemParams) (*domain.Task, error) {
 	}
 	prefix := itemPrefix(scope, p.Kind)
 
-	tx, err := d.conn.Beginx()
+	topicID, err := d.resolveTopicForItemLocked(tx, p.Topic, p.Kind)
 	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	topicID, err := resolveTopicForItem(tx, p.Topic, p.Kind)
-	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	// Monotonically allocate sequence number from persistent sequence tables
@@ -126,7 +139,7 @@ func (d *DB) createItemLocked(p CreateItemParams) (*domain.Task, error) {
 		`, scope, repoPath)
 	}
 	if err := seqRow.Scan(&nextSeq); err != nil {
-		return nil, fmt.Errorf("failed to allocate %s sequence number: %w", p.Kind, err)
+		return "", fmt.Errorf("failed to allocate %s sequence number: %w", p.Kind, err)
 	}
 
 	taskID := fmt.Sprintf("%s-%d", prefix, nextSeq)
@@ -150,7 +163,7 @@ func (d *DB) createItemLocked(p CreateItemParams) (*domain.Task, error) {
 		taskID, scope, repoPath, nextSeq, title, p.Description, string(p.Status), string(p.Priority), string(tagsJSON), p.Author, p.Assignee, now, now, closedAt, archivedAt, string(p.Kind), topicID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to insert %s: %w", p.Kind, err)
+		return "", fmt.Errorf("failed to insert %s: %w", p.Kind, err)
 	}
 
 	for _, depID := range p.DependsOn {
@@ -159,30 +172,26 @@ func (d *DB) createItemLocked(p CreateItemParams) (*domain.Task, error) {
 			continue
 		}
 		if depID == taskID {
-			return nil, fmt.Errorf("task %s cannot depend on itself", taskID)
+			return "", fmt.Errorf("task %s cannot depend on itself", taskID)
 		}
 		var depKind string
 		if err := tx.QueryRow("SELECT kind FROM tasks WHERE id = ?", depID).Scan(&depKind); err != nil {
-			return nil, fmt.Errorf("prerequisite task %s not found", depID)
+			return "", fmt.Errorf("prerequisite task %s not found", depID)
 		}
 		if depKind == string(domain.KindPost) {
-			return nil, fmt.Errorf("%s is a post; posts cannot be prerequisites", depID)
+			return "", fmt.Errorf("%s is a post; posts cannot be prerequisites", depID)
 		}
 		_, err = tx.Exec("INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, created_at) VALUES (?, ?, ?)", taskID, depID, now)
 		if err != nil {
-			return nil, fmt.Errorf("failed to link dependency %s -> %s: %w", taskID, depID, err)
+			return "", fmt.Errorf("failed to link dependency %s -> %s: %w", taskID, depID, err)
 		}
 	}
 
 	if err := reindexLinksTx(tx, taskID); err != nil {
-		return nil, err
+		return "", err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit %s insert: %w", p.Kind, err)
-	}
-
-	return d.getTaskLocked(d.conn, taskID)
+	return taskID, nil
 }
 
 type rowScanner interface {
@@ -382,6 +391,8 @@ func (d *DB) getTaskLocked(q sqlx.Queryer, id string) (*domain.Task, error) {
 }
 
 func (d *DB) GetTask(id string) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return d.getTaskLocked(d.conn, id)
 }
 
@@ -524,7 +535,7 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 	}
 	d.invalidateTopicCacheLocked()
 
-	return d.GetTask(id)
+	return d.getTaskLocked(d.conn, id)
 }
 
 func (d *DB) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
@@ -596,7 +607,7 @@ func (d *DB) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
 	}
 	d.invalidateTopicCacheLocked()
 
-	return d.GetTask(id)
+	return d.getTaskLocked(d.conn, id)
 }
 
 func (d *DB) orphanTaskLocked(id, actor, reason string, now time.Time) error {
@@ -606,13 +617,23 @@ func (d *DB) orphanTaskLocked(id, actor, reason string, now time.Time) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var currentAssignee, currentStatus string
-	query := "SELECT assignee, status FROM tasks WHERE id = ?"
-	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus); err != nil {
+	var currentAssignee, currentStatus, kind string
+	var archivedAt sql.NullTime
+	query := "SELECT assignee, status, kind, archived_at FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus, &kind, &archivedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("task %s not found", id)
 		}
 		return fmt.Errorf("failed to query task: %w", err)
+	}
+	if kind == string(domain.KindPost) {
+		return fmt.Errorf("%s is a post; posts cannot be orphaned", id)
+	}
+	if archivedAt.Valid || currentStatus == string(domain.StatusArchived) {
+		return fmt.Errorf("task %s is archived and cannot be orphaned", id)
+	}
+	if currentStatus == string(domain.StatusDone) || currentStatus == string(domain.StatusClosed) {
+		return fmt.Errorf("task %s is already %s and cannot be orphaned", id, currentStatus)
 	}
 
 	newStatus := currentStatus
@@ -652,6 +673,9 @@ func (d *DB) orphanTaskLocked(id, actor, reason string, now time.Time) error {
 	if _, err := tx.Exec(noteSQL, noteID, id, actor, noteContent, now); err != nil {
 		return fmt.Errorf("failed to insert orphan note: %w", err)
 	}
+	if err := reindexLinksTx(tx, id); err != nil {
+		return err
+	}
 
 	return tx.Commit()
 }
@@ -683,13 +707,16 @@ func (d *DB) TransferTask(id, fromActor, toAssignee, note string, _ bool) (*doma
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var currentAssignee, currentStatus, currentTagsJSON string
-	query := "SELECT assignee, status, tags FROM tasks WHERE id = ?"
-	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus, &currentTagsJSON); err != nil {
+	var currentAssignee, currentStatus, currentTagsJSON, kind string
+	query := "SELECT assignee, status, tags, kind FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus, &currentTagsJSON, &kind); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("task %s not found", id)
 		}
 		return nil, fmt.Errorf("failed to query task: %w", err)
+	}
+	if kind == string(domain.KindPost) {
+		return nil, fmt.Errorf("%s is a post; posts cannot be transferred (promote it to a task first)", id)
 	}
 
 	var tags []string
@@ -800,6 +827,9 @@ func (d *DB) ArchiveTask(id, actor, reason string) (*domain.Task, error) {
 	if _, err := tx.Exec(noteSQL, noteID, id, noteAuthor, noteContent, now); err != nil {
 		return nil, fmt.Errorf("failed to insert archive note: %w", err)
 	}
+	if err := reindexLinksTx(tx, id); err != nil {
+		return nil, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit archive transaction: %w", err)
@@ -864,6 +894,9 @@ func (d *DB) UnarchiveTask(id, actor, reason string) (*domain.Task, error) {
 	if _, err := tx.Exec(noteSQL, noteID, id, noteAuthor, noteContent, now); err != nil {
 		return nil, fmt.Errorf("failed to insert unarchive note: %w", err)
 	}
+	if err := reindexLinksTx(tx, id); err != nil {
+		return nil, err
+	}
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit unarchive transaction: %w", err)
@@ -888,7 +921,7 @@ func (d *DB) findStaleTasksLocked(scope, repoPath string, threshold time.Duratio
 	now := time.Now().UTC()
 	cutoff := now.Add(-threshold)
 
-	query := `SELECT id FROM tasks WHERE kind = 'task' AND (status = 'in_progress' OR (status = 'open' AND assignee != '')) AND (archived_at IS NULL AND status != 'archived')`
+	query := fmt.Sprintf(`SELECT %s FROM tasks WHERE kind = 'task' AND (status = 'in_progress' OR (status = 'open' AND assignee != '')) AND (archived_at IS NULL AND status != 'archived')`, taskColumnsSummary)
 	var args []any
 	if scope != "" {
 		query += " AND scope = ?"
@@ -900,18 +933,81 @@ func (d *DB) findStaleTasksLocked(scope, repoPath string, threshold time.Duratio
 	}
 	query += " ORDER BY seq_num ASC"
 
-	var candidateIDs []string
-	if err := d.conn.Select(&candidateIDs, query, args...); err != nil {
+	rows, err := d.conn.Query(query, args...)
+	if err != nil {
 		return nil, fmt.Errorf("failed to query tasks: %w", err)
+	}
+	var candidateTasks []*domain.Task
+	for rows.Next() {
+		var t domain.Task
+		if err := scanTask(rows, &t); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		t.Notes = []domain.TaskNote{}
+		candidateTasks = append(candidateTasks, &t)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("failed to iterate candidate tasks: %w", err)
+	}
+	_ = rows.Close()
+
+	if len(candidateTasks) == 0 {
+		return nil, nil
+	}
+	if err := d.hydrateTaskRelations(d.conn, candidateTasks, true); err != nil {
+		return nil, err
+	}
+
+	taskMap := make(map[string]*domain.Task, len(candidateTasks))
+	for _, t := range candidateTasks {
+		taskMap[t.ID] = t
+	}
+
+	// Collect any neighbor dependency IDs not already in candidateTasks and batch-load them
+	var missingDepIDs []any
+	missingSeen := make(map[string]bool)
+	for _, t := range candidateTasks {
+		for _, depID := range t.DependsOn {
+			if _, ok := taskMap[depID]; !ok && !missingSeen[depID] {
+				missingSeen[depID] = true
+				missingDepIDs = append(missingDepIDs, depID)
+			}
+		}
+		for _, depID := range t.Blocks {
+			if _, ok := taskMap[depID]; !ok && !missingSeen[depID] {
+				missingSeen[depID] = true
+				missingDepIDs = append(missingDepIDs, depID)
+			}
+		}
+	}
+	if len(missingDepIDs) > 0 {
+		depQuery, depArgs, err := sqlx.In(fmt.Sprintf("SELECT %s FROM tasks WHERE id IN (?)", taskColumnsSummary), missingDepIDs)
+		if err == nil {
+			depRows, err := d.conn.Query(depQuery, depArgs...)
+			if err == nil {
+				var depTasks []*domain.Task
+				for depRows.Next() {
+					var dt domain.Task
+					if err := scanTask(depRows, &dt); err == nil {
+						dt.Notes = []domain.TaskNote{}
+						depTasks = append(depTasks, &dt)
+					}
+				}
+				_ = depRows.Close()
+				if len(depTasks) > 0 {
+					_ = d.hydrateTaskRelations(d.conn, depTasks, true)
+					for _, dt := range depTasks {
+						taskMap[dt.ID] = dt
+					}
+				}
+			}
+		}
 	}
 
 	var candidates []domain.StaleTaskCandidate
-	for _, id := range candidateIDs {
-		t, err := d.getTaskLocked(d.conn, id)
-		if err != nil || t == nil {
-			continue
-		}
-
+	for _, t := range candidateTasks {
 		selfActivity := t.LastActivityTime()
 		if selfActivity.IsZero() {
 			selfActivity = t.CreatedAt
@@ -926,8 +1022,8 @@ func (d *DB) findStaleTasksLocked(scope, repoPath string, threshold time.Duratio
 
 		depActive := false
 		for _, depID := range allDepIDs {
-			depTask, err := d.getTaskLocked(d.conn, depID)
-			if err != nil || depTask == nil {
+			depTask := taskMap[depID]
+			if depTask == nil {
 				continue
 			}
 			depActivity := depTask.LastActivityTime()
@@ -994,6 +1090,8 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 }
 
 func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	var conditions []string
 	var args []any
 
@@ -1326,7 +1424,7 @@ func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, m
 	}
 	d.invalidateTopicCacheLocked()
 
-	return d.GetTask(id)
+	return d.getTaskLocked(d.conn, id)
 }
 
 func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
@@ -1448,12 +1546,18 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		return fmt.Errorf("failed to update sequence: %w", err)
 	}
 
-	// Restore dependencies if present in task.DependsOn
+	// Restore dependencies if present in task.DependsOn and task.Blocks
 	now := time.Now().UTC()
 	for _, depID := range task.DependsOn {
 		var exists int
-		if err := tx.QueryRow("SELECT 1 FROM tasks WHERE id = ?", depID).Scan(&exists); err == nil {
+		if err := tx.QueryRow("SELECT 1 FROM tasks WHERE id = ? AND kind = 'task'", depID).Scan(&exists); err == nil {
 			_, _ = tx.Exec("INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, created_at) VALUES (?, ?, ?)", task.ID, depID, now)
+		}
+	}
+	for _, blockID := range task.Blocks {
+		var exists int
+		if err := tx.QueryRow("SELECT 1 FROM tasks WHERE id = ? AND kind = 'task'", blockID).Scan(&exists); err == nil {
+			_, _ = tx.Exec("INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_id, created_at) VALUES (?, ?, ?)", blockID, task.ID, now)
 		}
 	}
 
@@ -1490,7 +1594,12 @@ func (d *DB) RestoreTaskByID(id string) (*domain.Task, error) {
 	defer d.mu.Unlock()
 
 	var taskJSON string
-	err := d.conn.QueryRow("SELECT task_json FROM task_tombstones WHERE id = ?", id).Scan(&taskJSON)
+	var err error
+	if strings.EqualFold(strings.TrimSpace(id), "latest") {
+		err = d.conn.QueryRow("SELECT task_json FROM task_tombstones ORDER BY deleted_at DESC LIMIT 1").Scan(&taskJSON)
+	} else {
+		err = d.conn.QueryRow("SELECT task_json FROM task_tombstones WHERE id = ?", id).Scan(&taskJSON)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("tombstone for task %q not found", id)
 	}
@@ -1517,7 +1626,7 @@ func (d *DB) RestoreTaskByID(id string) (*domain.Task, error) {
 	}
 	d.invalidateTopicCacheLocked()
 
-	return &task, nil
+	return d.getTaskLocked(d.conn, task.ID)
 }
 
 func (d *DB) ListTombstones(scope, repoPath string) ([]*domain.Task, error) {

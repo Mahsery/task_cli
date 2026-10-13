@@ -24,18 +24,18 @@ func (d *DB) invalidateTopicCacheLocked() {
 }
 
 func (d *DB) getTopicTreeLocked(q sqlx.Queryer) (*topicTree, error) {
-	if q == nil || q == d.conn {
-		if d.topicTree != nil {
-			return d.topicTree, nil
-		}
-		tree, err := loadTopicTree(d.conn)
-		if err != nil {
-			return nil, err
-		}
-		d.topicTree = tree
-		return tree, nil
+	if d.topicTree != nil {
+		return d.topicTree, nil
 	}
-	return loadTopicTree(q)
+	if q == nil {
+		q = d.conn
+	}
+	tree, err := loadTopicTree(q)
+	if err != nil {
+		return nil, err
+	}
+	d.topicTree = tree
+	return tree, nil
 }
 
 func Open(dbPath string) (*DB, error) {

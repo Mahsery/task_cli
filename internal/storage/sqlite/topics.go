@@ -106,18 +106,18 @@ func loadTopicTree(q sqlx.Queryer) (*topicTree, error) {
 		if tp == nil {
 			return 0, 0
 		}
-		if tp.Kind != domain.TopicGroup {
-			return tp.ItemCount, tp.OpenCount
-		}
-		groupItems, groupOpen := 0, 0
+		subtreeItems, subtreeOpen := 0, 0
 		for _, child := range t.children[id] {
 			cItems, cOpen := rollup(child.ID)
-			groupItems += cItems
-			groupOpen += cOpen
+			subtreeItems += cItems
+			subtreeOpen += cOpen
 		}
-		tp.ItemCount = groupItems
-		tp.OpenCount = groupOpen
-		return groupItems, groupOpen
+		if tp.Kind == domain.TopicGroup {
+			tp.ItemCount = subtreeItems
+			tp.OpenCount = subtreeOpen
+			return subtreeItems, subtreeOpen
+		}
+		return tp.ItemCount + subtreeItems, tp.OpenCount + subtreeOpen
 	}
 
 	for _, tp := range t.children[0] {
@@ -579,14 +579,14 @@ func (d *DB) MoveItems(ids []string, topicRef, actor string) ([]*domain.Task, er
 	return out, nil
 }
 
-// resolveTopicForItem returns the topic ID an item of the given kind should be created in.
+// resolveTopicForItemLocked returns the topic ID an item of the given kind should be created in.
 // An empty ref means unfiled.
-func resolveTopicForItem(q sqlx.Queryer, ref string, kind domain.ItemKind) (*int64, error) {
+func (d *DB) resolveTopicForItemLocked(q sqlx.Queryer, ref string, kind domain.ItemKind) (*int64, error) {
 	norm := domain.NormalizeTopicRef(ref)
 	if norm == "" || norm == domain.UnfiledTopic {
 		return nil, nil
 	}
-	tree, err := loadTopicTree(q)
+	tree, err := d.getTopicTreeLocked(q)
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +624,13 @@ func (d *DB) PromotePost(postID, topicRef, author string) (task, post *domain.Ta
 	}
 	desc += fmt.Sprintf("Promoted from [[%s]]", src.ID)
 
-	task, err = d.createItemLocked(CreateItemParams{
+	tx, err := d.conn.Beginx()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	newTaskID, err := d.createItemInTxLocked(tx, CreateItemParams{
 		Scope: src.Scope, RepoPath: src.RepoPath, Kind: domain.KindTask, Topic: topicRef,
 		Title: src.Title, Description: desc, Status: domain.StatusOpen, Priority: src.Priority,
 		Author: author,
@@ -633,19 +639,13 @@ func (d *DB) PromotePost(postID, topicRef, author string) (task, post *domain.Ta
 		return nil, nil, err
 	}
 
-	tx, err := d.conn.Begin()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	now := time.Now().UTC()
 	if _, err := tx.Exec(`UPDATE tasks SET status = ?, closed_at = ?, updated_at = ? WHERE id = ?`,
 		string(domain.StatusDone), now, now, src.ID); err != nil {
 		return nil, nil, fmt.Errorf("failed to resolve post: %w", err)
 	}
 	if _, err := tx.Exec(`INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`,
-		uuid.New().String(), src.ID, author, fmt.Sprintf("Promoted to [[%s]]", task.ID), now); err != nil {
+		uuid.New().String(), src.ID, author, fmt.Sprintf("Promoted to [[%s]]", newTaskID), now); err != nil {
 		return nil, nil, fmt.Errorf("failed to record promotion note: %w", err)
 	}
 	if err := reindexLinksTx(tx, src.ID); err != nil {
@@ -656,7 +656,7 @@ func (d *DB) PromotePost(postID, topicRef, author string) (task, post *domain.Ta
 	}
 	d.invalidateTopicCacheLocked()
 
-	if task, err = d.getTaskLocked(d.conn, task.ID); err != nil {
+	if task, err = d.getTaskLocked(d.conn, newTaskID); err != nil {
 		return nil, nil, err
 	}
 	if post, err = d.getTaskLocked(d.conn, src.ID); err != nil {

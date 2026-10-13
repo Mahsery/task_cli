@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"task_cli/internal/domain"
@@ -25,7 +26,8 @@ func reindexLinksTx(tx execQueryer, id string) error {
 	if err := tx.QueryRow("SELECT scope, description FROM tasks WHERE id = ?", id).Scan(&scope, &description); err != nil {
 		return fmt.Errorf("failed to load item %s for link indexing: %w", id, err)
 	}
-	text := description
+	var sb strings.Builder
+	sb.WriteString(description)
 	rows, err := tx.Query("SELECT content FROM task_notes WHERE task_id = ? ORDER BY created_at ASC", id)
 	if err != nil {
 		return fmt.Errorf("failed to load notes for link indexing: %w", err)
@@ -36,7 +38,8 @@ func reindexLinksTx(tx execQueryer, id string) error {
 			_ = rows.Close()
 			return fmt.Errorf("failed to scan note for link indexing: %w", err)
 		}
-		text += "\n" + c
+		sb.WriteByte('\n')
+		sb.WriteString(c)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -48,7 +51,7 @@ func reindexLinksTx(tx execQueryer, id string) error {
 		return fmt.Errorf("failed to clear link index: %w", err)
 	}
 	now := time.Now().UTC()
-	for _, target := range domain.LinkTargets(domain.ParseWikiLinks(text, scope)) {
+	for _, target := range domain.LinkTargets(domain.ParseWikiLinks(sb.String(), scope)) {
 		if target == id {
 			continue // self-links are not indexed as backlinks
 		}
@@ -110,6 +113,12 @@ func hydrateLinks(q sqlx.Queryer, taskMap map[string]*domain.Task, taskIDs []any
 
 // Backlinks returns the IDs of items whose text links to target (an item ID or "@topic/path").
 func (d *DB) Backlinks(target string) ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if strings.HasPrefix(target, "@") {
+		target = "@" + domain.NormalizeTopicRef(target)
+	}
 	out := []string{}
 	if err := d.conn.Select(&out, "SELECT from_id FROM task_links WHERE target = ? ORDER BY from_id", target); err != nil {
 		return nil, fmt.Errorf("failed to query backlinks: %w", err)

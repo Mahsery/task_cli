@@ -22,11 +22,19 @@ type BackupMeta struct {
 
 // Path returns the filesystem path of the database.
 func (d *DB) Path() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return d.dbPath
 }
 
 // IntegrityCheck runs SQLite PRAGMA integrity_check.
 func (d *DB) IntegrityCheck() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.integrityCheckLocked()
+}
+
+func (d *DB) integrityCheckLocked() error {
 	var status string
 	err := d.conn.QueryRow("PRAGMA integrity_check;").Scan(&status)
 	if err != nil {
@@ -40,6 +48,12 @@ func (d *DB) IntegrityCheck() error {
 
 // QuickCheck runs SQLite PRAGMA quick_check.
 func (d *DB) QuickCheck() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.quickCheckLocked()
+}
+
+func (d *DB) quickCheckLocked() error {
 	var status string
 	err := d.conn.QueryRow("PRAGMA quick_check;").Scan(&status)
 	if err != nil {
@@ -47,6 +61,46 @@ func (d *DB) QuickCheck() error {
 	}
 	if status != "ok" {
 		return fmt.Errorf("sqlite quick check failed: %s", status)
+	}
+	return nil
+}
+
+// VerifyBackupFile verifies that targetPath exists, is a non-empty regular file,
+// passes SQLite PRAGMA integrity_check in read-only mode (without creating or migrating),
+// and contains a valid tasks table.
+func VerifyBackupFile(targetPath string) error {
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		return fmt.Errorf("backup file %q not found: %w", targetPath, err)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("backup path %q is a directory", targetPath)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("backup file %q is empty", targetPath)
+	}
+
+	dsn := fmt.Sprintf("file:%s?mode=ro&_pragma=busy_timeout(5000)", targetPath)
+	conn, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("failed to open backup file: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	var status string
+	if err := conn.QueryRow("PRAGMA integrity_check;").Scan(&status); err != nil {
+		return fmt.Errorf("integrity check query failed: %w", err)
+	}
+	if status != "ok" {
+		return fmt.Errorf("sqlite integrity check failed: %s", status)
+	}
+
+	var tableCount int
+	if err := conn.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='tasks';").Scan(&tableCount); err != nil {
+		return fmt.Errorf("failed to inspect backup schema: %w", err)
+	}
+	if tableCount == 0 {
+		return fmt.Errorf("backup file %q does not contain a valid tasks table", targetPath)
 	}
 	return nil
 }
@@ -97,7 +151,8 @@ func (d *DB) CreateRollingBackupInDir(backupDir, name string, maxSnapshots int) 
 
 	cleaned := filepath.Base(filepath.Clean(strings.TrimSpace(name)))
 	if cleaned == "" || cleaned == "." {
-		cleaned = fmt.Sprintf("backup-%s-%03d.db", time.Now().Format("20060102-150405"), time.Now().Nanosecond()/1e6)
+		now := time.Now()
+		cleaned = fmt.Sprintf("backup-%s-%03d.db", now.Format("20060102-150405"), now.Nanosecond()/1e6)
 	}
 	if !strings.HasSuffix(cleaned, ".db") {
 		cleaned += ".db"

@@ -52,6 +52,8 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 
 	var dbPath string
 	if scope == "global" || repoPath == "" {
+		scope = "global"
+		repoPath = ""
 		dbPath = s.cfg.GlobalDBPath()
 	} else {
 		dbPath = s.cfg.LocalDBPath(repoPath)
@@ -308,6 +310,10 @@ func (s *Server) handleConnection(conn net.Conn) {
 }
 
 func (s *Server) dispatch(req protocol.Request) protocol.Response {
+	if req.Scope == domain.ScopeGlobal || req.RepoPath == "" {
+		req.Scope = domain.ScopeGlobal
+		req.RepoPath = ""
+	}
 	resp := s.executeDispatch(req)
 	if resp.Success {
 		switch req.Action {
@@ -885,13 +891,8 @@ func (s *Server) handleBackupVerify(req protocol.Request) protocol.Response {
 	}
 
 	if p.Target != "" {
-		tempDB, err := sqlite.Open(p.Target)
-		if err != nil {
-			return errorResp(req.ID, "failed to open backup file: "+err.Error())
-		}
-		defer func() { _ = tempDB.Close() }()
-		if err := tempDB.IntegrityCheck(); err != nil {
-			return errorResp(req.ID, "integrity check failed for backup: "+err.Error())
+		if err := sqlite.VerifyBackupFile(p.Target); err != nil {
+			return errorResp(req.ID, "backup verification failed: "+err.Error())
 		}
 		data, _ := json.Marshal(map[string]string{
 			"status":  "ok",
@@ -963,16 +964,10 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 		}
 	}
 
-	// 1. Verify backup file exists and passes integrity check
-	testDB, err := sqlite.Open(targetBackup)
-	if err != nil {
-		return errorResp(req.ID, "backup file cannot be opened: "+err.Error())
+	// 1. Verify backup file exists on disk and passes read-only integrity check
+	if err := sqlite.VerifyBackupFile(targetBackup); err != nil {
+		return errorResp(req.ID, "backup file failed verification: "+err.Error())
 	}
-	if err := testDB.IntegrityCheck(); err != nil {
-		_ = testDB.Close()
-		return errorResp(req.ID, "backup file failed integrity check: "+err.Error())
-	}
-	_ = testDB.Close()
 
 	// 2. Lock server and close active database connection
 	s.mu.Lock()
