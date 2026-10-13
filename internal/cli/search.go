@@ -26,18 +26,22 @@ var searchCmd = &cobra.Command{
 	Long: `Search tasks using a zero-flag query DSL inspired by grx.
 
 Supports:
-  - Boolean composition: 'AND', 'OR', 'NOT' (e.g. 'bug AND odin', 'fix NOT closed')
-  - Implicit AND: multiple terms 'bug odin' match tasks containing both
-  - Tag filtering: 'tag:bug', 't:odin'
+  - Boolean composition: 'AND', 'OR', 'NOT' (e.g. 'bug AND backend', 'fix NOT closed')
+  - Implicit AND: multiple terms 'bug engine' match tasks containing both
+  - Topic qualifiers: 'topic:backend', 'in:backend/api'
+  - Kind qualifiers: 'kind:task', 'type:post'
+  - Link qualifiers: 'links:T-1', 'linkedfrom:T-2'
   - Field qualifiers: 'status:open' ('s:open'), 'priority:high' ('p:high'), 'assignee:mehmet' ('a:mehmet'), 'id:T-1'
+  - Legacy tag filtering: 'tag:bug', 't:core'
   - Negations: '-wip' or 'NOT wip'
   - Exact quoted phrases: '"memory leak"'`,
-	Example: `  tk search bug AND odin
+	Example: `  tk search bug AND backend
   tk search "memory leak"
-  tk search tag:security priority:high
-  tk search bug NOT closed
+  tk search topic:backend priority:high
+  tk search kind:post NOT closed
+  tk search links:T-1
   tk search s:open p:urgent
-  tk search -g odin --json`,
+  tk search -g backend --json`,
 	RunE: func(_ *cobra.Command, args []string) error {
 		query := strings.Join(args, " ")
 

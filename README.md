@@ -87,40 +87,40 @@ tk
 | Command | Aliases | Arguments & Flags | Description | Example |
 |---------|:-------:|-------------------|-------------|---------|
 | `tk` | — | — | Launch interactive 3-pane TUI (Topic sidebar, tasks/board, details & links) | `tk` |
-| `tk topic` | `topics` | `[tree\|new\|ls\|mv\|rm\|use\|import-tags]` | Organise work into a tree of topics (boards for posts, task topics, groups) | `tk topic tree`<br>`tk topic new "Bugs" -k board`<br>`tk topic import-tags` |
-| `tk post` | — | `<topic> [title] [-m desc]` | Create a board post (P-n) in a board topic (e.g. bug report or idea) | `tk post bugs "UI glitch on resize"` |
-| `tk reply` | — | `<post-id> [message]` | Add a discussion reply/note to a board post | `tk reply P-1 "Reproduced on Linux"` |
-| `tk promote` | — | `<post-id> [tasks-topic]` | Promote a board post into a full task with dependency tracking | `tk promote P-1 hero-system` |
-| `tk move` | `mv` | `<id...> <topic>` | Move task(s) or post(s) into another topic | `tk move T-1 T-2 @engine` |
-| `tk links` | — | `[id]` | Inspect outgoing Obsidian-style wikilinks and incoming backlinks | `tk links T-1` |
-| `tk go` | — | `<target>` | Resolve and jump to a wikilink target (task, note, line anchor, or topic) | `tk go "T-1#L12"` |
-| `tk new` | — | `[-t title] [-p prio] [-T topic] [-a assignee] [-m desc]` | Create task via flags, piped stdin, or `$EDITOR` template | `tk new -t "Fix bug" -p high -T bugs`<br>`echo "Piped Task" \| tk new` |
-| `tk tree` | `dag` | `[task-id\|@topic] [-s status] [-r/--reverse] [--all] [--json]` | Render hierarchical tree of task dependencies with `↪` pointers and `⇢` ghost rows | `tk tree`<br>`tk tree @hero-system`<br>`tk tree -r` (breakdown)<br>`tk tree --json` |
+| `tk status` | — | `[--json]` | Repository status overview (counts, ready, blocked, orphans) | `tk status` |
+| `tk topic` | `topics` | `[new\|tree\|show\|rename\|edit\|mv\|rm\|use\|import-tags]` | Organise work into a tree of topics (boards for posts, task topics, groups) | `tk topic tree`<br>`tk topic new "Bugs" -k board`<br>`tk topic import-tags` |
+| `tk post` | — | `-t <title> [-T topic] [-d body] [-p prio]` | Create a board post (P-n) in a board topic (e.g. bug report or idea) | `tk post -t "UI glitch" -T bugs` |
+| `tk reply` | `comment` | `<id> -m <message>` | Add a note/comment to a post or task (supports `[[links]]`) | `tk reply P-1 -m "Reproduced on Linux"` |
+| `tk promote` | — | `<post-id> [--to <tasks-topic>]` | Turn board post into a task with bidirectional links | `tk promote P-1 --to hero-system` |
+| `tk move` | `mv` | `<id...\|@topic...> --to <topic\|unfiled\|root>` | Move tasks/posts to topic, or reparent topic | `tk move T-1 T-2 --to @engine`<br>`tk move @bugs --to root` |
+| `tk links` | — | `<id>` | Inspect outgoing Obsidian-style wikilinks and incoming backlinks | `tk links T-1` |
+| `tk go` | — | `<id> [n]` | Follow link #n of an item (omitting n lists links) | `tk go T-1 1` |
+| `tk new` | — | `[-t title] [-p prio] [-T topic] [-a user] [-d desc] [--after id]` | Create task via flags, stdin pipe, or `$EDITOR` | `tk new -t "Fix auth" -p high -T bugs`<br>`cat desc.txt \| tk new -t "Task"` |
+| `tk next` | — | `[--json]` | Identify the next actionable unblocked task to steer developers and AI agents | `tk next`<br>`tk next --json` |
+| `tk tree` | `dag` | `[task-id\|@topic] [-s status] [-r/--reverse] [-a/--all] [--json]` | Render hierarchical tree of task dependencies with `↪` pointers and `⇢` ghost rows | `tk tree @backend`<br>`tk tree -r`<br>`tk tree --json` |
 | `tk dep` | `deps` | `[add\|rm\|show\|tree]` | Manage task dependencies, blocker links, and inspect prerequisites | `tk dep add T-2 T-1`<br>`tk dep rm T-2 T-1`<br>`tk dep show T-2` |
 | `tk link` | — | `<task-id> <prereq-id...>` | Link a task to depend on prerequisite tasks (alias for `tk dep add`) | `tk link T-2 T-1` |
 | `tk unlink` | — | `<task-id> <prereq-id...>` | Unlink a task from prerequisite tasks (alias for `tk dep rm`) | `tk unlink T-2 T-1` |
-| `tk next` | — | `[--json]` | Identify the next actionable unblocked task to steer developers and AI agents | `tk next`<br>`tk next --json` |
-| `tk list` | `ls` | `[@topic] [-s status] [-p prio] [-T topic] [-k kind] [--tasks] [--posts] [-a assignee] [-q search] [--tree] [--ready] [--blocked] [--after id] [--blocks id] [--sort order] [--short] [--limit N]` | Query tasks & posts (supports tree view, unblocked ready tasks, and blockers) | `tk list @backend`<br>`tk list --tree`<br>`tk list --ready`<br>`tk list --tasks` |
+| `tk list` | `ls` | `[@topic] [-s status] [-p prio] [-T topic] [-k kind] [--tasks] [--posts] [-a user] [-q search] [--ready] [--blocked] [--short]` | Query tasks & posts in formatted table or one-liners | `tk list @backend --ready`<br>`tk ls -s open,in_progress` |
 | `tk tasks` | — | `[@topic] [flags]` | List execution tasks only (shortcut for `tk list --tasks`) | `tk tasks @hero-system` |
 | `tk posts` | — | `[@topic] [flags]` | List board posts only (shortcut for `tk list --posts`) | `tk posts @bugs` |
-| `tk search` | `find` | `<query...> [-s status] [-p prio] [-a assignee] [--short] [--limit N]` | Search items with boolean DSL (`AND`, `OR`, `NOT`, `topic:`, `kind:`, `links:`, `linkedfrom:`, `s:`, `p:`) | `tk search topic:bugs AND urgent`<br>`tk search links:T-1`<br>`tk search "memory leak" NOT closed` |
-| `tk show` | — | `<id>` | Display metadata, links, backlinks, notes, commit SHA, and diff (forgiving IDs: `1`, `t1`, `T-1`) | `tk show 1`<br>`tk show G-2 --json` |
+| `tk search` | `find` | `<query...> [-s status] [-p prio] [-a user] [--short] [--limit N]` | Search items with boolean DSL (`AND`, `OR`, `NOT`, `topic:`, `kind:`, `links:`, `s:`, `p:`) | `tk search "mem leak" AND urgent`<br>`tk search links:T-1` |
+| `tk show` | — | `<id> [-n/--lines] [--json]` | Display metadata, links, backlinks, notes, commit SHA, and diff; `-n` numbers lines | `tk show 1 -n`<br>`tk show G-2 --json` |
 | `tk claim` | — | `<id> [--actor actor] [--force]` | Atomically claim a task for the current actor; prevents race conditions | `tk claim 1`<br>`tk claim T-1 --actor bot-1` |
-| `tk takeover` | `take` | `<id> [-m message] [--actor actor] [--force]` | Take over a task from another actor or an orphaned task with attribution | `tk takeover 1 -m "Taking over"`<br>`tk take T-1` |
-| `tk transfer` | — | `<id> [new-assignee] [--to assignee] [-m note]` | Hand off and transfer task ownership to another actor | `tk transfer 1 agent-gamma -m "Handing off"`<br>`tk transfer T-1 --to bob` |
-| `tk orphan` | — | `[id] [--older-than dur] [--all] [--dry-run] [-l/--list]` | Detect and mark abandoned tasks as orphaned; drops assignee and resets to open (default: 1h) | `tk orphan T-1`<br>`tk orphan reap --dry-run`<br>`tk orphan --all`<br>`tk orphan list` |
-| `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [--claim] [-a assignee] [-m/-n note] [-d desc]` | Modify task fields via CLI flags, append notes/wikilinks, or open `$EDITOR` | `tk edit T-1 -s in_progress`<br>`tk edit T-1 -m "Relates to [[T-5]]"`<br>`tk edit T-1 --claim` |
-| `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit] [-f/--force]` | Mark task done; enforces prerequisite completion check (override with `-f`) | `tk done T-1`<br>`tk done T-1 --diff`<br>`tk done T-1 -f` |
-| `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
-| `tk delete` | `rm` | `<id> [-y/--yes] [--force]` | Remove a task to the tombstone archive (prompts unless `-y` or `--force`) | `tk delete T-1`<br>`tk delete -y T-1`<br>`tk rm --force G-4` |
-| `tk restore` | `undo-delete` | `<id> [-l/--list] [--db] [-f]` | Restore deleted task from tombstone archive, or restore database with `--db` | `tk restore T-1`<br>`tk restore -l`<br>`tk restore --db latest -f` |
-| `tk backup` | `db` | `[list\|create\|verify\|restore] [-l] [-f]` | Manage atomic SQLite snapshots, central backup vault, and disaster recovery | `tk backup -l`<br>`tk backup create`<br>`tk db restore latest -f` |
-| `tk watch` | — | `[--json]` | Stream real-time task lifecycle events from socket daemon | `tk watch`<br>`tk watch --json \| jq .` |
-| `tk daemon start` | — | `[--socket path] [--tcp addr]` | Launch daemon process in the background (detached session) | `tk daemon start` |
-| `tk daemon restart` | — | `[--socket path] [--tcp addr]` | Restart background daemon process | `tk daemon restart` |
-| `tk daemon run` | — | `[--socket path] [--tcp addr]` | Run daemon process in foreground (debugging / headless / remote) | `tk daemon run --tcp 127.0.0.1:4567` |
-| `tk daemon status` | — | — | Ping daemon health and report active socket path | `tk daemon status` |
-| `tk daemon stop` | — | — | Transmit graceful shutdown signal to running daemon | `tk daemon stop` |
+| `tk takeover` | `take` | `<id> -m <message> [--actor actor] [--force]` | Take over a task from another actor or an orphaned task with attribution | `tk takeover 1 -m "Taking over"`<br>`tk take T-1` |
+| `tk transfer` | — | `<id> [new-actor] [--to actor] [-m note]` | Hand off and transfer task ownership to another actor | `tk transfer 1 agent-gamma -m "Handing off"` |
+| `tk orphan` | — | `[id] [--older-than dur] [--all] [--dry-run] [-l/--list]` | Detect and mark abandoned tasks as orphaned; drops assignee and resets to open | `tk orphan reap --dry-run`<br>`tk orphan list` |
+| `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [--claim] [-a user] [-m note] [-d desc]` | Modify task fields via CLI flags, append notes/wikilinks, or open `$EDITOR` | `tk edit T-1 -s in_progress -m "Note"` |
+| `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit] [-f/--force]` | Mark task done; auto-snaps HEAD Git commit/diff (override blocked with `-f`) | `tk done T-1`<br>`tk done T-1 --diff` |
+| `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task without closing | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
+| `tk delete` | `rm` | `<id> [-y/--yes] [--force]` | Remove a task to the tombstone archive (prompts unless `-y` or `--force`) | `tk delete T-1 -y` |
+| `tk restore` | `undo-delete` | `<id> [-l/--list] [--db] [-f]` | Restore deleted task from tombstone archive, or restore database with `--db` | `tk restore T-1`<br>`tk restore --db latest -f` |
+| `tk archive` | `arc` | `[id...] [-l] [-m reason]` | Archive tasks to hide from active backlog; `tk archive list` | `tk archive T-1 T-2` |
+| `tk unarchive` | — | `<id...> [-m reason]` | Restore archived tasks to active status | `tk unarchive T-1` |
+| `tk backup` | `db` | `[list\|create\|verify\|restore] [-l] [-f]` | Manage atomic SQLite snapshots, central backup vault, and disaster recovery | `tk db backup`<br>`tk db restore latest -f` |
+| `tk watch` | — | `[--json]` | Stream real-time task lifecycle events from socket daemon | `tk watch` |
+| `tk daemon` | — | `[start\|restart\|run\|status\|stop]` | Manage background socket daemon process | `tk daemon status` |
+| `tk version` | — | `[--json]` | Display version, commit SHA, build date, and platform | `tk version` |
 
 ### Global Flags
 
@@ -128,6 +128,23 @@ tk
 - `--actor <name>`: Explicit actor identity for task attribution (overrides `TK_ACTOR`, `TK_AUTHOR`, and git author).
 - `--no-pager`: Disable automatic conditional pager (`less -RFX`) for long outputs.
 - `--json`: Output machine-readable JSON for scripting, CI/CD, or LLM agent pipelines.
+
+---
+
+## Obsidian-Style Wikilinks
+
+Descriptions and notes support rich, bidirectionally tracked `[[...]]` wikilinks. Anchored links jump directly to line numbers or activity notes:
+
+| Syntax | Target | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `[[T-15]]` | Task / Post | Links to item (forgiving: `[[t15]]`, `[[15]]`) | `Relates to [[T-15]]` |
+| `[[T-15#L12]]` | Line Anchor | Anchors to line 12 of description (`[[T-15:12]]`) | `See spec at [[T-15#L12]]` |
+| `[[T-15#L12-L20]]` | Line Range | Anchors to lines 12 through 20 | `Implemented in [[T-15#L12-L20]]` |
+| `[[T-15#n3]]` | Note Anchor | Anchors to activity note #3 | `Addressed feedback in [[T-15#n3]]` |
+| `[[T-15\|custom]]` | Display Alias | Custom link text | `Check [[T-15\|auth spec]]` |
+| `[[@game/hero]]` | Topic | Links to topic board or folder | `Moved to [[@game/hero]]` |
+
+*Tip: Run `tk show <ID> -n` to display description line numbers when authoring line anchors.*
 
 ---
 

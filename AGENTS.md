@@ -8,15 +8,15 @@
 ## 1. Core Operating Principles
 
 1. **Every Work Item Must Have a Task**:
-   - Before writing or refactoring code, find an existing task (`tk list` or `tk search`) or create one (`tk new`).
+   - Before writing or refactoring code, find an existing task (`tk list` or `tk search`) or create one (`tk new -t "..." -T <topic>`).
 2. **Explicit Atomic Claims**:
    - Always claim the task before starting implementation: `tk claim <ID> --actor "<agent-name>"`.
    - Never overwrite another agent's in-progress claim unless explicitly asked or coordinated using `--force`.
 3. **Transparent Progress & Handoffs**:
-   - Document technical decisions, blockers, or milestones directly into task notes using `tk edit <ID> -m "..."`.
+   - Document technical decisions, blockers, or milestones directly into task notes using `tk edit <ID> -m "..."` (supports `[[T-12#L40]]` wikilinks).
 4. **Verified Completion with Commit Evidence**:
    - Once implementation passes the full quality gate (`make check`, see §4), commit, then mark the task done with `tk done <ID>`.
-   - `tk done` automatically anchors the current Git HEAD commit SHA and diff summary into the tasklog.
+   - `tk done` automatically anchors the current Git HEAD commit SHA, message, and diff summary into the task.
 5. **Install & Migrate After Significant Changes**:
    - Always run `make install` after significant modifications so that the binary is built with version ldflags (`tk version`), installed to `~/.local/bin/tk`, and any running daemon is cleanly restarted with migrations applied.
 
@@ -24,161 +24,42 @@
 
 ## 2. Agent Command Reference
 
-### Discovering & Steering Work
-```bash
-# Find the next actionable, unblocked task (steers agents to ready work)
-tk next
-tk next --json
+| Action | Command | Notes |
+| :--- | :--- | :--- |
+| **Status Overview** | `tk status` | High-signal repo overview (open, active, orphaned, ready, blocked) |
+| **Next Actionable** | `tk next [--json]` | Highest-priority unblocked task ready for work |
+| **Dependency Tree** | `tk tree [@topic] [-r]` | DAG graph; `-r` shows prerequisite breakdown |
+| **List Backlog** | `tk list [--ready\|--blocked\|--tasks\|--posts]` | Filterable table; supports `-s open,in_progress`, `@topic`, `-q` |
+| **Inspect Details** | `tk show <ID> [-n]` | Full spec, notes, diffs, backlinks; `-n` numbers lines for anchors |
+| **Create Task** | `tk new -t "Title" -p urgent -T <topic> [--after <ID>]` | Accepts `-d` description or piped stdin |
+| **Create Board Post**| `tk post -t "Title" -T <board> [-d "Body"]` | Untracked bug report or idea (P-n) |
+| **Reply / Note** | `tk reply <ID> -m "Comment text"` | Appends discussion note (supports `[[wiki links]]`) |
+| **Promote Post** | `tk promote <post-id> --to <tasks-topic>` | Promotes P-n to T-n task with bidirectional link |
+| **Claim Work** | `tk claim <ID> [--actor <name>]` | Atomic assignment; transitions `open` → `in_progress` |
+| **Takeover / Steer**| `tk takeover <ID> -m "Reason" [--actor <name>]` | Takes over task; clears orphan status and audits reason |
+| **Transfer** | `tk transfer <ID> <new-actor> -m "Handoff note"` | Reassigns task with audit note |
+| **Manage Deps** | `tk link <ID> <prereq...>` / `tk unlink <ID> <prereq...>` | Declares `<ID>` depends on `<prereq...>` |
+| **Inspect Deps** | `tk dep show <ID>` | Lists prerequisite blockers and dependent tasks |
+| **Move Topic** | `tk move <ID...> --to <topic\|unfiled>` | Moves items to topic; dependencies/links preserved |
+| **Wikilinks & Jump**| `tk links <ID>` / `tk go <ID> [n]` | `tk links` lists links/backlinks; `tk go <ID> 2` jumps to link #2 |
+| **Progress Note** | `tk edit <ID> -m "Progress note [[T-5#n1]]"` | Appends chronological note to task |
+| **Complete Task** | `tk done <ID> [-c commit] [--diff] [-f]` | Resolves task + snaps HEAD SHA/diff. `-f` overrides blocked deps |
+| **Orphan Stale** | `tk orphan reap --older-than 1h [--dry-run]` | Drops unresponsive assignee, resets to open, sets orphaned_at |
+| **Undo / Restore** | `tk restore <ID>` / `tk restore -l` | Recovers deleted task from tombstone archive |
+| **Disaster Recovery**| `tk db restore latest -f` / `tk db backup` | Atomic point-in-time recovery via central vault |
+| **Daemon Control** | `tk daemon [status\|start\|restart\|stop]` | Controls background socket service |
+| **Live Stream** | `tk watch [--json]` | Live event stream (terminal UI or JSON event pipe) |
 
-# Render hierarchical dependency DAG tree
-tk tree
-
-# View only ready tasks whose prerequisites are complete
-tk list --ready
-
-# View only tasks blocked by unfinished prerequisites
-tk list --blocked
-
-# List all tasks in current repository (ordered by status, priority, and ID)
-tk list
-
-# View open or in-progress tasks
-tk list -s open,in_progress
-
-# Filter tasks or posts specifically, or use convenience shortcuts
-tk list --tasks
-tk list --posts
-tk list -k post
-tk tasks @hero-system
-tk posts @bugs
-
-# Search using boolean DSL
-tk search "priority:urgent OR (bug AND status:open)"
-
-# Inspect full task details, notes, prerequisites, blockers, and attached Git diffs
-tk show <ID>
-```
-
-### Claiming & Linking Work
-```bash
-# Create a new scoped task (optionally specify topic via -T and link prerequisites via --after)
-tk new -t "Descriptive task title" -p urgent -T backend --after T-1 -d "Detailed spec..."
-
-# Forgiving IDs: 't15', 'T15', 't-15', or '15' normalize automatically to 'T-15' (or 'G-15' in global)
-tk show 15
-tk claim 15 --actor "agent-antigravity"
-
-# Link dependencies (T-2 depends on T-1; T-1 blocks T-2)
-tk link T-2 T-1
-tk unlink T-2 T-1
-
-# Inspect dependency blockers and dependents for a task
-tk dep show <ID>
-```
-
-### Updating & Documenting Progress
-```bash
-# Append progress notes or milestone logs (supports Obsidian-style [[T-15]] wikilinks)
-tk edit <ID> -m "Implemented atomic backup mechanism; relates to [[T-12#L40]]."
-
-# Move task(s) or post(s) to another topic
-tk move <ID> <topic>
-
-# Reassign if delegating or handing off
-tk edit <ID> --assignee "reviewer-agent"
-```
-
-### Stale Tasks, Orphaning & Handover
-```bash
-# Take over a task from another actor or claim an orphaned task with a reason
-tk takeover <ID> -m "Taking over implementation for sprint"
-tk take <ID> -m "Assignee unresponsive; taking over"
-
-# Hand off / transfer a task directly to another actor
-tk transfer <ID> <new-actor> -m "Handing off database work"
-
-# List orphaned tasks or stale candidates
-tk list --orphaned
-tk orphan list
-tk orphan list --older-than 30m
-
-# Preview or reap stale tasks inactive past threshold (default: 1h; checks commits, updates, and dependencies)
-tk orphan reap --dry-run
-tk orphan reap --older-than 2h
-
-# Manually orphan an abandoned task (drops assignee, resets to open, tags 'orphaned')
-tk orphan <ID> -m "Agent timed out"
-```
-
-### Completing Tasks
-```bash
-# Complete task and automatically attach HEAD commit evidence
-tk done <ID>
-
-# Or complete with an explicit commit SHA
-tk done <ID> -c abc1234
-```
-
-### Disaster Recovery & Undo
-```bash
-# List recoverable deleted tasks from tombstone archive
-tk restore -l
-
-# Restore an accidentally deleted task with full git diff and notes intact
-tk restore <ID>
-
-# Restore whole database from latest backup (central vault or local)
-tk restore --db
-tk restore --db latest -f
-tk db restore latest -f
-tk backup restore latest -f
-
-# Create an atomic rolling backup snapshot (mirrored in central vault)
-tk backup create [optional-name]
-tk db backup [optional-name]
-
-# List available point-in-time snapshots across local & central vaults
-tk backup -l
-tk db list
-```
-
-### Daemon Management
-```bash
-# Start the daemon in the background (detached session)
-tk daemon start
-
-# Restart running daemon in background
-tk daemon restart
-
-# Gracefully stop background daemon
-tk daemon stop
-
-# Check daemon status and socket connectivity
-tk daemon status
-```
-
-### Real-Time Monitoring & Automation
-```bash
-# Stream live repository task mutations and see latest active backlog
-tk watch
-
-# Use --json on inspection commands for reliable structured parsing:
-tk list --json
-tk show <ID> --json
-tk restore -l --json
-tk backup -l --json
-```
+*Forgiving IDs: `t15`, `T15`, `t-15`, or `15` automatically resolve to `T-15` (or `G-15` in global mode `-g`).*
 
 ---
 
-## 3. Storage & Backup Safety Invariants
+## 3. Storage & Safety Invariants
 
-- Repository tasks are persisted in `.tasks/tasks.db` (WAL mode enabled).
-- Backups and atomic snapshots are stored both locally in `.tasks/backups/` and mirrored centrally in `~/.local/share/task_cli/backups/repos/<slug>/`.
-- If `.tasks` is accidentally deleted, the running daemon auto-resurrects it to disk from live memory, or restores from the central backup vault if restarting fresh.
-- `tk restore --db` (or `tk db restore`) safely restores repository state from the central vault at any time.
-- Deleted tasks are archived to `task_tombstones` and can be retrieved using `tk restore <ID>`.
-- Never delete or manually overwrite `.tasks/tasks.db` directly. Always use `tk` CLI commands, `tk db`, or `tk backup` for state inspection and recovery.
+- **Storage**: Local repo tasks reside in `.tasks/tasks.db` (SQLite WAL mode). Global tasks (`-g`) in `~/.local/share/task_cli/global.db`.
+- **Vault Mirroring**: Snapshots are saved to `.tasks/backups/` and mirrored centrally in `~/.local/share/task_cli/backups/repos/<slug>/`.
+- **Resurrection**: If `.tasks/` is deleted, the active daemon auto-resurrects the database from memory or recovers from the central vault.
+- **Tombstones**: `tk delete <ID>` moves items to `task_tombstones`. Undelete at any time via `tk restore <ID>`. Never delete SQLite DBs manually.
 
 ---
 
