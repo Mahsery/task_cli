@@ -26,14 +26,15 @@ var searchCmd = &cobra.Command{
 	Long: `Search tasks using a zero-flag query DSL inspired by grx.
 
 Supports:
-  - Boolean composition: 'AND', 'OR', 'NOT' (e.g. 'bug AND backend', 'fix NOT closed')
+  - Boolean composition: 'AND' ('&&'), 'OR' ('||'), 'NOT' ('!') and parentheses '(a OR b) AND c'
   - Implicit AND: multiple terms 'bug engine' match tasks containing both
-  - Topic qualifiers: 'topic:backend', 'in:backend/api'
+  - Topic qualifiers: 'topic:backend', 'in:backend/api', 'topic:unfiled'
   - Kind qualifiers: 'kind:task', 'type:post'
-  - Link qualifiers: 'links:T-1', 'linkedfrom:T-2'
-  - Field qualifiers: 'status:open' ('s:open'), 'priority:high' ('p:high'), 'assignee:mehmet' ('a:mehmet'), 'id:T-1'
-  - Legacy tag filtering: 'tag:bug', 't:core'
-  - Negations: '-wip' or 'NOT wip'
+  - Link qualifiers: 'links:T-1' ('link:T-1', 'linksto:T-1'), 'linkedfrom:T-2' ('backlink:T-2', 'backlinks:T-2')
+  - Field qualifiers: 'status:open' ('s:open', 's:resolved', 's:orphan'), 'priority:high' ('pri:high', 'p:high'),
+    'assignee:mehmet' ('a:mehmet'), 'author:alice', 'id:T-1' ('id:1')
+  - Legacy tag filtering: 'tag:bug', 't:core', 'tag:"bug fix"'
+  - Negations: '-wip', '-tag:"bug fix"', or 'NOT wip'
   - Exact quoted phrases: '"memory leak"'`,
 	Example: `  tk search bug AND backend
   tk search "memory leak"

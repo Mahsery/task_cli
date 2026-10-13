@@ -111,10 +111,10 @@ tk
 | `tk transfer` | — | `<id> [new-actor] [--to actor] [-m note]` | Hand off and transfer task ownership to another actor | `tk transfer 1 agent-gamma -m "Handing off"` |
 | `tk orphan` | — | `[id] [--older-than dur] [--all] [--dry-run] [-l/--list]` | Detect and mark abandoned tasks as orphaned; drops assignee and resets to open | `tk orphan reap --dry-run`<br>`tk orphan list` |
 | `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [--claim] [-a user] [-m note] [-d desc]` | Modify task fields via CLI flags, append notes/wikilinks, or open `$EDITOR` | `tk edit T-1 -s in_progress -m "Note"` |
-| `tk done` | `close`, `resolve` | `<id> [-c commit] [--diff] [--no-commit] [-f/--force]` | Mark task done; auto-snaps HEAD Git commit/diff (override blocked with `-f`) | `tk done T-1`<br>`tk done T-1 --diff` |
-| `tk attach` | — | `<id> [commit-ref] [--diff]` | Snapshot git commit or uncommitted working tree diff into task without closing | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
-| `tk delete` | `rm` | `<id> [-y/--yes] [--force]` | Remove a task to the tombstone archive (prompts unless `-y` or `--force`) | `tk delete T-1 -y` |
-| `tk restore` | `undo-delete` | `<id> [-l/--list] [--db] [-f]` | Restore deleted task from tombstone archive, or restore database with `--db` | `tk restore T-1`<br>`tk restore --db latest -f` |
+| `tk done` | `close`, `resolve` | `<id> [-c commit] [-m msg] [--diff] [--no-commit] [-f/--force]` | Mark task done; auto-snaps HEAD Git commit/diff (override blocked with `-f`) | `tk done T-1`<br>`tk done T-1 --diff` |
+| `tk attach` | — | `<id> [commit-ref] [-m msg] [--diff]` | Snapshot git commit or uncommitted working tree diff into task without closing | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
+| `tk delete` | `rm` | `<id> [-y/--yes] [-f/--force]` | Remove a task to the tombstone archive (prompts unless `-y` or `-f`) | `tk delete T-1 -y` |
+| `tk restore` | `undo-delete` | `<id\|latest> [-l/--list] [-d/--db] [-f]` | Restore deleted task from tombstone archive, or restore database with `--db` | `tk restore T-1`<br>`tk restore --db latest -f` |
 | `tk archive` | `arc` | `[id...] [-l] [-m reason]` | Archive tasks to hide from active backlog; `tk archive list` | `tk archive T-1 T-2` |
 | `tk unarchive` | — | `<id...> [-m reason]` | Restore archived tasks to active status | `tk unarchive T-1` |
 | `tk backup` | `db` | `[list\|create\|verify\|restore] [-l] [-f]` | Manage atomic SQLite snapshots, central backup vault, and disaster recovery | `tk db backup`<br>`tk db restore latest -f` |
@@ -126,6 +126,8 @@ tk
 
 - `-g, --global`: Operate on the global task database (`~/.local/share/task_cli/global.db`) instead of the current git repository.
 - `--actor <name>`: Explicit actor identity for task attribution (overrides `TK_ACTOR`, `TK_AUTHOR`, and git author).
+- `--socket <path>`: Custom Unix domain socket path for daemon IPC (overrides `TK_SOCKET`).
+- `--tcp <addr>`: Optional TCP address (`host:port`) to connect to (overrides `TK_ADDR`).
 - `--no-pager`: Disable automatic conditional pager (`less -RFX`) for long outputs.
 - `--json`: Output machine-readable JSON for scripting, CI/CD, or LLM agent pipelines.
 
@@ -156,33 +158,35 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 |:----------:|--------|-------------|
 | `Tab` / `Shift+Tab` | Cycle Active Pane | Switch focus between Topic Sidebar, Item List, and Details Pane |
 | `h` / `l` / `←` / `→` | Navigate Panes | Move focus horizontally between panes |
-| `j` / `k` / `↓` / `↑` | Move / Scroll | In **Sidebar**: select topic; in **List**: navigate items; in **Details**: scroll content |
-| `gg` / `G` | Top / Bottom | Jump to top or bottom of the active pane |
-| `Ctrl+D` / `Ctrl+U` / `J` / `K` | Fast Page Scroll | Page scroll content down/up in split view |
+| `j` / `k` / `↓` / `↑` | Move / Scroll | In **Sidebar**: select topic; in **List**: navigate items; in **Details**: scroll content (supports `{count}j`/`{count}k`) |
+| `gg` / `G` / `Home` / `End` | Top / Bottom | Jump to top or bottom of the active pane (supports `{line}G`) |
+| `Ctrl+D` / `Ctrl+U` / `J` / `K` / `PgDn` / `PgUp` | Fast Page Scroll | Page scroll content down/up in the active pane |
+| `<` / `>` / `,` / `.` / `=` | Resize Split Pane | Adjust or reset (`=`) horizontal split ratio between List and Details panes |
 | `O` | Cycle Kind Filter | Cycle item kind filter between **All Items**, **Tasks Only**, and **Posts Only** |
 | `gt` | Fuzzy Topic Picker | Open fuzzy topic search modal (`Tab` inside picker toggles repo vs global topics) |
 | `]t` / `[t` | Cycle Topics | Jump to next or previous topic in the tree |
 | `]l` / `[l` | Link Cursor | Move cursor to next / previous `[[...]]` wikilink in the details pane |
-| `Enter` / `gf` | Follow Wikilink | Follow focused wikilink to target task, note anchor, or topic (`{n}gf` jumps to link #n) |
+| `Enter` / `gf` | Follow Link / Toggle Diff | Follow focused wikilink (`{n}gf` jumps to link #n), or toggle unified git diff in Details |
 | `gb` / `gB` | Jump History | Navigate backward / forward through navigation history stack |
 | `gl` | Insert Link Modal | Open modal to select an item and append an Obsidian-style wikilink `[[...]]` |
 | `M` | Move Items / Topic | In **List**: move selected items to another topic; in **Sidebar**: move topic under a new parent |
 | `p` | Promote Post | In **List**: promote selected board post (`P-n`) into a task (`T-n`) |
-| `N` / `R` / `D` | Topic Management | In **Sidebar**: `N` creates topic, `R` renames topic, `D` deletes topic |
+| `N` / `R` / `D` | Topic Management | In **Sidebar**: `N` creates topic, `R` renames topic, `D` deletes topic (`Space` folds group) |
 | `t` | Toggle Tree Mode | In **Tasks topic**: toggle between flat list and hierarchical DAG graph tree |
 | `L` | Link Dependency Modal | Open interactive modal to add a prerequisite dependency |
 | `U` | Unlink Dependency Modal | Open interactive fuzzy picker to remove a prerequisite dependency |
 | `Space` | Multi-Select Toggle | Toggle item selection (`●`/`○` marker) and advance cursor down |
 | `v` / `V` | Select / Select All | Toggle item selection / select all visible items |
-| `u` | Multi-Level Undo | Revert recent mutations (restores deleted tasks, claims, done, status) |
-| `d` | Done / Batch Done | Mark task(s) done / resolve post(s) (enforces prerequisite blockers) |
+| `u` | Multi-Level Undo | Revert recent mutations (restores deleted tasks, claims, done, status, archive) |
+| `d` | Done / Batch Done | Mark task(s) done / resolve post(s) (prompts for force confirmation if blocked) |
 | `s` | Status / Batch Toggle | Cycle status between `open` and `in_progress` |
 | `a` | Claim / Batch Claim | Atomically claim selected task(s) for current actor |
+| `A` / `Ctrl+A` / `Alt+A` | Archive / Toggle Archived | `A` archives/unarchives selected item(s); `Ctrl+A` / `Alt+A` toggles archived item visibility |
 | `x` | Delete / Batch Delete | Prompt for confirmation (`[y/N]`) and remove selected items |
 | `n` | New Item | Create task in tasks topic or post in board topic |
 | `e` | Edit Item | Launch `$EDITOR` with selected item pre-populated |
 | `/` | Search Filter | Enter live search query (`Enter` applies, `Esc` cancels) |
-| `Esc` / `c` | Clear Filter / Selection | Return focus to list, clear active search filter, or deselect all items |
+| `Esc` / `c` | Clear Filter / Selection | Cancel active chord, return focus to list, clear selection, or reset search filter |
 | `S` | Toggle Scope | Switch view between `local` (git repository) and `global` scopes |
 | `r` | Refresh | Re-query tasks and topics from daemon |
 | `q` / `Ctrl+C` | Quit | Exit the TUI |
@@ -199,6 +203,8 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `TK_AUTHOR` | *(unset)* | Secondary actor identity fallback before git author |
 | `TK_PAGER` | `less -RFX` | Pager command for `tk list`, `tk search`, and `tk show` when output exceeds screen (falls back to `BAT_PAGER` -> `PAGER`) |
 | `TK_NO_PAGER` | *(unset)* | Set to `1` or `true` to disable automatic paging completely |
+| `TK_ASCII` | *(unset)* | Set to `1` or `true` to force ASCII-only glyphs in CLI and TUI output |
+| `NO_COLOR` | *(unset)* | Disable ANSI color output across CLI and TUI |
 | `TK_SOCKET` | `/run/user/<uid>/tk.sock`<br>*(fallback: `~/.local/share/task_cli/tk.sock`)* | Unix Domain Socket path used for client-daemon IPC communication |
 | `TK_ADDR` | *(unset)* | Optional TCP address (`host:port`) to bind or connect to (e.g. `127.0.0.1:4567` for SSH tunneling or containers) |
 | `EDITOR` | `$VISUAL` -> `nvim` | Text editor invoked when creating or editing tasks interactively |

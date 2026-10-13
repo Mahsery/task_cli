@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -590,5 +591,104 @@ func TestTopicGroupRollsUpCounts(t *testing.T) {
 	}
 	if len(tasks) != 5 {
 		t.Fatalf("expected 5 tasks under group 'game', got %d", len(tasks))
+	}
+}
+
+func TestDeleteTopicSubTopicSlugCollisionRollsBack(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	mustTopic(t, db, "Alpha", domain.TopicGroup, "")
+	mustTopic(t, db, "Sub", domain.TopicTasks, "alpha")
+	mustTopic(t, db, "Beta", domain.TopicGroup, "")
+	mustTopic(t, db, "Sub", domain.TopicTasks, "beta")
+
+	// Deleting beta with --move-to alpha must fail due to sub-topic slug collision ("sub")
+	if err := db.DeleteTopic("beta", "alpha"); err == nil {
+		t.Fatal("expected DeleteTopic to fail when child topic slug collides in destination")
+	}
+
+	// Verify beta and beta/sub still exist
+	if _, err := db.GetTopic("beta"); err != nil {
+		t.Fatalf("expected beta to remain intact after failed DeleteTopic: %v", err)
+	}
+	if _, err := db.GetTopic("beta/sub"); err != nil {
+		t.Fatalf("expected beta/sub to remain intact after failed DeleteTopic: %v", err)
+	}
+}
+
+func TestTopicRollupThroughIntermediateTasksTopic(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	mustTopic(t, db, "Engineering", domain.TopicGroup, "")
+	mustTopic(t, db, "Backend", domain.TopicTasks, "engineering")
+	mustTopic(t, db, "API", domain.TopicTasks, "engineering/backend")
+
+	mustItem(t, db, CreateItemParams{Title: "Leaf API task", Topic: "engineering/backend/api", Status: domain.StatusOpen})
+
+	eng, err := db.GetTopic("engineering")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if eng.ItemCount != 1 || eng.OpenCount != 1 {
+		t.Fatalf("expected engineering group to roll up counts through intermediate tasks topic (items=1, open=1), got items=%d open=%d", eng.ItemCount, eng.OpenCount)
+	}
+}
+
+func TestRestoreTaskRestoresBlocksAndLatestTombstone(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	t1 := mustItem(t, db, CreateItemParams{Title: "Prereq T-1"})
+	t2 := mustItem(t, db, CreateItemParams{Title: "Dependent T-2", DependsOn: []string{t1.ID}})
+
+	// Delete T-1 (which blocks T-2)
+	if err := db.DeleteTask(t1.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Restore using "latest"
+	restored, err := db.RestoreTaskByID("latest")
+	if err != nil {
+		t.Fatalf("RestoreTaskByID(latest) failed: %v", err)
+	}
+	if restored.ID != t1.ID {
+		t.Fatalf("expected restored ID %s, got %s", t1.ID, restored.ID)
+	}
+	if !reflect.DeepEqual(restored.Blocks, []string{t2.ID}) {
+		t.Fatalf("expected restored T-1 Blocks=[%s], got %v", t2.ID, restored.Blocks)
+	}
+
+	gotT2, err := db.GetTask(t2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotT2.DependsOn, []string{t1.ID}) || !gotT2.IsBlocked {
+		t.Fatalf("expected T-2 DependsOn=[%s] and IsBlocked=true after restoring T-1, got DependsOn=%v IsBlocked=%v", t1.ID, gotT2.DependsOn, gotT2.IsBlocked)
+	}
+}
+
+func TestVerifyBackupFileRejectsMissingAndEmptyPaths(t *testing.T) {
+	dir := t.TempDir()
+	missingPath := filepath.Join(dir, "nonexistent.db")
+
+	if err := VerifyBackupFile(missingPath); err == nil {
+		t.Fatal("expected VerifyBackupFile to reject nonexistent path")
+	}
+	if _, err := os.Stat(missingPath); !os.IsNotExist(err) {
+		t.Fatalf("VerifyBackupFile must not create missing file on disk, stat err=%v", err)
+	}
+
+	if err := VerifyBackupFile(dir); err == nil {
+		t.Fatal("expected VerifyBackupFile to reject directory path")
+	}
+
+	emptyPath := filepath.Join(dir, "empty.db")
+	if err := os.WriteFile(emptyPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyBackupFile(emptyPath); err == nil {
+		t.Fatal("expected VerifyBackupFile to reject empty 0-byte file")
 	}
 }
