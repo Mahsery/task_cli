@@ -20,14 +20,85 @@ type CommitInfo struct {
 	DiffContent string
 }
 
+// FindRepoRoot returns the shared repository root directory (resolving through
+// git-common-dir when inside a linked git worktree so all worktrees share .tasks/tasks.db).
 func FindRepoRoot() (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	return FindRepoRootInDir("")
+}
+
+// FindRepoRootInDir returns the shared repository root for dir (or CWD when dir is empty).
+func FindRepoRootInDir(dir string) (string, error) {
+	wtRoot, err := FindWorktreeRootInDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var cmd *exec.Cmd
+	if dir != "" {
+		cmd = exec.Command("git", "-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	} else {
+		cmd = exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	}
+	out, err := cmd.Output()
+	if err == nil {
+		commonDir := filepath.Clean(strings.TrimSpace(string(out)))
+		if !filepath.IsAbs(commonDir) && dir != "" {
+			commonDir = filepath.Clean(filepath.Join(dir, commonDir))
+		}
+		if filepath.Base(commonDir) == ".git" {
+			return filepath.Dir(commonDir), nil
+		}
+	}
+	return wtRoot, nil
+}
+
+// FindWorktreeRoot returns the top-level working tree directory of the current checkout.
+func FindWorktreeRoot() (string, error) {
+	return FindWorktreeRootInDir("")
+}
+
+// FindWorktreeRootInDir returns the top-level working tree directory for dir (or CWD when dir is empty).
+func FindWorktreeRootInDir(dir string) (string, error) {
+	var cmd *exec.Cmd
+	if dir != "" {
+		cmd = exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
+	} else {
+		cmd = exec.Command("git", "rev-parse", "--show-toplevel")
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
 	root := strings.TrimSpace(string(out))
 	return filepath.Clean(root), nil
+}
+
+// ResolveWorktreeDir returns the active worktree directory when the current process is
+// inside a linked worktree of repoDir, or repoDir itself otherwise.
+func ResolveWorktreeDir(repoDir string) (string, error) {
+	if repoDir == "" {
+		return FindWorktreeRoot()
+	}
+	wt, err := FindWorktreeRoot()
+	if err == nil && wt != "" {
+		if wt == repoDir {
+			return wt, nil
+		}
+		if commonRoot, err := FindRepoRootInDir(wt); err == nil && commonRoot == filepath.Clean(repoDir) {
+			return wt, nil
+		}
+	}
+	return repoDir, nil
+}
+
+// CurrentBranch returns the checked-out branch name for the worktree at repoDir (or "" if detached).
+func CurrentBranch(repoDir string) (string, error) {
+	workDir, err := ResolveWorktreeDir(repoDir)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command("git", "-C", workDir, "symbolic-ref", "--short", "-q", "HEAD")
+	out, _ := cmd.Output()
+	return strings.TrimSpace(string(out)), nil
 }
 
 func GetAuthor() string {
@@ -79,12 +150,10 @@ func GetLatestCommit(repoDir string) (*CommitInfo, error) {
 }
 
 func GetCommit(repoDir, ref string) (*CommitInfo, error) {
-	if repoDir == "" {
-		var err error
-		repoDir, err = FindRepoRoot()
-		if err != nil {
-			return nil, err
-		}
+	var err error
+	repoDir, err = ResolveWorktreeDir(repoDir)
+	if err != nil {
+		return nil, err
 	}
 
 	// 1. Get commit metadata (SHA, short SHA, author, date, subject, body)
@@ -128,12 +197,10 @@ func GetCommit(repoDir, ref string) (*CommitInfo, error) {
 }
 
 func GetWorkingDiff(repoDir string) (*CommitInfo, error) {
-	if repoDir == "" {
-		var err error
-		repoDir, err = FindRepoRoot()
-		if err != nil {
-			return nil, err
-		}
+	var err error
+	repoDir, err = ResolveWorktreeDir(repoDir)
+	if err != nil {
+		return nil, err
 	}
 
 	// Diffstat of unstaged + staged
