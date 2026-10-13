@@ -697,6 +697,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "U":
+		if m.activePane == PaneSidebar {
+			m.statusMsg = "Tab to Tasks to unlink dependencies"
+			return m, nil
+		}
+		cur := m.currentTask()
+		if cur == nil {
+			return m, nil
+		}
+		if len(cur.DependsOn) == 0 {
+			m.statusMsg = fmt.Sprintf("Task %s has no prerequisites to unlink", cur.ID)
+			return m, nil
+		}
+		m.openPicker(pickUnlinkDep, []string{cur.ID}, "")
+		return m, nil
+
 	case "d":
 		// Batch Done if tasks selected in list pane, otherwise single-task reversible done
 		if m.activePane == PaneList && len(m.selected) > 0 {
@@ -711,7 +727,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if len(blockedIDs) > 0 {
-				m.statusMsg = fmt.Sprintf("⚠️ Cannot mark done: %d task(s) are blocked by prerequisites (%s)", len(blockedIDs), strings.Join(blockedIDs, ", "))
+				dlg := m.newBatchConfirmDialog(ConfirmForceDone, "FORCE MARK BATCH DONE", fmt.Sprintf("%d task(s) (%s) blocked by prerequisites. Force mark all %d tasks DONE?", len(blockedIDs), strings.Join(blockedIDs, ", "), len(ids)))
+				dlg.TargetStatus = domain.StatusDone
+				m.confirmDialog = dlg
 				return m, nil
 			}
 			dlg := m.newBatchConfirmDialog(ConfirmDone, "CONFIRM BATCH DONE", fmt.Sprintf("Mark %d selected tasks as DONE?", len(ids)))
@@ -728,7 +746,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.reopenTaskCmd(cur.ID)
 			}
 			if cur.IsBlocked {
-				m.statusMsg = fmt.Sprintf("⚠️ Cannot mark %s DONE: blocked by unfinished prerequisite(s): %s", cur.ID, strings.Join(cur.BlockedBy, ", "))
+				dlg := m.newSingleConfirmDialog(ConfirmForceDone, "FORCE MARK DONE", fmt.Sprintf("Task %s is blocked by unfinished prerequisite(s) (%s). Force mark DONE?", cur.ID, strings.Join(cur.BlockedBy, ", ")), cur)
+				dlg.TargetStatus = domain.StatusDone
+				m.confirmDialog = dlg
 				return m, nil
 			}
 			m.pushUndo(UndoStatusChange, fmt.Sprintf("Marked %s as DONE", cur.ID), cloneTaskSnapshot(cur, nil))

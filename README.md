@@ -171,6 +171,7 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `N` / `R` / `D` | Topic Management | In **Sidebar**: `N` creates topic, `R` renames topic, `D` deletes topic |
 | `t` | Toggle Tree Mode | In **Tasks topic**: toggle between flat list and hierarchical DAG graph tree |
 | `L` | Link Dependency Modal | Open interactive modal to add a prerequisite dependency |
+| `U` | Unlink Dependency Modal | Open interactive fuzzy picker to remove a prerequisite dependency |
 | `Space` | Multi-Select Toggle | Toggle item selection (`●`/`○` marker) and advance cursor down |
 | `v` / `V` | Select / Select All | Toggle item selection / select all visible items |
 | `u` | Multi-Level Undo | Revert recent mutations (restores deleted tasks, claims, done, status) |

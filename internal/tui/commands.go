@@ -149,13 +149,29 @@ func (m Model) updateStatusCmd(taskID string, newStatus domain.Status) tea.Cmd {
 }
 
 func (m Model) markDoneCmd(taskID string) tea.Cmd {
+	return m.markDoneWithForceCmd(taskID, false)
+}
+
+func (m Model) markDoneWithForceCmd(taskID string, force bool) tea.Cmd {
 	return func() tea.Msg {
 		if m.client == nil {
 			return nil
 		}
 		sha, msg, stat, diff := m.latestCommit()
-		if _, err := m.client.AttachGit(taskID, sha, msg, stat, diff, true); err != nil {
+		if _, err := m.client.AttachGitWithForce(taskID, sha, msg, stat, diff, true, force); err != nil {
 			return errMsg(err)
+		}
+		return m.reloadAfter(nil)
+	}
+}
+
+func (m Model) unlinkTaskCmd(taskID, prereqID string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		if err := m.client.RemoveDependency(taskID, prereqID); err != nil {
+			return errMsg(fmt.Errorf("failed to unlink %s -> %s: %w", taskID, prereqID, err))
 		}
 		return m.reloadAfter(nil)
 	}
@@ -184,6 +200,10 @@ func (m Model) getSelectedIDs() []string {
 }
 
 func (m Model) batchDoneCmd(ids []string) tea.Cmd {
+	return m.batchDoneWithForceCmd(ids, false)
+}
+
+func (m Model) batchDoneWithForceCmd(ids []string, force bool) tea.Cmd {
 	return func() tea.Msg {
 		if m.client == nil {
 			return nil
@@ -191,7 +211,7 @@ func (m Model) batchDoneCmd(ids []string) tea.Cmd {
 		sha, msg, stat, diff := m.latestCommit()
 		err := runBatch("done", ids, func(id string) error {
 			if sha != "" {
-				_, err := m.client.AttachGit(id, sha, msg, stat, diff, true)
+				_, err := m.client.AttachGitWithForce(id, sha, msg, stat, diff, true, force)
 				return err
 			}
 			st := domain.StatusDone

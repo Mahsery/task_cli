@@ -159,7 +159,7 @@ func (m Model) buildUndoAction(dlg *ConfirmDialog) UndoAction {
 		} else if len(dlg.TargetIDs) > 0 {
 			desc = fmt.Sprintf("Claim %s", dlg.TargetIDs[0])
 		}
-	case ConfirmDone, ConfirmReopen, ConfirmStatus:
+	case ConfirmDone, ConfirmForceDone, ConfirmReopen, ConfirmStatus:
 		kind = UndoStatusChange
 		if dlg.IsBatch {
 			desc = fmt.Sprintf("Status change on %d tasks", len(dlg.TargetIDs))
@@ -195,6 +195,16 @@ func (m Model) executeConfirmedDialog(dlg *ConfirmDialog) (tea.Model, tea.Cmd) {
 		if len(dlg.TargetIDs) > 0 {
 			m.statusMsg = fmt.Sprintf("Marked %s as DONE (press 'u' to undo)", dlg.TargetIDs[0])
 			return m, m.markDoneCmd(dlg.TargetIDs[0])
+		}
+
+	case ConfirmForceDone:
+		if dlg.IsBatch {
+			m.statusMsg = fmt.Sprintf("Force marked %d tasks as DONE (press 'u' to undo)", len(dlg.TargetIDs))
+			return m, m.batchDoneWithForceCmd(dlg.TargetIDs, true)
+		}
+		if len(dlg.TargetIDs) > 0 {
+			m.statusMsg = fmt.Sprintf("Force marked %s as DONE (press 'u' to undo)", dlg.TargetIDs[0])
+			return m, m.markDoneWithForceCmd(dlg.TargetIDs[0], true)
 		}
 
 	case ConfirmReopen:

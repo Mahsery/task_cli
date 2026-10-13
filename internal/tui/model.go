@@ -24,6 +24,7 @@ type ConfirmKind int
 const (
 	ConfirmDelete ConfirmKind = iota
 	ConfirmDone
+	ConfirmForceDone
 	ConfirmReopen
 	ConfirmStatus
 	ConfirmClaim

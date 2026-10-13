@@ -21,6 +21,7 @@ const (
 	pickPromote                        // p: promote a post into a tasks topic
 	pickInsertLink                     // gl: append a [[link]] to the current item
 	pickNewItemTopic                   // n in a group: pick sub-topic for new item
+	pickUnlinkDep                      // U: remove prerequisite dependency
 )
 
 type pickerItem struct {
@@ -202,7 +203,31 @@ func (m *Model) openPicker(kind pickerKind, targetIDs []string, ref string) {
 			accept = []domain.ItemKind{domain.KindPost}
 		}
 		p.items = m.topicPickerItems(kind, accept)
+	case pickUnlinkDep:
+		taskID := strings.Join(targetIDs, "")
+		p.title = "UNLINK PREREQUISITE FROM " + taskID
+		p.items = m.unlinkPickerItems(taskID)
 	}
+}
+
+func (m Model) unlinkPickerItems(taskID string) []pickerItem {
+	src := m.lookupItem(taskID)
+	if src == nil {
+		return nil
+	}
+	var items []pickerItem
+	for _, depID := range src.DependsOn {
+		detail := ""
+		if dep := m.lookupItem(depID); dep != nil {
+			detail = dep.Title
+		}
+		items = append(items, pickerItem{
+			Label:  depID,
+			Detail: detail,
+			Value:  depID,
+		})
+	}
+	return items
 }
 
 func (m Model) itemKinds(ids []string) []domain.ItemKind {
@@ -323,6 +348,15 @@ func (m Model) applyPicker(choice *pickerItem) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.openNewTaskEditor(choice.Value)
+	case pickUnlinkDep:
+		if choice == nil {
+			m.statusMsg = "No prerequisite selected"
+			return m, nil
+		}
+		taskID := p.targetIDs[0]
+		depID := choice.Value
+		m.statusMsg = fmt.Sprintf("Unlinked dependency %s -> %s", taskID, depID)
+		return m, m.unlinkTaskCmd(taskID, depID)
 	}
 	return m, nil
 }

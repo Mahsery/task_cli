@@ -911,15 +911,89 @@ func TestTUIBlockedTaskDoneProtection(t *testing.T) {
 		theme:  NewKanagawaTheme(),
 	}
 
-	// Press 'd' to mark done on blocked task: should be rejected with warning!
+	// Press 'd' to mark done on blocked task: opens ConfirmForceDone confirmation dialog!
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = mustModel(t, updated)
 
-	if m.confirmDialog != nil {
-		t.Fatalf("expected NO confirmDialog when attempting to complete blocked task, got %v", m.confirmDialog)
+	if m.confirmDialog == nil {
+		t.Fatalf("expected ConfirmForceDone dialog when attempting to complete blocked task, got nil")
 	}
-	if !strings.Contains(m.statusMsg, "blocked by unfinished prerequisite") {
-		t.Fatalf("expected warning message about unfinished prerequisites, got %q", m.statusMsg)
+	if m.confirmDialog.Kind != ConfirmForceDone {
+		t.Fatalf("expected confirmDialog.Kind to be ConfirmForceDone, got %v", m.confirmDialog.Kind)
+	}
+	if !strings.Contains(m.confirmDialog.Prompt, "blocked by unfinished prerequisite") {
+		t.Fatalf("expected prompt to explain unfinished prerequisites, got %q", m.confirmDialog.Prompt)
+	}
+
+	// Cancel with 'n'
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	m = mustModel(t, updated)
+	if m.confirmDialog != nil {
+		t.Fatalf("expected confirmDialog to be nil after 'n', got %v", m.confirmDialog)
+	}
+	// Verify task status was NOT mutated
+	if tasks[0].Status != domain.StatusOpen {
+		t.Fatalf("expected task status to remain open after cancellation, got %v", tasks[0].Status)
+	}
+}
+
+func TestTUIUnlinkModalInteraction(t *testing.T) {
+	now := time.Now()
+	tasks := []*domain.Task{
+		{
+			ID:        "T-1",
+			Title:     "Parent Prerequisite",
+			Status:    domain.StatusOpen,
+			CreatedAt: now,
+		},
+		{
+			ID:        "T-2",
+			Title:     "Child Dependent",
+			Status:    domain.StatusOpen,
+			DependsOn: []string{"T-1"},
+			CreatedAt: now,
+		},
+	}
+
+	m := Model{
+		tasks:      tasks,
+		cursor:     1, // Select T-2
+		width:      100,
+		height:     24,
+		theme:      NewKanagawaTheme(),
+		activePane: PaneList,
+	}
+
+	// 1. Press 'U' to open unlink picker
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'U'}})
+	m = mustModel(t, updated)
+
+	if m.picker == nil {
+		t.Fatalf("expected picker to open after 'U'")
+	}
+	if m.picker.kind != pickUnlinkDep {
+		t.Fatalf("expected picker.kind to be pickUnlinkDep, got %v", m.picker.kind)
+	}
+	if len(m.picker.items) != 1 || m.picker.items[0].Value != "T-1" {
+		t.Fatalf("expected prerequisite T-1 in picker items, got %+v", m.picker.items)
+	}
+
+	// 2. Press Esc to cancel
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = mustModel(t, updated)
+	if m.picker != nil {
+		t.Fatalf("expected picker to close on Esc")
+	}
+
+	// 3. Select task with no dependencies (T-1) and press 'U'
+	m.cursor = 0
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'U'}})
+	m = mustModel(t, updated)
+	if m.picker != nil {
+		t.Fatalf("expected picker NOT to open for task with no prerequisites")
+	}
+	if !strings.Contains(m.statusMsg, "no prerequisites to unlink") {
+		t.Fatalf("expected status message about no prerequisites, got %q", m.statusMsg)
 	}
 }
 

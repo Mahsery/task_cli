@@ -21,7 +21,7 @@ func (m Model) renderFooter(width int) string {
 				} else if len(dlg.TargetIDs) > 0 {
 					warnText = fmt.Sprintf(" Delete %s? [y/N] ", dlg.TargetIDs[0])
 				}
-			case ConfirmDone:
+			case ConfirmDone, ConfirmForceDone:
 				if dlg.IsBatch {
 					warnText = fmt.Sprintf(" Done %d tasks? [y/N] ", len(dlg.TargetIDs))
 				} else if len(dlg.TargetIDs) > 0 {
@@ -180,6 +180,11 @@ func (m Model) renderFooter(width int) string {
 			archiveLabel,
 			theme.DiffSub.Render("[x] Del"),
 			key("L", "Dep"),
+		)
+		if curTask != nil && len(curTask.DependsOn) > 0 {
+			candidateKeys = append(candidateKeys, key("U", "Unlink"))
+		}
+		candidateKeys = append(candidateKeys,
 			theme.Age.Render("[q] Quit"),
 		)
 	} else {
