@@ -546,7 +546,10 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 			if err := db.AddDependency(p.TaskID, p.DependsOnID); err != nil {
 				return nil, err
 			}
-			updatedTask, _ := db.GetTask(p.TaskID)
+			updatedTask, err := db.GetTask(p.TaskID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch updated task %s: %w", p.TaskID, err)
+			}
 			s.pubsub.Publish(protocol.Event{
 				Type:      protocol.EventTaskUpdated,
 				Timestamp: time.Now(),
@@ -561,7 +564,10 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 			if err := db.RemoveDependency(p.TaskID, p.DependsOnID); err != nil {
 				return nil, err
 			}
-			updatedTask, _ := db.GetTask(p.TaskID)
+			updatedTask, err := db.GetTask(p.TaskID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch updated task %s: %w", p.TaskID, err)
+			}
 			s.pubsub.Publish(protocol.Event{
 				Type:      protocol.EventTaskUpdated,
 				Timestamp: time.Now(),
@@ -913,7 +919,9 @@ func (s *Server) handleBackupVerify(req protocol.Request) protocol.Response {
 func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	var p protocol.BackupRestorePayload
 	if len(req.Payload) > 0 {
-		_ = json.Unmarshal(req.Payload, &p)
+		if err := json.Unmarshal(req.Payload, &p); err != nil {
+			return errorResp(req.ID, "invalid restore payload: "+err.Error())
+		}
 	}
 
 	targetBackup := strings.TrimSpace(p.BackupPath)
@@ -985,7 +993,9 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	// 3. Create pre-restore safety copy of current dbPath if it exists
 	if _, err := os.Stat(dbPath); err == nil {
 		preRestorePath := fmt.Sprintf("%s.pre-restore-%s.bak", dbPath, time.Now().Format("20060102-150405"))
-		_ = copyFile(dbPath, preRestorePath)
+		if err := copyFile(dbPath, preRestorePath); err != nil {
+			return errorResp(req.ID, fmt.Sprintf("failed to create safety pre-restore backup: %v", err))
+		}
 	}
 
 	// Ensure directory exists

@@ -2,15 +2,42 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"task_cli/internal/config"
 	"task_cli/internal/domain"
 	"task_cli/internal/protocol"
 	"task_cli/internal/storage/sqlite"
 )
+
+func setupTestServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	tmpDir, err := os.MkdirTemp("", "tk-daemon-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	cfg := &config.Config{
+		GlobalDir:  tmpDir,
+		SocketPath: filepath.Join(tmpDir, "tk.sock"),
+	}
+	srv := NewServer(cfg)
+	t.Cleanup(func() {
+		srv.mu.Lock()
+		for _, db := range srv.dbs {
+			_ = db.Close()
+		}
+		srv.mu.Unlock()
+		_ = os.RemoveAll(tmpDir)
+	})
+	repoPath := filepath.Join(tmpDir, "repo")
+	_ = os.MkdirAll(repoPath, 0o755)
+	return srv, repoPath
+}
 
 func TestOpenDatabaseAfterRepositoryMove(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "tasks.db")
@@ -404,13 +431,15 @@ func TestDaemonBackupListAndRestoreLatest(t *testing.T) {
 	_ = os.MkdirAll(repoPath, 0o755)
 
 	// Create task
-	srv.dispatch(protocol.Request{
+	createResp := srv.dispatch(protocol.Request{
 		ID:       "req-1",
 		Action:   protocol.ActionCreateTask,
 		Payload:  json.RawMessage(`{"title":"Task Before Backup","status":"open","priority":"normal"}`),
 		Scope:    "local",
 		RepoPath: repoPath,
 	})
+	var t1 domain.Task
+	_ = json.Unmarshal(createResp.Data, &t1)
 
 	// Create backup
 	srv.dispatch(protocol.Request{
@@ -459,5 +488,119 @@ func TestDaemonBackupListAndRestoreLatest(t *testing.T) {
 	})
 	if !restoreResp.Success {
 		t.Fatalf("restore latest failed: %s", restoreResp.Error)
+	}
+
+	// Verify task still exists in restored database
+	getResp := srv.dispatch(protocol.Request{
+		ID:       "req-get-after-restore",
+		Action:   protocol.ActionGetTask,
+		Payload:  json.RawMessage(fmt.Sprintf(`{"id":%q}`, t1.ID)),
+		Scope:    "local",
+		RepoPath: repoPath,
+	})
+	if !getResp.Success {
+		t.Fatalf("failed to fetch task after restore: %s", getResp.Error)
+	}
+}
+
+func TestDaemonBackupRestore_MalformedPayloadReturnsError(t *testing.T) {
+	srv, repoPath := setupTestServer(t)
+
+	// Send malformed JSON payload to ActionBackupRestore
+	resp := srv.dispatch(protocol.Request{
+		ID:       "req-bad-json",
+		Action:   protocol.ActionBackupRestore,
+		Payload:  json.RawMessage(`{"backup_path":`),
+		Scope:    "local",
+		RepoPath: repoPath,
+	})
+
+	if resp.Success {
+		t.Fatalf("expected malformed JSON payload to fail, but got success")
+	}
+	if !strings.Contains(resp.Error, "invalid restore payload") {
+		t.Errorf("expected error message to contain 'invalid restore payload', got: %s", resp.Error)
+	}
+}
+
+func TestDaemonDependencies_PubSubEventIntegrity(t *testing.T) {
+	srv, repoPath := setupTestServer(t)
+
+	// Create two tasks
+	c1 := srv.dispatch(protocol.Request{
+		ID:       "c1",
+		Action:   protocol.ActionCreateTask,
+		Payload:  json.RawMessage(`{"title":"Task 1"}`),
+		Scope:    "local",
+		RepoPath: repoPath,
+	})
+	var t1 domain.Task
+	_ = json.Unmarshal(c1.Data, &t1)
+
+	c2 := srv.dispatch(protocol.Request{
+		ID:       "c2",
+		Action:   protocol.ActionCreateTask,
+		Payload:  json.RawMessage(`{"title":"Task 2"}`),
+		Scope:    "local",
+		RepoPath: repoPath,
+	})
+	var t2 domain.Task
+	_ = json.Unmarshal(c2.Data, &t2)
+
+	subCh := srv.pubsub.Subscribe()
+	defer srv.pubsub.Unsubscribe(subCh)
+
+	// Link T-2 to depend on T-1
+	linkResp := srv.dispatch(protocol.Request{
+		ID:       "link-1",
+		Action:   protocol.ActionAddDependency,
+		Payload:  json.RawMessage(fmt.Sprintf(`{"task_id":%q,"depends_on_id":%q}`, t2.ID, t1.ID)),
+		Scope:    "local",
+		RepoPath: repoPath,
+	})
+	if !linkResp.Success {
+		t.Fatalf("link failed: %s", linkResp.Error)
+	}
+
+	select {
+	case ev := <-subCh:
+		if ev.Type != protocol.EventTaskUpdated {
+			t.Errorf("expected EventTaskUpdated, got %s", ev.Type)
+		}
+		if ev.Task == nil {
+			t.Fatalf("expected non-nil Task in event, got nil")
+		}
+		if ev.Task.ID != t2.ID {
+			t.Errorf("expected event task ID %s, got %s", t2.ID, ev.Task.ID)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for link event")
+	}
+
+	// Unlink T-2 from T-1
+	unlinkResp := srv.dispatch(protocol.Request{
+		ID:       "unlink-1",
+		Action:   protocol.ActionRemoveDependency,
+		Payload:  json.RawMessage(fmt.Sprintf(`{"task_id":%q,"depends_on_id":%q}`, t2.ID, t1.ID)),
+		Scope:    "local",
+		RepoPath: repoPath,
+	})
+	if !unlinkResp.Success {
+		t.Fatalf("unlink failed: %s", unlinkResp.Error)
+	}
+
+	select {
+	case ev := <-subCh:
+		if ev.Type != protocol.EventTaskUpdated {
+			t.Errorf("expected EventTaskUpdated, got %s", ev.Type)
+		}
+		if ev.Task == nil {
+			t.Fatalf("expected non-nil Task in event, got nil")
+		}
+		if ev.Task.ID != t2.ID {
+			t.Errorf("expected event task ID %s, got %s", t2.ID, ev.Task.ID)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for unlink event")
 	}
 }
