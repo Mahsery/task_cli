@@ -60,6 +60,7 @@ func itemPrefix(scope string, kind domain.ItemKind) string {
 func (d *DB) CreateItem(p CreateItemParams) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.invalidateTopicCacheLocked()
 	return d.createItemLocked(p)
 }
 
@@ -339,13 +340,22 @@ func (d *DB) hydrateTaskRelations(q sqlx.Queryer, tasks []*domain.Task, includeN
 		return err
 	}
 
-	tree, err := loadTopicTree(q)
-	if err != nil {
-		return err
-	}
+	hasTopics := false
 	for _, t := range tasks {
 		if t.TopicID != 0 {
-			t.TopicPath = tree.pathOf(t.TopicID)
+			hasTopics = true
+			break
+		}
+	}
+	if hasTopics {
+		tree, err := d.getTopicTreeLocked(q)
+		if err != nil {
+			return err
+		}
+		for _, t := range tasks {
+			if t.TopicID != 0 {
+				t.TopicPath = tree.pathOf(t.TopicID)
+			}
 		}
 	}
 
@@ -512,6 +522,7 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit update: %w", err)
 	}
+	d.invalidateTopicCacheLocked()
 
 	return d.GetTask(id)
 }
@@ -583,6 +594,7 @@ func (d *DB) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit claim: %w", err)
 	}
+	d.invalidateTopicCacheLocked()
 
 	return d.GetTask(id)
 }
@@ -652,6 +664,7 @@ func (d *DB) OrphanTask(id, actor, reason string) (*domain.Task, error) {
 	if err := d.orphanTaskLocked(id, actor, reason, now); err != nil {
 		return nil, err
 	}
+	d.invalidateTopicCacheLocked()
 	return d.getTaskLocked(d.conn, id)
 }
 
@@ -734,6 +747,7 @@ func (d *DB) TransferTask(id, fromActor, toAssignee, note string, _ bool) (*doma
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transfer transaction: %w", err)
 	}
+	d.invalidateTopicCacheLocked()
 
 	return d.getTaskLocked(d.conn, id)
 }
@@ -790,6 +804,7 @@ func (d *DB) ArchiveTask(id, actor, reason string) (*domain.Task, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit archive transaction: %w", err)
 	}
+	d.invalidateTopicCacheLocked()
 
 	return d.getTaskLocked(d.conn, id)
 }
@@ -853,6 +868,7 @@ func (d *DB) UnarchiveTask(id, actor, reason string) (*domain.Task, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit unarchive transaction: %w", err)
 	}
+	d.invalidateTopicCacheLocked()
 
 	return d.getTaskLocked(d.conn, id)
 }
@@ -970,6 +986,10 @@ func (d *DB) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dry
 		}
 	}
 
+	if len(orphanedIDs) > 0 {
+		d.invalidateTopicCacheLocked()
+	}
+
 	return candidates, orphanedIDs, nil
 }
 
@@ -1037,7 +1057,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		if ref == domain.UnfiledTopic {
 			conditions = append(conditions, "topic_id IS NULL")
 		} else {
-			tree, err := loadTopicTree(d.conn)
+			tree, err := d.getTopicTreeLocked(d.conn)
 			if err != nil {
 				return nil, err
 			}
@@ -1273,7 +1293,11 @@ func (d *DB) DeleteTask(id string) error {
 		return fmt.Errorf("task %q not found", id)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit delete task: %w", err)
+	}
+	d.invalidateTopicCacheLocked()
+	return nil
 }
 
 func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, markDone bool) (*domain.Task, error) {
@@ -1300,6 +1324,7 @@ func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, m
 	if _, err := d.conn.Exec(updateSQL, args...); err != nil {
 		return nil, fmt.Errorf("failed to attach git info: %w", err)
 	}
+	d.invalidateTopicCacheLocked()
 
 	return d.GetTask(id)
 }
@@ -1453,7 +1478,11 @@ func (d *DB) RestoreTask(task *domain.Task) error {
 	if err := d.restoreTaskTx(tx, task); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit restore: %w", err)
+	}
+	d.invalidateTopicCacheLocked()
+	return nil
 }
 
 func (d *DB) RestoreTaskByID(id string) (*domain.Task, error) {
@@ -1486,6 +1515,7 @@ func (d *DB) RestoreTaskByID(id string) (*domain.Task, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit restore: %w", err)
 	}
+	d.invalidateTopicCacheLocked()
 
 	return &task, nil
 }

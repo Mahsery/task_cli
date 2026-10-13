@@ -13,9 +13,29 @@ import (
 )
 
 type DB struct {
-	conn   *sqlx.DB
-	dbPath string
-	mu     sync.Mutex
+	conn      *sqlx.DB
+	dbPath    string
+	mu        sync.Mutex
+	topicTree *topicTree
+}
+
+func (d *DB) invalidateTopicCacheLocked() {
+	d.topicTree = nil
+}
+
+func (d *DB) getTopicTreeLocked(q sqlx.Queryer) (*topicTree, error) {
+	if q == nil || q == d.conn {
+		if d.topicTree != nil {
+			return d.topicTree, nil
+		}
+		tree, err := loadTopicTree(d.conn)
+		if err != nil {
+			return nil, err
+		}
+		d.topicTree = tree
+		return tree, nil
+	}
+	return loadTopicTree(q)
 }
 
 func Open(dbPath string) (*DB, error) {
@@ -45,6 +65,7 @@ func Open(dbPath string) (*DB, error) {
 func (d *DB) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.invalidateTopicCacheLocked()
 	// Flush any pending WAL frames and truncate WAL to zero out disk footprint
 	_, _ = d.conn.Exec("PRAGMA wal_checkpoint(TRUNCATE);")
 	return d.conn.Close()
@@ -67,10 +88,14 @@ const CurrentSchemaVersion = 4
 
 func (d *DB) migrate() error {
 	var userVersion int
-	_ = d.conn.QueryRow("PRAGMA user_version;").Scan(&userVersion)
+	if err := d.conn.QueryRow("PRAGMA user_version;").Scan(&userVersion); err != nil {
+		return fmt.Errorf("failed to read PRAGMA user_version: %w", err)
+	}
 
 	var tableCount int
-	_ = d.conn.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='tasks';").Scan(&tableCount)
+	if err := d.conn.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='tasks';").Scan(&tableCount); err != nil {
+		return fmt.Errorf("failed to query sqlite_master table count: %w", err)
+	}
 
 	if userVersion == 0 && tableCount > 0 {
 		userVersion = 1

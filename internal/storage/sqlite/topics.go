@@ -17,9 +17,10 @@ import (
 
 // topicTree is an in-memory snapshot of all topics with computed paths.
 type topicTree struct {
-	ordered []*domain.Topic // depth-first tree order
-	byID    map[int64]*domain.Topic
-	byPath  map[string]*domain.Topic
+	ordered  []*domain.Topic // depth-first tree order
+	byID     map[int64]*domain.Topic
+	byPath   map[string]*domain.Topic
+	children map[int64][]*domain.Topic
 }
 
 const topicSelect = `SELECT id, slug, title, description, kind, parent_id, position, created_at, updated_at, archived_at FROM topics`
@@ -29,8 +30,12 @@ func loadTopicTree(q sqlx.Queryer) (*topicTree, error) {
 	if err := sqlx.Select(q, &topics, topicSelect); err != nil {
 		return nil, fmt.Errorf("failed to query topics: %w", err)
 	}
-	t := &topicTree{byID: make(map[int64]*domain.Topic, len(topics)), byPath: make(map[string]*domain.Topic, len(topics))}
 	children := make(map[int64][]*domain.Topic)
+	t := &topicTree{
+		byID:     make(map[int64]*domain.Topic, len(topics)),
+		byPath:   make(map[string]*domain.Topic, len(topics)),
+		children: children,
+	}
 	for _, tp := range topics {
 		t.byID[tp.ID] = tp
 	}
@@ -88,20 +93,35 @@ func loadTopicTree(q sqlx.Queryer) (*topicTree, error) {
 		}
 	}
 
-	// For groups, roll up ItemCount and OpenCount from all descendant non-group topics.
-	for _, tp := range t.ordered {
-		if tp.Kind == domain.TopicGroup {
-			desc := t.descendants(tp.ID)
-			for _, descID := range desc {
-				if descID == tp.ID {
-					continue
-				}
-				if child, ok := t.byID[descID]; ok && child.Kind != domain.TopicGroup {
-					tp.ItemCount += child.ItemCount
-					tp.OpenCount += child.OpenCount
-				}
-			}
+	// For groups, roll up ItemCount and OpenCount from all descendant non-group topics
+	// using a single bottom-up post-order DFS (O(T) linear time).
+	visited := make(map[int64]bool, len(topics))
+	var rollup func(id int64) (items int, open int)
+	rollup = func(id int64) (int, int) {
+		if visited[id] {
+			return 0, 0
 		}
+		visited[id] = true
+		tp := t.byID[id]
+		if tp == nil {
+			return 0, 0
+		}
+		if tp.Kind != domain.TopicGroup {
+			return tp.ItemCount, tp.OpenCount
+		}
+		groupItems, groupOpen := 0, 0
+		for _, child := range t.children[id] {
+			cItems, cOpen := rollup(child.ID)
+			groupItems += cItems
+			groupOpen += cOpen
+		}
+		tp.ItemCount = groupItems
+		tp.OpenCount = groupOpen
+		return groupItems, groupOpen
+	}
+
+	for _, tp := range t.children[0] {
+		rollup(tp.ID)
 	}
 
 	return t, nil
@@ -145,10 +165,8 @@ func (t *topicTree) resolve(ref string) (*domain.Topic, error) {
 func (t *topicTree) descendants(id int64) []int64 {
 	out := []int64{id}
 	for i := 0; i < len(out); i++ {
-		for _, tp := range t.ordered {
-			if tp.ParentID != nil && *tp.ParentID == out[i] {
-				out = append(out, tp.ID)
-			}
+		for _, child := range t.children[out[i]] {
+			out = append(out, child.ID)
 		}
 	}
 	return out
@@ -163,7 +181,9 @@ func (t *topicTree) pathOf(id int64) string {
 
 // ListTopics returns all topics in depth-first tree order with computed paths and counts.
 func (d *DB) ListTopics() ([]*domain.Topic, error) {
-	tree, err := loadTopicTree(d.conn)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tree, err := d.getTopicTreeLocked(d.conn)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +195,9 @@ func (d *DB) ListTopics() ([]*domain.Topic, error) {
 
 // GetTopic resolves a topic by path, unique slug or numeric ID.
 func (d *DB) GetTopic(ref string) (*domain.Topic, error) {
-	tree, err := loadTopicTree(d.conn)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	tree, err := d.getTopicTreeLocked(d.conn)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +226,7 @@ func (d *DB) CreateTopic(title, slug, description string, kind domain.TopicKind,
 		return nil, err
 	}
 
-	tree, err := loadTopicTree(d.conn)
+	tree, err := d.getTopicTreeLocked(d.conn)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +259,8 @@ func (d *DB) CreateTopic(title, slug, description string, kind domain.TopicKind,
 }
 
 func (d *DB) topicByIDLocked(id int64) (*domain.Topic, error) {
-	tree, err := loadTopicTree(d.conn)
+	d.invalidateTopicCacheLocked()
+	tree, err := d.getTopicTreeLocked(d.conn)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +277,7 @@ func (d *DB) UpdateTopic(ref string, title, slug, description *string, kind *dom
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	tree, err := loadTopicTree(d.conn)
+	tree, err := d.getTopicTreeLocked(d.conn)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +356,7 @@ func (d *DB) MoveTopic(ref, parentRef string) (*domain.Topic, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	tree, err := loadTopicTree(d.conn)
+	tree, err := d.getTopicTreeLocked(d.conn)
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +395,7 @@ func (d *DB) DeleteTopic(ref, moveTo string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	tree, err := loadTopicTree(d.conn)
+	tree, err := d.getTopicTreeLocked(d.conn)
 	if err != nil {
 		return err
 	}
@@ -467,7 +490,11 @@ func (d *DB) DeleteTopic(ref, moveTo string) error {
 	if _, err := tx.Exec(`DELETE FROM topics WHERE id = ?`, tp.ID); err != nil {
 		return fmt.Errorf("failed to delete topic: %w", err)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit delete topic: %w", err)
+	}
+	d.invalidateTopicCacheLocked()
+	return nil
 }
 
 // MoveItems moves tasks/posts into a topic ("unfiled" or "" clears the topic). Each move
@@ -476,7 +503,7 @@ func (d *DB) MoveItems(ids []string, topicRef, actor string) ([]*domain.Task, er
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	tree, err := loadTopicTree(d.conn)
+	tree, err := d.getTopicTreeLocked(d.conn)
 	if err != nil {
 		return nil, err
 	}
@@ -539,6 +566,7 @@ func (d *DB) MoveItems(ids []string, topicRef, actor string) ([]*domain.Task, er
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit move: %w", err)
 	}
+	d.invalidateTopicCacheLocked()
 
 	out := make([]*domain.Task, 0, len(ids))
 	for _, id := range ids {
@@ -626,6 +654,7 @@ func (d *DB) PromotePost(postID, topicRef, author string) (task, post *domain.Ta
 	if err := tx.Commit(); err != nil {
 		return nil, nil, fmt.Errorf("failed to commit promotion: %w", err)
 	}
+	d.invalidateTopicCacheLocked()
 
 	if task, err = d.getTaskLocked(d.conn, task.ID); err != nil {
 		return nil, nil, err

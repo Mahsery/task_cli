@@ -215,5 +215,6 @@ func (d *DB) Resurrect(targetPath string) error {
 
 	d.conn = sqlx.NewDb(newConn, "sqlite")
 	d.dbPath = targetPath
+	d.invalidateTopicCacheLocked()
 	return nil
 }
