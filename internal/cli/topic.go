@@ -56,8 +56,21 @@ var topicNewCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		title := strings.Join(args, " ")
+		parent := topicParent
+		if parent == "" {
+			raw := strings.Trim(strings.TrimPrefix(strings.TrimSpace(title), "@"), "/")
+			if idx := strings.LastIndex(raw, "/"); idx > 0 && idx+1 < len(raw) {
+				prefix := raw[:idx]
+				suffix := raw[idx+1:]
+				if !strings.Contains(prefix, " ") && !strings.HasPrefix(suffix, " ") {
+					parent = prefix
+					title = suffix
+				}
+			}
+		}
 		tp, err := taskClient.CreateTopic(protocol.CreateTopicPayload{
-			Title: strings.Join(args, " "), Slug: topicSlug, Description: topicDesc, Kind: kind, Parent: topicParent,
+			Title: title, Slug: topicSlug, Description: topicDesc, Kind: kind, Parent: parent,
 		})
 		if err != nil {
 			return err
@@ -265,7 +278,7 @@ var topicRmCmd = &cobra.Command{
 	Args:    cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		norm := domain.NormalizeTopicRef(args[0])
-		if IsInteractiveTerminal() && !topicRmForce && !jsonFlag {
+		if !topicRmForce && !jsonFlag {
 			prompt := fmt.Sprintf("Delete topic @%s permanently? [y/N]: ", norm)
 			if topicMoveTo != "" {
 				prompt = fmt.Sprintf("Delete topic @%s and move contents to @%s? [y/N]: ", norm, domain.NormalizeTopicRef(topicMoveTo))
@@ -483,7 +496,7 @@ func init() {
 
 	topicRmCmd.Flags().StringVar(&topicMoveTo, "move-to", "", "Where to move contained items/sub-topics (topic or 'unfiled')")
 	topicRmCmd.Flags().BoolVarP(&topicRmForce, "yes", "y", false, "Confirm deletion without interactive prompt")
-	topicRmCmd.Flags().BoolVar(&topicRmForce, "force", false, "Confirm deletion without interactive prompt")
+	topicRmCmd.Flags().BoolVarP(&topicRmForce, "force", "f", false, "Confirm deletion without interactive prompt")
 
 	topicImportTagsCmd.Flags().BoolVar(&importTagsDryRun, "dry-run", false, "Preview topics to create and tasks to move")
 

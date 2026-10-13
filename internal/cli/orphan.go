@@ -154,7 +154,7 @@ func runOrphanBackport(threshold time.Duration, dryRun bool, actor, reason strin
 }
 
 func runOrphanReap(threshold time.Duration, dryRun bool, actor, reason string) error {
-	if !dryRun && IsInteractiveTerminal() && !orphanForce && !jsonFlag {
+	if !dryRun && !orphanForce && !jsonFlag {
 		preview, err := taskClient.ReapStaleTasks(scope, repoRoot, threshold, true, actor, reason)
 		if err != nil {
 			return err
@@ -394,14 +394,14 @@ func init() {
 	orphanCmd.Flags().BoolVarP(&orphanList, "list", "l", false, "List currently orphaned tasks and stale candidates")
 	orphanCmd.Flags().BoolVar(&orphanBackport, "backport", false, "Scan historical tasks and tag stale/abandoned open tasks as orphaned")
 	orphanCmd.Flags().BoolVarP(&orphanForce, "yes", "y", false, "Confirm reaping without interactive prompt")
-	orphanCmd.Flags().BoolVar(&orphanForce, "force", false, "Confirm reaping without interactive prompt")
+	orphanCmd.Flags().BoolVarP(&orphanForce, "force", "f", false, "Confirm reaping without interactive prompt")
 
 	orphanReapCmd.Flags().StringVar(&orphanOlderThan, "older-than", "1h", "Inactivity duration threshold (e.g. 30m, 1h, 4h, 24h)")
 	orphanReapCmd.Flags().StringVarP(&orphanMessage, "message", "m", "", "Audit note or reason for orphaning")
 	orphanReapCmd.Flags().StringVar(&orphanActor, "actor", "", "Explicit actor identity")
 	orphanReapCmd.Flags().BoolVar(&orphanDryRun, "dry-run", false, "Preview matching tasks without modifying them")
 	orphanReapCmd.Flags().BoolVarP(&orphanForce, "yes", "y", false, "Confirm reaping without interactive prompt")
-	orphanReapCmd.Flags().BoolVar(&orphanForce, "force", false, "Confirm reaping without interactive prompt")
+	orphanReapCmd.Flags().BoolVarP(&orphanForce, "force", "f", false, "Confirm reaping without interactive prompt")
 
 	orphanBackportCmd.Flags().StringVar(&orphanOlderThan, "older-than", "1h", "Inactivity duration threshold (e.g. 30m, 1h, 4h, 24h)")
 	orphanBackportCmd.Flags().StringVarP(&orphanMessage, "message", "m", "", "Audit note or reason for orphaning")

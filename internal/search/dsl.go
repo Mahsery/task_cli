@@ -1,6 +1,8 @@
 package search
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
 	"task_cli/internal/domain"
@@ -63,7 +65,7 @@ func Tokenize(query string) []token {
 			continue
 		}
 
-		// Check for field:"quoted value" or field:'quoted value' e.g. tag:"bug fix"
+		// Check for field:"quoted value" or field:'quoted value' e.g. tag:"bug fix" or -tag:"bug fix"
 		colonQuote := false
 		start := i
 		for j := i; j < n && runes[j] != ' ' && runes[j] != '\t' && runes[j] != '\n' && runes[j] != '\r' && runes[j] != '(' && runes[j] != ')'; j++ {
@@ -81,7 +83,11 @@ func Tokenize(query string) []token {
 			if j < n && runes[j] == quote {
 				j++
 			}
-			tokens = append(tokens, token{typ: tokWord, value: field + val})
+			if strings.HasPrefix(field, "-") && len(field) > 2 {
+				tokens = append(tokens, token{typ: tokNot, value: "NOT"}, token{typ: tokWord, value: field[1:] + val})
+			} else {
+				tokens = append(tokens, token{typ: tokWord, value: field + val})
+			}
 			i = j
 			colonQuote = true
 			break
@@ -179,6 +185,26 @@ type termNode struct {
 	val   string
 }
 
+// matchesNormalizedID checks whether target is a valid forgiving item ID reference and whether task.ID matches it.
+func matchesNormalizedID(target string, task *domain.Task) (matched, isIDRef bool) {
+	raw := strings.TrimSpace(target)
+	if num, err := strconv.Atoi(raw); err == nil && num > 0 {
+		taskPrefix := domain.PrefixTask
+		postPrefix := domain.PrefixPost
+		if task.Scope == domain.ScopeGlobal {
+			taskPrefix = domain.PrefixGlobalTask
+			postPrefix = domain.PrefixGlobalPost
+		}
+		taskID := fmt.Sprintf("%s-%d", taskPrefix, num)
+		postID := fmt.Sprintf("%s-%d", postPrefix, num)
+		return strings.EqualFold(task.ID, taskID) || strings.EqualFold(task.ID, postID), true
+	}
+	if norm, err := domain.NormalizeID(raw, task.Scope); err == nil {
+		return strings.EqualFold(task.ID, norm), true
+	}
+	return false, false
+}
+
 func (n *termNode) Eval(task *domain.Task) bool {
 	target := strings.ToLower(n.val)
 
@@ -195,7 +221,8 @@ func (n *termNode) Eval(task *domain.Task) bool {
 		if (target == "orphan" || target == "orphaned") && task.IsOrphaned() {
 			return true
 		}
-		return strings.Contains(strings.ToLower(string(task.Status)), target)
+		return strings.Contains(strings.ToLower(string(task.Status)), target) ||
+			strings.Contains(strings.ToLower(task.StatusLabel()), target)
 
 	case "priority", "pri", "p":
 		return strings.Contains(strings.ToLower(string(task.Priority)), target)
@@ -207,8 +234,8 @@ func (n *termNode) Eval(task *domain.Task) bool {
 		return strings.Contains(strings.ToLower(task.Author), target)
 
 	case "id":
-		if norm, err := domain.NormalizeID(target, task.Scope); err == nil {
-			return strings.EqualFold(task.ID, norm)
+		if matched, isIDRef := matchesNormalizedID(target, task); isIDRef {
+			return matched
 		}
 		return strings.Contains(strings.ToLower(task.ID), target)
 
@@ -240,10 +267,11 @@ func (n *termNode) Eval(task *domain.Task) bool {
 		if (target == "orphan" || target == "orphaned") && task.IsOrphaned() {
 			return true
 		}
-		if norm, err := domain.NormalizeID(target, task.Scope); err == nil && strings.EqualFold(task.ID, norm) {
-			return true
-		}
-		if strings.Contains(strings.ToLower(task.ID), target) {
+		if matched, isIDRef := matchesNormalizedID(target, task); isIDRef {
+			if matched {
+				return true
+			}
+		} else if strings.Contains(strings.ToLower(task.ID), target) {
 			return true
 		}
 		if strings.Contains(strings.ToLower(task.Title), target) {
@@ -444,13 +472,24 @@ func Match(query string, task *domain.Task) bool {
 
 // containsLinkTarget reports whether targets contains the (forgivingly written) item ID or @topic.
 func containsLinkTarget(targets []string, want, scope string) bool {
-	if strings.HasPrefix(want, "@") {
-		want = "@" + domain.NormalizeTopicRef(want)
-	} else if id, err := domain.NormalizeID(want, scope); err == nil {
+	var altWant string
+	raw := strings.TrimSpace(want)
+	if strings.HasPrefix(raw, "@") {
+		want = "@" + domain.NormalizeTopicRef(raw)
+	} else if num, err := strconv.Atoi(raw); err == nil && num > 0 {
+		taskPrefix := domain.PrefixTask
+		postPrefix := domain.PrefixPost
+		if scope == domain.ScopeGlobal {
+			taskPrefix = domain.PrefixGlobalTask
+			postPrefix = domain.PrefixGlobalPost
+		}
+		want = fmt.Sprintf("%s-%d", taskPrefix, num)
+		altWant = fmt.Sprintf("%s-%d", postPrefix, num)
+	} else if id, err := domain.NormalizeID(raw, scope); err == nil {
 		want = id
 	}
 	for _, t := range targets {
-		if strings.EqualFold(t, want) {
+		if strings.EqualFold(t, want) || (altWant != "" && strings.EqualFold(t, altWant)) {
 			return true
 		}
 	}

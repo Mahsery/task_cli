@@ -14,7 +14,7 @@ var deleteCmd = &cobra.Command{
 	Aliases: []string{"rm"},
 	Short:   "Delete a task",
 	Long: `Permanently delete a task and all associated activity notes and diffs.
-In an interactive terminal, prompts for confirmation unless --yes or -y is specified.`,
+Prompts for confirmation unless --yes (-y) or --force (-f) is specified.`,
 	Example: `  tk delete T-1
   tk rm G-4
   tk delete T-1 -y`,
@@ -22,7 +22,7 @@ In an interactive terminal, prompts for confirmation unless --yes or -y is speci
 	RunE: func(_ *cobra.Command, args []string) error {
 		taskID := normID(args[0])
 
-		if IsInteractiveTerminal() && !deleteForce && !jsonFlag {
+		if !deleteForce && !jsonFlag {
 			task, _ := taskClient.GetTask(taskID)
 			var titlePrompt string
 			if task != nil && task.Title != "" {
@@ -53,5 +53,5 @@ In an interactive terminal, prompts for confirmation unless --yes or -y is speci
 
 func init() {
 	deleteCmd.Flags().BoolVarP(&deleteForce, "yes", "y", false, "Confirm deletion without interactive prompt")
-	deleteCmd.Flags().BoolVar(&deleteForce, "force", false, "Confirm deletion without interactive prompt")
+	deleteCmd.Flags().BoolVarP(&deleteForce, "force", "f", false, "Confirm deletion without interactive prompt")
 }

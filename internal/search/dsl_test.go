@@ -227,10 +227,27 @@ func TestTopicKindAndLinkQualifiers(t *testing.T) {
 		{"linkedfrom:t1", post, true},
 		{"kind:post AND topic:bug-reports", post, true},
 		{"NOT kind:post", hero, true},
+		{"id:2", post, true},
+		{"2", post, true},
+		{"links:2", hero, true},
+		{`-topic:"bug-reports"`, hero, true},
+		{`-topic:"bug-reports"`, post, false},
 	}
 	for _, c := range cases {
 		if got := Compile(c.q).Match(c.task); got != c.want {
 			t.Errorf("%q on %s = %v, want %v", c.q, c.task.ID, got, c.want)
+		}
+	}
+
+	resolvedPost := &domain.Task{ID: "P-5", Scope: "local", Kind: domain.KindPost, Status: domain.StatusDone}
+	if !Match("s:resolved", resolvedPost) || !Match("status:resolved", resolvedPost) {
+		t.Error("expected s:resolved and status:resolved to match resolved post")
+	}
+
+	task10 := &domain.Task{ID: "T-10", Scope: "local", Kind: domain.KindTask, Title: "Tenth item"}
+	for _, q := range []string{"1", "t1", "t-1", "T-1", "id:1", "id:t-1"} {
+		if Match(q, task10) {
+			t.Errorf("expected query %q NOT to match T-10", q)
 		}
 	}
 }
