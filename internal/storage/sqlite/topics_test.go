@@ -297,6 +297,41 @@ func TestDeleteTopicRequiresDestination(t *testing.T) {
 	}
 }
 
+func TestDeleteTopicSubTopicSlugCollisionRejection(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create parent topic A with child "api"
+	mustTopic(t, db, "Topic A", domain.TopicGroup, "")
+	mustTopic(t, db, "API", domain.TopicTasks, "topic-a")
+
+	// Create topic B with existing child "api"
+	mustTopic(t, db, "Topic B", domain.TopicGroup, "")
+	mustTopic(t, db, "API", domain.TopicTasks, "topic-b")
+
+	// Attempting to delete topic-a and move its children to topic-b must fail with collision error
+	err := db.DeleteTopic("topic-a", "topic-b")
+	if err == nil {
+		t.Fatal("expected error on sub-topic slug collision, got nil")
+	}
+	if !strings.Contains(err.Error(), "already exists in destination") {
+		t.Fatalf("expected collision error message, got: %v", err)
+	}
+
+	// Also test collision when moving to root (unfiled destination reparents sub-topics to root)
+	mustTopic(t, db, "Core", domain.TopicTasks, "")
+	mustTopic(t, db, "Topic C", domain.TopicGroup, "")
+	mustTopic(t, db, "Core", domain.TopicTasks, "topic-c")
+
+	err = db.DeleteTopic("topic-c", "unfiled")
+	if err == nil {
+		t.Fatal("expected error on sub-topic slug collision at root, got nil")
+	}
+	if !strings.Contains(err.Error(), "already exists in destination") {
+		t.Fatalf("expected collision error message at root, got: %v", err)
+	}
+}
+
 func TestPromotePostLinksBothWays(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()

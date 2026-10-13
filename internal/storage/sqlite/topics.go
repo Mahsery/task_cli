@@ -421,8 +421,47 @@ func (d *DB) DeleteTopic(ref, moveTo string) error {
 		if _, err := tx.Exec(`UPDATE tasks SET topic_id = ?, updated_at = ? WHERE topic_id = ?`, destID, time.Now().UTC(), tp.ID); err != nil {
 			return fmt.Errorf("failed to move topic items: %w", err)
 		}
-		if _, err := tx.Exec(`UPDATE topics SET parent_id = ? WHERE parent_id = ?`, destID, tp.ID); err != nil {
-			return fmt.Errorf("failed to re-parent sub-topics: %w", err)
+
+		if tp.ChildCount > 0 {
+			var childSlugs []string
+			rows, err := tx.Query(`SELECT slug FROM topics WHERE parent_id = ?`, tp.ID)
+			if err != nil {
+				return fmt.Errorf("failed to inspect sub-topics: %w", err)
+			}
+			for rows.Next() {
+				var s string
+				if err := rows.Scan(&s); err != nil {
+					_ = rows.Close()
+					return fmt.Errorf("failed to scan sub-topic slug: %w", err)
+				}
+				childSlugs = append(childSlugs, s)
+			}
+			_ = rows.Close()
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("failed reading sub-topic slugs: %w", err)
+			}
+
+			for _, slug := range childSlugs {
+				var collision int
+				err := tx.QueryRow(
+					`SELECT COUNT(*) FROM topics WHERE COALESCE(parent_id, 0) = COALESCE(?, 0) AND slug = ? AND id != ?`,
+					destID, slug, tp.ID,
+				).Scan(&collision)
+				if err != nil {
+					return fmt.Errorf("failed to check slug collision: %w", err)
+				}
+				if collision > 0 {
+					destName := "root"
+					if destID != nil {
+						destName = moveTo
+					}
+					return fmt.Errorf("cannot delete topic %q: sub-topic slug %q already exists in destination %q", tp.Path, slug, destName)
+				}
+			}
+
+			if _, err := tx.Exec(`UPDATE topics SET parent_id = ? WHERE parent_id = ?`, destID, tp.ID); err != nil {
+				return fmt.Errorf("failed to re-parent sub-topics: %w", err)
+			}
 		}
 	}
 	if _, err := tx.Exec(`DELETE FROM topics WHERE id = ?`, tp.ID); err != nil {
