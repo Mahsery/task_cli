@@ -15,7 +15,7 @@ func TestOrphanCommandRegistration(t *testing.T) {
 		t.Errorf("expected command name orphan, got %s", cmd.Name())
 	}
 
-	flags := []string{"older-than", "message", "actor", "dry-run", "all", "list", "backport"}
+	flags := []string{"older-than", "message", "actor", "dry-run", "all", "list", "backport", "yes", "force"}
 	for _, f := range flags {
 		if cmd.Flags().Lookup(f) == nil {
 			t.Errorf("expected --%s flag on orphan command", f)
@@ -33,11 +33,20 @@ func TestOrphanCommandRegistration(t *testing.T) {
 	if cmd.Flags().ShorthandLookup("l") == nil {
 		t.Error("expected -l shorthand on orphan command")
 	}
+	if cmd.Flags().ShorthandLookup("y") == nil {
+		t.Error("expected -y shorthand on orphan command")
+	}
 
 	// Verify subcommands
 	reapCmd, _, err := RootCmd.Find([]string{"orphan", "reap"})
 	if err != nil || reapCmd == nil || reapCmd.Name() != "reap" {
 		t.Errorf("expected 'orphan reap' subcommand, got %v", reapCmd)
+	}
+	if reapCmd.Flags().Lookup("yes") == nil || reapCmd.Flags().ShorthandLookup("y") == nil {
+		t.Error("expected --yes/-y flag on orphan reap command")
+	}
+	if reapCmd.Flags().Lookup("force") == nil {
+		t.Error("expected --force flag on orphan reap command")
 	}
 
 	listCmdSub, _, err := RootCmd.Find([]string{"orphan", "list"})

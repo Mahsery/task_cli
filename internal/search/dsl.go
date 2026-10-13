@@ -207,6 +207,9 @@ func (n *termNode) Eval(task *domain.Task) bool {
 		return strings.Contains(strings.ToLower(task.Author), target)
 
 	case "id":
+		if norm, err := domain.NormalizeID(target, task.Scope); err == nil {
+			return strings.EqualFold(task.ID, norm)
+		}
 		return strings.Contains(strings.ToLower(task.ID), target)
 
 	case "topic", "in":
@@ -235,6 +238,9 @@ func (n *termNode) Eval(task *domain.Task) bool {
 	default:
 		// General match: ID, Title, Description, Tags, Assignee, Author, Notes, Orphaned state
 		if (target == "orphan" || target == "orphaned") && task.IsOrphaned() {
+			return true
+		}
+		if norm, err := domain.NormalizeID(target, task.Scope); err == nil && strings.EqualFold(task.ID, norm) {
 			return true
 		}
 		if strings.Contains(strings.ToLower(task.ID), target) {

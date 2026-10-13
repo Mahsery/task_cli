@@ -13,12 +13,13 @@ import (
 )
 
 var (
-	topicKind   string
-	topicParent string
-	topicSlug   string
-	topicDesc   string
-	topicMoveTo string
-	topicTitle  string
+	topicKind    string
+	topicParent  string
+	topicSlug    string
+	topicDesc    string
+	topicMoveTo  string
+	topicTitle   string
+	topicRmForce bool
 )
 
 var topicCmd = &cobra.Command{
@@ -263,13 +264,29 @@ var topicRmCmd = &cobra.Command{
 	Short:   "Delete a topic (non-empty topics need --move-to <topic|unfiled>)",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
+		norm := domain.NormalizeTopicRef(args[0])
+		if IsInteractiveTerminal() && !topicRmForce && !jsonFlag {
+			prompt := fmt.Sprintf("Delete topic @%s permanently? [y/N]: ", norm)
+			if topicMoveTo != "" {
+				prompt = fmt.Sprintf("Delete topic @%s and move contents to @%s? [y/N]: ", norm, domain.NormalizeTopicRef(topicMoveTo))
+			}
+			fmt.Print(prompt)
+			var resp string
+			_, _ = fmt.Scanln(&resp)
+			resp = strings.ToLower(strings.TrimSpace(resp))
+			if resp != "y" && resp != "yes" {
+				fmt.Println("Aborted.")
+				return nil
+			}
+		}
+
 		if err := taskClient.DeleteTopic(args[0], topicMoveTo); err != nil {
 			return err
 		}
 		if domain.NormalizeTopicRef(args[0]) == currentTopic() {
 			_ = setCurrentTopic("")
 		}
-		fmt.Printf("✓ Deleted topic @%s\n", domain.NormalizeTopicRef(args[0]))
+		fmt.Printf("✓ Deleted topic @%s\n", norm)
 		return nil
 	},
 }
@@ -465,6 +482,8 @@ func init() {
 	_ = topicMvCmd.MarkFlagRequired("to")
 
 	topicRmCmd.Flags().StringVar(&topicMoveTo, "move-to", "", "Where to move contained items/sub-topics (topic or 'unfiled')")
+	topicRmCmd.Flags().BoolVarP(&topicRmForce, "yes", "y", false, "Confirm deletion without interactive prompt")
+	topicRmCmd.Flags().BoolVar(&topicRmForce, "force", false, "Confirm deletion without interactive prompt")
 
 	topicImportTagsCmd.Flags().BoolVar(&importTagsDryRun, "dry-run", false, "Preview topics to create and tasks to move")
 

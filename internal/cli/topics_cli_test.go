@@ -208,3 +208,19 @@ func TestListPostsAndTasksFlags(t *testing.T) {
 		t.Fatalf("expected conflicting options error for --tasks and --kind post, got: %v", err)
 	}
 }
+
+func TestTopicRmCommandRegistration(t *testing.T) {
+	cmd, _, err := RootCmd.Find([]string{"topic", "rm"})
+	if err != nil || cmd == nil {
+		t.Fatalf("topic rm command not registered: %v", err)
+	}
+
+	for _, f := range []string{"move-to", "yes", "force"} {
+		if cmd.Flags().Lookup(f) == nil {
+			t.Errorf("expected --%s flag on topic rm command", f)
+		}
+	}
+	if cmd.Flags().ShorthandLookup("y") == nil {
+		t.Error("expected -y shorthand on topic rm command")
+	}
+}

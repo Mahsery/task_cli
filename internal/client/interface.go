@@ -38,6 +38,15 @@ type TaskClient interface {
 	ListBackups() ([]protocol.BackupInfo, error)
 	VerifyBackup(target string) (string, error)
 	RestoreBackup(backupPath string) (string, error)
+	FindStaleTasks(scope, repoPath string, threshold time.Duration) ([]domain.StaleTaskCandidate, error)
+	ListTopics() ([]*domain.Topic, error)
+	GetTopic(ref string) (*domain.Topic, error)
+	CreateTopic(p protocol.CreateTopicPayload) (*domain.Topic, error)
+	UpdateTopic(p protocol.UpdateTopicPayload) (*domain.Topic, error)
+	MoveTopic(ref, parent string) (*domain.Topic, error)
+	DeleteTopic(ref, moveTo string) error
+	MoveItems(ids []string, topic, actor string) ([]*domain.Task, error)
+	PromotePost(id, topic, author string) (*protocol.PromotePostResult, error)
 }
 
 var _ TaskClient = (*Client)(nil)
