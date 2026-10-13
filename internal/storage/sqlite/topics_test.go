@@ -474,3 +474,86 @@ func TestMigrationConvertsLegacyOrphanTag(t *testing.T) {
 		t.Errorf("untagged task must be untouched: at=%v tags=%v", two.OrphanedAt, two.Tags)
 	}
 }
+
+func TestTopicGroupRollsUpCounts(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	game := mustTopic(t, db, "Game", domain.TopicGroup, "")
+	mustTopic(t, db, "Nav", domain.TopicTasks, "game")
+	mustTopic(t, db, "Simulation", domain.TopicTasks, "game")
+
+	// Create tasks in nav
+	for i := 0; i < 2; i++ {
+		task, err := db.CreateTask(domain.ScopeLocal, "", "Nav task open", "", domain.StatusOpen, domain.PriorityNormal, nil, "me", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.MoveItems([]string{task.ID}, "game/nav", "me"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doneTask, err := db.CreateTask(domain.ScopeLocal, "", "Nav task done", "", domain.StatusDone, domain.PriorityNormal, nil, "me", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MoveItems([]string{doneTask.ID}, "game/nav", "me"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create tasks in simulation
+	simProg, err := db.CreateTask(domain.ScopeLocal, "", "Sim task active", "", domain.StatusInProgress, domain.PriorityNormal, nil, "me", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MoveItems([]string{simProg.ID}, "game/simulation", "me"); err != nil {
+		t.Fatal(err)
+	}
+
+	simClosed, err := db.CreateTask(domain.ScopeLocal, "", "Sim task closed", "", domain.StatusClosed, domain.PriorityNormal, nil, "me", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.MoveItems([]string{simClosed.ID}, "game/simulation", "me"); err != nil {
+		t.Fatal(err)
+	}
+
+	topics, err := db.ListTopics()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bySlug := make(map[string]*domain.Topic)
+	for _, tp := range topics {
+		bySlug[tp.Slug] = tp
+	}
+
+	nav := bySlug["nav"]
+	if nav == nil || nav.ItemCount != 3 || nav.OpenCount != 2 {
+		t.Fatalf("expected nav items=3 open=2, got %+v", nav)
+	}
+
+	sim := bySlug["simulation"]
+	if sim == nil || sim.ItemCount != 2 || sim.OpenCount != 1 {
+		t.Fatalf("expected simulation items=2 open=1, got %+v", sim)
+	}
+
+	gameTopic := bySlug[game.Slug]
+	if gameTopic == nil {
+		t.Fatalf("game topic not found")
+	}
+	if gameTopic.ItemCount != 5 {
+		t.Errorf("expected rolled-up game ItemCount=5, got %d", gameTopic.ItemCount)
+	}
+	if gameTopic.OpenCount != 3 {
+		t.Errorf("expected rolled-up game OpenCount=3, got %d", gameTopic.OpenCount)
+	}
+
+	// Verify ListTasks with Topic="game" returns all 5 tasks even without TopicRecursive: true
+	tasks, err := db.ListTasks(domain.TaskFilter{Topic: "game"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 5 {
+		t.Fatalf("expected 5 tasks under group 'game', got %d", len(tasks))
+	}
+}

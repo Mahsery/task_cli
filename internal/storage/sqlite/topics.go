@@ -87,6 +87,23 @@ func loadTopicTree(q sqlx.Queryer) (*topicTree, error) {
 			tp.OpenCount = c.Open
 		}
 	}
+
+	// For groups, roll up ItemCount and OpenCount from all descendant non-group topics.
+	for _, tp := range t.ordered {
+		if tp.Kind == domain.TopicGroup {
+			desc := t.descendants(tp.ID)
+			for _, descID := range desc {
+				if descID == tp.ID {
+					continue
+				}
+				if child, ok := t.byID[descID]; ok && child.Kind != domain.TopicGroup {
+					tp.ItemCount += child.ItemCount
+					tp.OpenCount += child.OpenCount
+				}
+			}
+		}
+	}
+
 	return t, nil
 }
 

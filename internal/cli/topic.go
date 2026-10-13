@@ -175,6 +175,9 @@ var topicShowCmd = &cobra.Command{
 		}
 		fmt.Println()
 		listTopicRef = tp.Path
+		if tp.Kind == domain.TopicGroup {
+			listRecursive = true
+		}
 		return listCmd.RunE(cmd, nil)
 	},
 }

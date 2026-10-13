@@ -241,13 +241,13 @@ func (m Model) renderListPane(l paneLayout) []string {
 		ageWidth = 7
 	}
 	topicWidth := 0
-	topicThreshold := 65
+	topicThreshold := 60
 	if m.treeActive() {
-		topicThreshold = 80
+		topicThreshold = 75
 	}
-	if m.topicPath == "" || m.topicPath == domain.UnfiledTopic {
+	if m.topicPath == "" || m.topicPath == domain.UnfiledTopic || m.isTopicRecursive() {
 		switch {
-		case width >= 110:
+		case width >= 105:
 			topicWidth = 16
 		case width >= topicThreshold:
 			topicWidth = 10
@@ -281,7 +281,11 @@ func (m Model) renderListPane(l paneLayout) []string {
 
 	rows := m.displayRows()
 	if len(rows) == 0 {
-		lines = append(lines, theme.RowNormal.Render("  No items found. Press 'n' to create."))
+		emptyMsg := "  No items found. Press 'n' to create."
+		if t := m.currentTopic(); t != nil && t.Kind == domain.TopicGroup && t.ChildCount == 0 {
+			emptyMsg = "  Empty group. Press 'N' in sidebar to create a sub-topic."
+		}
+		lines = append(lines, theme.RowNormal.Render(emptyMsg))
 		return fitBlock(lines, width, l.listHeight)
 	}
 

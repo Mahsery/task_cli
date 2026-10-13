@@ -19,6 +19,16 @@ type reloadErrMsg struct {
 	err   error
 }
 
+// isTopicRecursive reports whether the current topic filter should include descendant topics.
+// Groups never hold direct items, and parent topics with sub-topics include their descendants.
+func (m Model) isTopicRecursive() bool {
+	if m.topicPath == "" || m.topicPath == domain.UnfiledTopic {
+		return false
+	}
+	t := m.currentTopic()
+	return t != nil && (t.Kind == domain.TopicGroup || t.ChildCount > 0)
+}
+
 // listFilter is the single source of truth for the TUI's current list query.
 func (m Model) listFilter() domain.TaskFilter {
 	return domain.TaskFilter{
@@ -27,6 +37,7 @@ func (m Model) listFilter() domain.TaskFilter {
 		Search:          m.filterText,
 		IncludeArchived: m.showArchived,
 		Topic:           m.topicPath,
+		TopicRecursive:  m.isTopicRecursive(),
 		Kind:            m.kindFilter,
 	}
 }

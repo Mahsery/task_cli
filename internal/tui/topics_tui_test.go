@@ -345,3 +345,89 @@ func TestTUINarrowLayoutFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestTopicGroupRecursiveViewAndCreation(t *testing.T) {
+	pID1 := int64(10)
+	topics := []*domain.Topic{
+		{ID: 10, Slug: "sim", Title: "Simulation Group", Kind: domain.TopicGroup, Path: "sim", ChildCount: 2, OpenCount: 3},
+		{ID: 11, Slug: "nav", Title: "Navigation", Kind: domain.TopicTasks, ParentID: &pID1, Path: "sim/nav", OpenCount: 2},
+		{ID: 12, Slug: "simulation", Title: "Sim Core", Kind: domain.TopicTasks, ParentID: &pID1, Path: "sim/simulation", OpenCount: 1},
+		{ID: 20, Slug: "empty", Title: "Empty Group", Kind: domain.TopicGroup, Path: "empty", ChildCount: 0, OpenCount: 0},
+	}
+	tasks := []*domain.Task{
+		{ID: "T-101", Title: "Nav Task", Status: domain.StatusOpen, TopicPath: "sim/nav", CreatedAt: time.Now()},
+		{ID: "T-102", Title: "Physics Task", Status: domain.StatusOpen, TopicPath: "sim/simulation", CreatedAt: time.Now()},
+	}
+
+	m := Model{
+		topics:       topics,
+		topicsLoaded: true,
+		tasks:        tasks,
+		topicPath:    "sim",
+		width:        160,
+		height:       30,
+		theme:        NewKanagawaTheme(),
+		activePane:   PaneList,
+	}
+
+	// 1. Recursive topic filter
+	if !m.isTopicRecursive() {
+		t.Fatalf("expected isTopicRecursive to be true for TopicGroup 'sim'")
+	}
+	filter := m.listFilter()
+	if !filter.TopicRecursive {
+		t.Fatalf("expected listFilter().TopicRecursive to be true for TopicGroup 'sim'")
+	}
+
+	// 2. Table view includes TOPIC column and child topics
+	view := m.View()
+	if !strings.Contains(view, "TOPIC") {
+		t.Fatalf("expected TOPIC column in view when viewing a group:\n%s", view)
+	}
+	if !strings.Contains(view, "@sim/nav") || !strings.Contains(view, "@sim/sim") {
+		t.Fatalf("expected child topic tags in view:\n%s", view)
+	}
+
+	// 3. Empty group state message
+	mEmpty := Model{
+		topics:       topics,
+		topicsLoaded: true,
+		tasks:        nil,
+		topicPath:    "empty",
+		width:        120,
+		height:       30,
+		theme:        NewKanagawaTheme(),
+		activePane:   PaneList,
+	}
+	emptyView := mEmpty.View()
+	if !strings.Contains(emptyView, "Empty group. Press 'N' in sidebar to create a sub-topic") {
+		t.Fatalf("expected empty group message in view, got:\n%s", emptyView)
+	}
+
+	// 4. Pressing 'n' in a group opens sub-topic picker
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mPick := mustModel(t, updated)
+	if mPick.picker == nil {
+		t.Fatalf("expected picker to open when pressing 'n' in group with multiple children")
+	}
+	if mPick.picker.kind != pickNewItemTopic {
+		t.Fatalf("expected picker kind pickNewItemTopic, got %v", mPick.picker.kind)
+	}
+	if !strings.Contains(mPick.picker.title, "@sim") {
+		t.Fatalf("expected picker title to reference @sim, got %q", mPick.picker.title)
+	}
+	items := mPick.picker.items
+	if len(items) != 2 {
+		t.Fatalf("expected 2 child topics in picker, got %d", len(items))
+	}
+	if items[0].Value != "sim/nav" || items[1].Value != "sim/simulation" {
+		t.Fatalf("unexpected picker items: %+v", items)
+	}
+
+	// 5. Pressing 'n' in empty group sets friendly status message
+	updatedEmpty, _ := mEmpty.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	mEmptyAfter := mustModel(t, updatedEmpty)
+	if !strings.Contains(mEmptyAfter.statusMsg, "has no writable sub-topics") {
+		t.Fatalf("expected status message about no writable sub-topics, got %q", mEmptyAfter.statusMsg)
+	}
+}

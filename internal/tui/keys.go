@@ -819,48 +819,34 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if top == domain.UnfiledTopic {
 			top = ""
 		}
-		tmpPath, err := editor.CreateNewTaskFileInTopic("", top)
-		if err != nil {
-			return m, func() tea.Msg { return errMsg(err) }
-		}
-		cmd := editor.BuildEditorCmd(m.editorCmd, tmpPath)
-		return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-			if err != nil {
-				_ = os.Remove(tmpPath)
-				return errMsg(err)
-			}
-			data, err := os.ReadFile(tmpPath)
-			if err != nil {
-				return errMsg(err)
-			}
-			parsed, err := editor.ParseNewTaskContent(string(data))
-			if err != nil {
-				return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
-			}
-			kind := domain.KindTask
+		if t := m.topicByPath(top); t != nil && t.Kind == domain.TopicGroup {
+			accept := []domain.ItemKind{domain.KindTask}
 			if m.isBoardView() {
-				kind = domain.KindPost
+				accept = []domain.ItemKind{domain.KindPost}
 			}
-			destTopic := parsed.Topic
-			if destTopic == "" {
-				destTopic = top
+			var validChildren []string
+			for _, e := range orderedTopics(m.topics) {
+				if strings.HasPrefix(e.Path, top+"/") {
+					ok := true
+					for _, k := range accept {
+						ok = ok && e.Topic.Kind.Accepts(k)
+					}
+					if ok {
+						validChildren = append(validChildren, e.Path)
+					}
+				}
 			}
-			_, err = m.client.CreateTask(protocol.CreateTaskPayload{
-				Title:       parsed.Title,
-				Description: parsed.Description,
-				Status:      domain.StatusOpen,
-				Priority:    parsed.Priority,
-				Author:      m.resolveActor(),
-				Assignee:    parsed.Assignee,
-				Kind:        kind,
-				Topic:       destTopic,
-			})
-			if err != nil {
-				return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
+			if len(validChildren) == 0 {
+				m.statusMsg = fmt.Sprintf("Group @%s has no writable sub-topics. Create one with 'N' in the sidebar.", top)
+				return m, nil
 			}
-			_ = os.Remove(tmpPath)
-			return m.fetchTasksCmd()()
-		})
+			if len(validChildren) == 1 {
+				return m.openNewTaskEditor(validChildren[0])
+			}
+			m.openPicker(pickNewItemTopic, nil, top)
+			return m, nil
+		}
+		return m.openNewTaskEditor(top)
 
 	case "e":
 		// Edit existing task via editor
@@ -910,4 +896,49 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m Model) openNewTaskEditor(top string) (tea.Model, tea.Cmd) {
+	tmpPath, err := editor.CreateNewTaskFileInTopic("", top)
+	if err != nil {
+		return m, func() tea.Msg { return errMsg(err) }
+	}
+	cmd := editor.BuildEditorCmd(m.editorCmd, tmpPath)
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			_ = os.Remove(tmpPath)
+			return errMsg(err)
+		}
+		data, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return errMsg(err)
+		}
+		parsed, err := editor.ParseNewTaskContent(string(data))
+		if err != nil {
+			return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
+		}
+		kind := domain.KindTask
+		if m.isBoardView() {
+			kind = domain.KindPost
+		}
+		destTopic := parsed.Topic
+		if destTopic == "" {
+			destTopic = top
+		}
+		_, err = m.client.CreateTask(protocol.CreateTaskPayload{
+			Title:       parsed.Title,
+			Description: parsed.Description,
+			Status:      domain.StatusOpen,
+			Priority:    parsed.Priority,
+			Author:      m.resolveActor(),
+			Assignee:    parsed.Assignee,
+			Kind:        kind,
+			Topic:       destTopic,
+		})
+		if err != nil {
+			return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
+		}
+		_ = os.Remove(tmpPath)
+		return m.fetchTasksCmd()()
+	})
 }

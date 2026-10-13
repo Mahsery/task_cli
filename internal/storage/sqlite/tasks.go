@@ -1046,7 +1046,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 				return nil, err
 			}
 			ids := []int64{tp.ID}
-			if filter.TopicRecursive {
+			if filter.TopicRecursive || tp.Kind == domain.TopicGroup {
 				ids = tree.descendants(tp.ID)
 			}
 			placeholders := make([]string, len(ids))

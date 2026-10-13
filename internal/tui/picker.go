@@ -15,11 +15,12 @@ import (
 type pickerKind int
 
 const (
-	pickGoTopic    pickerKind = iota // gt: jump to a topic (tab toggles repo/global)
-	pickMoveItems                    // M in the list: move selected items to a topic
-	pickMoveTopic                    // M in the sidebar: re-parent a topic
-	pickPromote                      // p: promote a post into a tasks topic
-	pickInsertLink                   // gl: append a [[link]] to the current item
+	pickGoTopic      pickerKind = iota // gt: jump to a topic (tab toggles repo/global)
+	pickMoveItems                      // M in the list: move selected items to a topic
+	pickMoveTopic                      // M in the sidebar: re-parent a topic
+	pickPromote                        // p: promote a post into a tasks topic
+	pickInsertLink                     // gl: append a [[link]] to the current item
+	pickNewItemTopic                   // n in a group: pick sub-topic for new item
 )
 
 type pickerItem struct {
@@ -129,6 +130,9 @@ func (m Model) topicPickerItems(kind pickerKind, accept []domain.ItemKind) []pic
 		if kind == pickMoveTopic && (e.Path == m.picker.ref || strings.HasPrefix(e.Path, m.picker.ref+"/")) {
 			continue
 		}
+		if kind == pickNewItemTopic && !strings.HasPrefix(e.Path, m.picker.ref+"/") {
+			continue
+		}
 		if len(accept) > 0 {
 			ok := true
 			for _, k := range accept {
@@ -191,6 +195,13 @@ func (m *Model) openPicker(kind pickerKind, targetIDs []string, ref string) {
 	case pickInsertLink:
 		p.title = "INSERT LINK INTO " + strings.Join(targetIDs, ", ")
 		p.items = m.linkPickerItems(strings.Join(targetIDs, ""))
+	case pickNewItemTopic:
+		p.title = "NEW ITEM IN @" + ref + ": CHOOSE SUB-TOPIC"
+		accept := []domain.ItemKind{domain.KindTask}
+		if m.isBoardView() {
+			accept = []domain.ItemKind{domain.KindPost}
+		}
+		p.items = m.topicPickerItems(kind, accept)
 	}
 }
 
@@ -306,6 +317,12 @@ func (m Model) applyPicker(choice *pickerItem) (tea.Model, tea.Cmd) {
 		return m, m.promotePostCmd(p.targetIDs[0], dest)
 	case pickInsertLink:
 		return m.insertLink(p.targetIDs[0], choice, query)
+	case pickNewItemTopic:
+		if choice == nil {
+			m.statusMsg = "No matching topic"
+			return m, nil
+		}
+		return m.openNewTaskEditor(choice.Value)
 	}
 	return m, nil
 }
