@@ -115,7 +115,7 @@ func (m Model) renderFooter(width int) string {
 			key("j/k", "Nav"),
 			key("Enter", "Select"),
 			key("Tab", "Tasks"),
-			key("K", "Kind"),
+			key("O", "Kind"),
 			key("N", "New"),
 			key("R", "Rename"),
 			key("D", "Delete"),
@@ -163,7 +163,7 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = append(candidateKeys, key("<>", "Split"))
 		}
 		candidateKeys = append(candidateKeys,
-			key("K", "Kind"),
+			key("O", "Kind"),
 			doneLabel,
 		)
 		if curTask == nil || !curTask.IsPost() {
@@ -229,7 +229,7 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = append(candidateKeys,
 				treeLabel,
 				key("gt", "Topic"),
-				key("K", "Kind"),
+				key("O", "Kind"),
 				key("M", "Move"),
 				key("gl", "Link"),
 				key("Space", "Sel"),
@@ -264,7 +264,7 @@ func (m Model) renderFooter(width int) string {
 			}
 			candidateKeys = append(candidateKeys,
 				key("gt", "Topic"),
-				key("K", "Kind"),
+				key("O", "Kind"),
 				key("M", "Move"),
 				key("Space", "Sel"),
 				key("n", "New"),
@@ -299,7 +299,7 @@ func (m Model) renderFooter(width int) string {
 				candidateKeys = append(candidateKeys, undoKey)
 			}
 			candidateKeys = append(candidateKeys,
-				key("K", "Kind"),
+				key("O", "Kind"),
 				doneLabel,
 				archiveLabel,
 				theme.DiffSub.Render("[x] Del"),

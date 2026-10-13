@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -83,31 +84,31 @@ func TestTUIKindFilterCycleAndSelection(t *testing.T) {
 		t.Fatalf("expected empty kindFilter initially, got %q", m.kindFilter)
 	}
 
-	// Press 'K' to cycle to Tasks Only
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	// Press 'O' to cycle to Tasks Only
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
 	m = mustModel(t, updated)
 	if m.kindFilter != domain.KindTask {
-		t.Fatalf("expected kindFilter 'task' after 1st K, got %q", m.kindFilter)
+		t.Fatalf("expected kindFilter 'task' after 1st O, got %q", m.kindFilter)
 	}
 	if !strings.Contains(m.View(), "TASKS ONLY") {
 		t.Fatalf("expected TASKS ONLY indicator in header view")
 	}
 
-	// Press 'K' to cycle to Posts Only
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	// Press 'O' to cycle to Posts Only
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
 	m = mustModel(t, updated)
 	if m.kindFilter != domain.KindPost {
-		t.Fatalf("expected kindFilter 'post' after 2nd K, got %q", m.kindFilter)
+		t.Fatalf("expected kindFilter 'post' after 2nd O, got %q", m.kindFilter)
 	}
 	if !strings.Contains(m.View(), "POSTS ONLY") {
 		t.Fatalf("expected POSTS ONLY indicator in header view")
 	}
 
-	// Press 'K' to cycle back to All
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	// Press 'O' to cycle back to All
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
 	m = mustModel(t, updated)
 	if m.kindFilter != "" {
-		t.Fatalf("expected empty kindFilter after 3rd K, got %q", m.kindFilter)
+		t.Fatalf("expected empty kindFilter after 3rd O, got %q", m.kindFilter)
 	}
 
 	// Test sidebar navigation to All Posts (entry index 2)
@@ -429,5 +430,153 @@ func TestTopicGroupRecursiveViewAndCreation(t *testing.T) {
 	mEmptyAfter := mustModel(t, updatedEmpty)
 	if !strings.Contains(mEmptyAfter.statusMsg, "has no writable sub-topics") {
 		t.Fatalf("expected status message about no writable sub-topics, got %q", mEmptyAfter.statusMsg)
+	}
+}
+
+func TestTUIActivePaneKeyGating(t *testing.T) {
+	task1 := &domain.Task{ID: "T-1", Title: "Task One", Status: domain.StatusOpen}
+	task2 := &domain.Task{ID: "T-2", Title: "Task Two", Status: domain.StatusOpen}
+	m := Model{
+		tasks:        []*domain.Task{task1, task2},
+		selected:     map[string]bool{"T-1": true},
+		activePane:   PaneSidebar,
+		width:        140,
+		height:       30,
+		theme:        NewKanagawaTheme(),
+		topicsLoaded: true,
+	}
+
+	// 1. Sidebar focus: list mutation keys should not execute batch or task mutations
+	for _, key := range []rune{'d', 's', 'a', 'e', 'v', 'V', 'A', 'L', 'p'} {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		mUpdated := mustModel(t, updated)
+		if mUpdated.confirmDialog != nil {
+			t.Fatalf("key %q opened confirmation dialog while in PaneSidebar", string(key))
+		}
+		if task1.Status != domain.StatusOpen {
+			t.Fatalf("key %q mutated task status in PaneSidebar", string(key))
+		}
+		if !strings.Contains(mUpdated.statusMsg, "Tab to Tasks") {
+			t.Fatalf("expected guidance status message for key %q in PaneSidebar, got %q", string(key), mUpdated.statusMsg)
+		}
+	}
+
+	// 'M' in sidebar triggers topic move, never batch item move
+	updatedM, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'M'}})
+	mUpdatedM := mustModel(t, updatedM)
+	if mUpdatedM.picker != nil && mUpdatedM.picker.kind == pickMoveItems {
+		t.Fatalf("key 'M' triggered pickMoveItems while in PaneSidebar")
+	}
+
+	// 2. Detail focus: multi-select keys should be disabled
+	m.activePane = PaneDetail
+	m.selected = make(map[string]bool)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	mDetail := mustModel(t, updated)
+	if len(mDetail.selected) > 0 {
+		t.Fatalf("key 'v' toggled selection while in PaneDetail")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
+	mDetail = mustModel(t, updated)
+	if len(mDetail.selected) > 0 {
+		t.Fatalf("key 'V' selected all while in PaneDetail")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	mDetail = mustModel(t, updated)
+	if len(mDetail.selected) > 0 {
+		t.Fatalf("space toggled selection while in PaneDetail")
+	}
+}
+
+func TestTUISidebarMouseClickAndScroll(t *testing.T) {
+	topics := []*domain.Topic{
+		{ID: 1, Title: "Backend", Slug: "backend", Kind: domain.TopicTasks},
+		{ID: 2, Title: "Frontend", Slug: "frontend", Kind: domain.TopicTasks},
+	}
+	m := Model{
+		topics:       topics,
+		topicsLoaded: true,
+		tasks: []*domain.Task{
+			{ID: "T-1", Title: "Task One"},
+		},
+		width:      140,
+		height:     30,
+		theme:      NewKanagawaTheme(),
+		activePane: PaneList,
+	}
+
+	l := m.layout()
+	if l.sidebarWidth <= 0 {
+		t.Fatalf("expected positive sidebarWidth, got %d", l.sidebarWidth)
+	}
+
+	// Test paneAt boundary geometry
+	if p := m.paneAt(l, 5, 5); p != PaneSidebar {
+		t.Fatalf("expected x=5 to be PaneSidebar, got %v", p)
+	}
+	if p := m.paneAt(l, l.sidebarWidth+5, 5); p != PaneList {
+		t.Fatalf("expected x in list to be PaneList, got %v", p)
+	}
+	if p := m.paneAt(l, l.sidebarWidth+l.listWidth+10, 5); p != PaneDetail {
+		t.Fatalf("expected x in detail to be PaneDetail, got %v", p)
+	}
+
+	// Left click inside sidebar at row 3 (first entry)
+	mouseClick := tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+		X:      5,
+		Y:      listFirstRowY,
+	}
+	updated, _ := m.Update(mouseClick)
+	mClicked := mustModel(t, updated)
+	if mClicked.activePane != PaneSidebar {
+		t.Fatalf("expected activePane to be PaneSidebar after clicking sidebar, got %v", mClicked.activePane)
+	}
+
+	// Mouse wheel down inside sidebar
+	wheelDown := tea.MouseMsg{
+		Button: tea.MouseButtonWheelDown,
+		X:      5,
+		Y:      5,
+	}
+	updated, _ = mClicked.Update(wheelDown)
+	mScrolled := mustModel(t, updated)
+	if mScrolled.sidebarCursor <= mClicked.sidebarCursor {
+		t.Fatalf("expected sidebarCursor to advance on wheel down in sidebar")
+	}
+}
+
+func TestTUIVimKMotionHalfPageUp(t *testing.T) {
+	var tasks []*domain.Task
+	for i := 0; i < 20; i++ {
+		tasks = append(tasks, &domain.Task{ID: fmt.Sprintf("T-%d", i+1), Title: fmt.Sprintf("Task %d", i+1), Kind: domain.KindTask})
+	}
+	m := Model{
+		tasks:      tasks,
+		cursor:     15,
+		width:      140,
+		height:     20,
+		theme:      NewKanagawaTheme(),
+		activePane: PaneList,
+	}
+
+	// Press 'K' - should jump half page up (decrement cursor)
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'K'}})
+	mUp := mustModel(t, updated)
+	if mUp.cursor >= 15 {
+		t.Fatalf("expected cursor to move up on 'K', got %d", mUp.cursor)
+	}
+	if mUp.kindFilter != "" {
+		t.Fatalf("expected kindFilter to remain unchanged on 'K', got %q", mUp.kindFilter)
+	}
+
+	// Press 'O' - should cycle kind filter
+	updated, _ = mUp.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'O'}})
+	mCycled := mustModel(t, updated)
+	if mCycled.kindFilter != domain.KindTask {
+		t.Fatalf("expected kindFilter 'task' after pressing 'O', got %q", mCycled.kindFilter)
 	}
 }

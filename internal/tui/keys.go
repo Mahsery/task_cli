@@ -197,6 +197,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if consumed {
 			return updated, cmd
 		}
+		switch kStr {
+		case "d", "s", "a", "e", "v", "V", "x", "A", "L", "p", "M":
+			m.statusMsg = "Tab to Tasks to interact with items"
+			return m, nil
+		}
 	}
 
 	switch msg.String() {
@@ -424,11 +429,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailScrollOffset = 0
 		}
 
-	case "K":
+	case "O":
 		cmd := m.cycleKindFilter()
 		return m, cmd
 
-	case "ctrl+u", "pgup":
+	case "K", "ctrl+u", "pgup":
 		times := 1
 		if chordCount > 0 {
 			times = chordCount
@@ -456,6 +461,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case " ", "space":
+		if m.activePane != PaneList {
+			return m, nil
+		}
 		// Multi-select toggle: toggle selection for current task, then advance cursor down
 		if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 			t := m.tasks[m.cursor]
@@ -477,6 +485,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "v":
+		if m.activePane != PaneList {
+			return m, nil
+		}
 		// Toggle selection for current task without advancing cursor
 		if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
 			t := m.tasks[m.cursor]
@@ -491,6 +502,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "V":
+		if m.activePane != PaneList {
+			return m, nil
+		}
 		// Select all / Deselect all toggle
 		if len(m.tasks) > 0 {
 			if len(m.selected) == len(m.tasks) {
@@ -568,8 +582,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "x":
-		// Batch delete prompt if tasks selected, otherwise single-task
-		if len(m.selected) > 0 {
+		// Batch delete prompt if tasks selected in list pane, otherwise single-task
+		if m.activePane == PaneList && len(m.selected) > 0 {
 			m.confirmDialog = m.newBatchConfirmDialog(ConfirmDelete, "CONFIRM BATCH DELETION", fmt.Sprintf("Permanently delete %d selected tasks?", len(m.selected)))
 			return m, nil
 		}
@@ -580,7 +594,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "a":
 		actor := m.resolveActor()
-		if len(m.selected) > 0 {
+		if m.activePane == PaneList && len(m.selected) > 0 {
 			dlg := m.newBatchConfirmDialog(ConfirmClaim, "CONFIRM BATCH CLAIM", fmt.Sprintf("Claim %d selected tasks as %q?", len(m.selected), actor))
 			dlg.TargetAssignee = actor
 			m.confirmDialog = dlg
@@ -602,8 +616,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.fetchTasksCmd()
 
-	case "A", "O":
-		if len(m.selected) > 0 {
+	case "A":
+		if m.activePane == PaneList && len(m.selected) > 0 {
 			ids := m.getSelectedIDs()
 			anyUnarchived := false
 			for _, id := range ids {
@@ -684,8 +698,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "d":
-		// Batch Done if tasks selected, otherwise single-task reversible done
-		if len(m.selected) > 0 {
+		// Batch Done if tasks selected in list pane, otherwise single-task reversible done
+		if m.activePane == PaneList && len(m.selected) > 0 {
 			ids := m.getSelectedIDs()
 			var blockedIDs []string
 			for _, id := range ids {
@@ -724,8 +738,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "s":
-		// Batch status toggle if tasks selected, otherwise single-task toggle
-		if len(m.selected) > 0 {
+		// Batch status toggle if tasks selected in list pane, otherwise single-task toggle
+		if m.activePane == PaneList && len(m.selected) > 0 {
 			m.confirmDialog = m.newBatchConfirmDialog(ConfirmStatus, "CONFIRM BATCH STATUS CYCLE", fmt.Sprintf("Cycle status for %d selected tasks?", len(m.selected)))
 			return m, nil
 		}
@@ -745,7 +759,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "M":
-		if len(m.selected) > 0 {
+		if m.activePane == PaneList && len(m.selected) > 0 {
 			m.openPicker(pickMoveItems, m.getSelectedIDs(), "")
 		} else if cur := m.currentTask(); cur != nil {
 			m.openPicker(pickMoveItems, []string{cur.ID}, "")
@@ -850,8 +864,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "e":
 		// Edit existing task via editor
-		if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-			t := m.tasks[m.cursor]
+		if m.activePane == PaneSidebar {
+			m.statusMsg = "Tab to Tasks to edit items"
+			return m, nil
+		}
+		if cur := m.currentTask(); cur != nil {
+			t := cur
 			tmpPath, err := editor.CreateEditTaskFile(t)
 			if err != nil {
 				return m, func() tea.Msg { return errMsg(err) }

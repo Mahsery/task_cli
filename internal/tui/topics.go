@@ -526,6 +526,10 @@ func (m Model) handleSidebarKey(k string, count int) (Model, tea.Cmd, bool) {
 		m.sidebarCursor = min(m.sidebarCursor+step, max(len(entries)-1, 0))
 	case "k", "up":
 		m.sidebarCursor = max(m.sidebarCursor-step, 0)
+	case "J", "ctrl+d", "pgdown":
+		m.sidebarCursor = min(m.sidebarCursor+5*step, max(len(entries)-1, 0))
+	case "K", "ctrl+u", "pgup":
+		m.sidebarCursor = max(m.sidebarCursor-5*step, 0)
 	case "G", "end":
 		m.sidebarCursor = max(len(entries)-1, 0)
 	case "home":

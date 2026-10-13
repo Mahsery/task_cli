@@ -158,8 +158,8 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `h` / `l` / `←` / `→` | Navigate Panes | Move focus horizontally between panes |
 | `j` / `k` / `↓` / `↑` | Move / Scroll | In **Sidebar**: select topic; in **List**: navigate items; in **Details**: scroll content |
 | `gg` / `G` | Top / Bottom | Jump to top or bottom of the active pane |
-| `Ctrl+D` / `Ctrl+U` / `J` | Fast Page Scroll | Page scroll content down/up in split view |
-| `K` | Cycle Kind Filter | Cycle item kind filter between **All Items**, **Tasks Only**, and **Posts Only** |
+| `Ctrl+D` / `Ctrl+U` / `J` / `K` | Fast Page Scroll | Page scroll content down/up in split view |
+| `O` | Cycle Kind Filter | Cycle item kind filter between **All Items**, **Tasks Only**, and **Posts Only** |
 | `gt` | Fuzzy Topic Picker | Open fuzzy topic search modal (`Tab` inside picker toggles repo vs global topics) |
 | `]t` / `[t` | Cycle Topics | Jump to next or previous topic in the tree |
 | `]l` / `[l` | Link Cursor | Move cursor to next / previous `[[...]]` wikilink in the details pane |
