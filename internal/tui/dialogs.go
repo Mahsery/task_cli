@@ -280,18 +280,27 @@ func (m Model) executeUndoCmd(undo UndoAction) tea.Cmd {
 				}
 			}
 		case UndoArchive:
+			actor := m.resolveActor()
 			for _, snap := range undo.Snapshots {
-				note := "Undo: reverted archive state"
-				prevStatus := snap.PreviousStatus
-				prevAssignee := snap.PreviousAssignee
-				_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
-					ID:       snap.Task.ID,
-					Status:   &prevStatus,
-					Assignee: &prevAssignee,
-					AddNote:  &note,
-				})
-				if err != nil {
-					return errMsg(fmt.Errorf("failed to undo archive for %s: %w", snap.Task.ID, err))
+				if snap.PreviousArchivedAt == nil {
+					if _, err := m.client.UnarchiveTask(snap.Task.ID, actor, "Undo: unarchived task"); err != nil {
+						return errMsg(fmt.Errorf("failed to undo archive for %s: %w", snap.Task.ID, err))
+					}
+					prevStatus := snap.PreviousStatus
+					prevAssignee := snap.PreviousAssignee
+					if prevStatus != domain.StatusOpen || prevAssignee != "" {
+						if _, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+							ID:       snap.Task.ID,
+							Status:   &prevStatus,
+							Assignee: &prevAssignee,
+						}); err != nil {
+							return errMsg(fmt.Errorf("failed to restore status after unarchiving %s: %w", snap.Task.ID, err))
+						}
+					}
+				} else {
+					if _, err := m.client.ArchiveTask(snap.Task.ID, actor, "Undo: re-archived task"); err != nil {
+						return errMsg(fmt.Errorf("failed to undo unarchive for %s: %w", snap.Task.ID, err))
+					}
 				}
 			}
 		}

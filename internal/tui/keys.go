@@ -319,7 +319,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if len(m.tasks) > 0 {
+		if len(m.displayRows()) > 0 {
 			m.cursor -= step
 			if m.cursor < 0 {
 				m.cursor = 0
@@ -343,10 +343,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if len(m.tasks) > 0 {
+		rows := m.displayRows()
+		if len(rows) > 0 {
 			m.cursor += step
-			if m.cursor >= len(m.tasks) {
-				m.cursor = len(m.tasks) - 1
+			if m.cursor >= len(rows) {
+				m.cursor = len(rows) - 1
 			}
 			if m.cursor >= m.scrollOffset+maxRows {
 				m.scrollOffset = m.cursor - maxRows + 1
@@ -379,18 +380,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if len(m.tasks) > 0 {
+		rows := m.displayRows()
+		if len(rows) > 0 {
 			if chordCount > 0 {
 				target := chordCount - 1
-				if target >= len(m.tasks) {
-					target = len(m.tasks) - 1
+				if target >= len(rows) {
+					target = len(rows) - 1
 				}
 				if target < 0 {
 					target = 0
 				}
 				m.cursor = target
 			} else {
-				m.cursor = len(m.tasks) - 1
+				m.cursor = len(rows) - 1
 			}
 			if m.cursor < m.scrollOffset {
 				m.scrollOffset = m.cursor
@@ -414,14 +416,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if len(m.tasks) > 0 {
+		rows := m.displayRows()
+		if len(rows) > 0 {
 			step := (maxRows / 2) * times
 			if step < 1 {
 				step = 1
 			}
 			m.cursor += step
-			if m.cursor >= len(m.tasks) {
-				m.cursor = len(m.tasks) - 1
+			if m.cursor >= len(rows) {
+				m.cursor = len(rows) - 1
 			}
 			if m.cursor >= m.scrollOffset+maxRows {
 				m.scrollOffset = m.cursor - maxRows + 1
@@ -445,7 +448,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if len(m.tasks) > 0 {
+		if len(m.displayRows()) > 0 {
 			step := (maxRows / 2) * times
 			if step < 1 {
 				step = 1
@@ -465,17 +468,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Multi-select toggle: toggle selection for current task, then advance cursor down
-		if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-			t := m.tasks[m.cursor]
-			if m.selected == nil {
-				m.selected = make(map[string]bool)
+		rows := m.displayRows()
+		if len(rows) > 0 && m.cursor < len(rows) {
+			row := rows[m.cursor]
+			if !row.Ghost && row.Task != nil {
+				if m.selected == nil {
+					m.selected = make(map[string]bool)
+				}
+				if m.selected[row.Task.ID] {
+					delete(m.selected, row.Task.ID)
+				} else {
+					m.selected[row.Task.ID] = true
+				}
 			}
-			if m.selected[t.ID] {
-				delete(m.selected, t.ID)
-			} else {
-				m.selected[t.ID] = true
-			}
-			if m.cursor < len(m.tasks)-1 {
+			if m.cursor < len(rows)-1 {
 				m.cursor++
 				if m.cursor >= m.scrollOffset+maxRows {
 					m.scrollOffset = m.cursor - maxRows + 1
@@ -489,15 +495,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Toggle selection for current task without advancing cursor
-		if len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-			t := m.tasks[m.cursor]
-			if m.selected == nil {
-				m.selected = make(map[string]bool)
-			}
-			if m.selected[t.ID] {
-				delete(m.selected, t.ID)
-			} else {
-				m.selected[t.ID] = true
+		rows := m.displayRows()
+		if len(rows) > 0 && m.cursor < len(rows) {
+			row := rows[m.cursor]
+			if !row.Ghost && row.Task != nil {
+				if m.selected == nil {
+					m.selected = make(map[string]bool)
+				}
+				if m.selected[row.Task.ID] {
+					delete(m.selected, row.Task.ID)
+				} else {
+					m.selected[row.Task.ID] = true
+				}
 			}
 		}
 
@@ -538,18 +547,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "S":
 		// Toggle local / global scope
-		if m.scope == "local" {
-			m.scope = "global"
-		} else {
-			m.scope = "local"
-		}
-		m.client.Scope = m.scope
+		next := otherScope(m.scope)
+		m.setScope(next)
 		m.statusMsg = fmt.Sprintf("Switched to %s scope", m.scope)
-		return m, m.fetchTasksCmd()
+		return m, tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd())
 
 	case "r":
 		m.statusMsg = "Refreshed"
-		return m, m.fetchTasksCmd()
+		return m, tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd())
 
 	case "/":
 		if m.filterText != "" {
@@ -573,8 +578,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.detailScrollOffset > maxOffset {
 			m.detailScrollOffset = maxOffset
 		}
-		if m.showDiff && len(m.tasks) > 0 && m.cursor < len(m.tasks) {
-			t := m.tasks[m.cursor]
+		if t := m.currentTask(); m.showDiff && t != nil {
 			if t.DiffContent == "" && t.CommitSHA != "" {
 				return m, m.fetchTaskDetailCmd(t.ID)
 			}
@@ -679,6 +683,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "t":
 		m.treeViewMode = !m.treeViewMode
+		m.clampScroll()
 		if m.treeViewMode {
 			m.statusMsg = "Tree view mode enabled"
 		} else {

@@ -96,7 +96,7 @@ func (m Model) layout() paneLayout {
 	if body < listChromeHeight+minListRows+minDetailHeight {
 		body = listChromeHeight + minListRows + minDetailHeight
 	}
-	taskCount := len(m.tasks)
+	taskCount := len(m.displayRows())
 
 	if l.split {
 		if !m.sidebarHidden && width >= splitMinWidth+15 {
@@ -146,7 +146,7 @@ func (m Model) getDetailDimensions() (detailWidth, visibleBody int) {
 }
 
 func (m Model) maxDetailScrollOffset() int {
-	if len(m.tasks) == 0 || m.cursor >= len(m.tasks) {
+	if m.currentTask() == nil {
 		return 0
 	}
 	detailWidth, visibleBody := m.getDetailDimensions()
@@ -157,8 +157,9 @@ func (m Model) maxDetailScrollOffset() int {
 // clampScroll keeps list and detail scroll offsets valid after size or data changes.
 func (m *Model) clampScroll() {
 	rows := m.getMaxRows()
-	if m.cursor >= len(m.tasks) {
-		m.cursor = max(len(m.tasks)-1, 0)
+	totalRows := len(m.displayRows())
+	if m.cursor >= totalRows {
+		m.cursor = max(totalRows-1, 0)
 	}
 	if m.cursor < m.scrollOffset {
 		m.scrollOffset = m.cursor
@@ -166,7 +167,7 @@ func (m *Model) clampScroll() {
 	if m.cursor >= m.scrollOffset+rows {
 		m.scrollOffset = m.cursor - rows + 1
 	}
-	m.scrollOffset = min(m.scrollOffset, max(len(m.tasks)-rows, 0))
+	m.scrollOffset = min(m.scrollOffset, max(totalRows-rows, 0))
 	m.scrollOffset = max(m.scrollOffset, 0)
 	m.detailScrollOffset = min(m.detailScrollOffset, m.maxDetailScrollOffset())
 	m.detailScrollOffset = max(m.detailScrollOffset, 0)

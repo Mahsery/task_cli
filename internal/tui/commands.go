@@ -216,7 +216,7 @@ func (m Model) batchDoneWithForceCmd(ids []string, force bool) tea.Cmd {
 			}
 			st := domain.StatusDone
 			note := "Completed task"
-			_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{ID: id, Status: &st, AddNote: &note})
+			_, err := m.client.UpdateTask(protocol.UpdateTaskPayload{ID: id, Status: &st, AddNote: &note, Force: force})
 			return err
 		})
 		return m.reloadAfter(err)

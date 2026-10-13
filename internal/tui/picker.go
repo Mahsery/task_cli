@@ -446,7 +446,7 @@ func (m Model) renderPicker(termWidth, termHeight int) string {
 		}
 	}
 	lines := []string{theme.ModalTitle.Render(" " + truncateToWidth(title, contentWidth-2) + " "), ""}
-	lines = append(lines, theme.SearchPrompt.Render(fmt.Sprintf("  > %s_", m.input.Value())), "")
+	lines = append(lines, theme.SearchPrompt.Render(fmt.Sprintf("  > %s", m.inputViewOrText(""))), "")
 
 	items := p.filtered(m)
 	maxRows := max(min(10, termHeight-14), 3)

@@ -87,7 +87,7 @@ func (m Model) renderLinkModal(termWidth, _ int) string {
 	}
 	lines = append(lines, "")
 
-	inputStr := fmt.Sprintf("  Prereq Task ID: %s_", m.linkInput)
+	inputStr := fmt.Sprintf("  Prereq Task ID: %s", m.inputViewOrText(m.linkInput))
 	lines = append(lines, theme.SearchPrompt.Render(inputStr), "")
 
 	hint := fmt.Sprintf("E.g. enter T-1 to require T-1 before %s can be closed.", m.linkTaskID)

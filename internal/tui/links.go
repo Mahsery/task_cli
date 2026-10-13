@@ -46,9 +46,15 @@ func (m Model) relatedIDs() []string {
 		for _, id := range t.Blocks {
 			add(id)
 		}
-		for _, l := range domain.ParseWikiLinks(t.LinkText(), m.scope) {
-			if !l.IsTopic {
-				add(l.Target)
+		if len(t.Links) > 0 {
+			for _, id := range t.Links {
+				add(id)
+			}
+		} else {
+			for _, l := range domain.ParseWikiLinks(t.LinkText(), m.scope) {
+				if !l.IsTopic {
+					add(l.Target)
+				}
 			}
 		}
 		for _, id := range t.Backlinks {

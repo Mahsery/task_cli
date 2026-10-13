@@ -73,6 +73,7 @@ type Model struct {
 	editorCmd          string
 	theme              Theme
 	tasks              []*domain.Task
+	taskByID           map[string]*domain.Task
 	selected           map[string]bool
 	activePane         Pane
 	cursor             int
@@ -183,6 +184,16 @@ func (m *Model) updateInput(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return cmd
+}
+
+func (m Model) inputViewOrText(fallback string) string {
+	if m.input.Focused() {
+		return m.input.View()
+	}
+	if fallback != "" {
+		return fallback + "_"
+	}
+	return m.input.Value() + "_"
 }
 
 type reloadMsg []*domain.Task

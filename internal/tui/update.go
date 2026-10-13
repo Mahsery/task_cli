@@ -82,14 +82,14 @@ func (m *Model) applyReload(tasks []*domain.Task) {
 	if m.isBoardView() {
 		sortBoard(m.tasks)
 	}
+	m.taskByID = make(map[string]*domain.Task, len(m.tasks))
+	for _, t := range m.tasks {
+		m.taskByID[t.ID] = t
+	}
 	m.clampScroll()
 	if len(m.selected) > 0 {
-		taskSet := make(map[string]bool, len(m.tasks))
-		for _, t := range m.tasks {
-			taskSet[t.ID] = true
-		}
 		for id := range m.selected {
-			if !taskSet[id] {
+			if _, ok := m.taskByID[id]; !ok {
 				delete(m.selected, id)
 			}
 		}

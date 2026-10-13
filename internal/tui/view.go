@@ -182,10 +182,10 @@ func (m Model) renderHeader(width int) string {
 		compactModes = append(compactModes, theme.ModalTitle.Render("[TREE MODE]"))
 	}
 	if m.kindFilter == domain.KindTask {
-		fullModes = append(fullModes, theme.CountProg.Render("[TASKS ONLY (K)]"))
+		fullModes = append(fullModes, theme.CountProg.Render("[TASKS ONLY (O)]"))
 		compactModes = append(compactModes, theme.CountProg.Render("[TASKS]"))
 	} else if m.kindFilter == domain.KindPost {
-		fullModes = append(fullModes, theme.ModalKey.Render("[POSTS ONLY (K)]"))
+		fullModes = append(fullModes, theme.ModalKey.Render("[POSTS ONLY (O)]"))
 		compactModes = append(compactModes, theme.ModalKey.Render("[POSTS]"))
 	} else if m.isBoardView() {
 		fullModes = append(fullModes, theme.ModalKey.Render("[BOARD]"))
@@ -198,8 +198,9 @@ func (m Model) renderHeader(width int) string {
 
 	var fullQuery, compactQuery string
 	if m.isSearch {
-		fullQuery = theme.SearchPrompt.Render(fmt.Sprintf("[Search: %s_] (Enter apply, Esc cancel)", m.filterText))
-		compactQuery = theme.SearchPrompt.Render(fmt.Sprintf("/%s_", m.filterText))
+		searchInput := m.inputViewOrText(m.filterText)
+		fullQuery = theme.SearchPrompt.Render(fmt.Sprintf("[Search: %s] (Enter apply, Esc cancel)", searchInput))
+		compactQuery = theme.SearchPrompt.Render(fmt.Sprintf("/%s", searchInput))
 	} else if m.filterText != "" {
 		fullQuery = theme.FilterIndicator.Render(fmt.Sprintf("[Filter: %q (Esc to clear)]", m.filterText))
 		compactQuery = theme.FilterIndicator.Render(fmt.Sprintf("[%q]", m.filterText))

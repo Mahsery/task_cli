@@ -49,9 +49,15 @@ func (m Model) currentTask() *domain.Task {
 
 // lookupItem finds an item by ID among the listed tasks and the related (out-of-list) items.
 func (m Model) lookupItem(id string) *domain.Task {
-	for _, t := range m.tasks {
-		if t.ID == id {
+	if m.taskByID != nil {
+		if t, ok := m.taskByID[id]; ok {
 			return t
+		}
+	} else {
+		for _, t := range m.tasks {
+			if t.ID == id {
+				return t
+			}
 		}
 	}
 	if t, ok := m.related[id]; ok {

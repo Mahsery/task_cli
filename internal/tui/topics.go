@@ -653,7 +653,7 @@ func (m Model) renderTopicForm(termWidth int) string {
 			"")
 	}
 	lines = append(lines,
-		theme.SearchPrompt.Render(fmt.Sprintf("  Title: %s_", m.input.Value())), "",
+		theme.SearchPrompt.Render(fmt.Sprintf("  Title: %s", m.inputViewOrText(""))), "",
 		theme.ModalKey.Render("[Enter]")+" "+theme.ModalPrompt.Render("Save")+"    "+theme.ModalCancel.Render("[Esc]")+" "+theme.ModalPrompt.Render("Cancel"))
 	return theme.ModalBox.Width(boxWidth).Render(strings.Join(lines, "\n"))
 }

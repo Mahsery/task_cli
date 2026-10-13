@@ -69,9 +69,9 @@ func (m Model) renderFooter(width int) string {
 			maxErrLen := max(maxContentWidth-lipgloss.Width(strings.Join(prefixParts, " "))-6, 10)
 			prefixParts = append(prefixParts, theme.DiffSub.Render("["+truncateToWidth(m.statusMsg, maxErrLen)+"]"))
 		} else {
-			maxStatusLen := 20
+			maxStatusLen := min(max(width/3, 28), 48)
 			if width < 80 {
-				maxStatusLen = 12
+				maxStatusLen = 18
 			}
 			prefixParts = append(prefixParts, theme.FooterStatus.Render("["+truncateToWidth(m.statusMsg, maxStatusLen)+"]"))
 		}
