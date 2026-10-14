@@ -1036,11 +1036,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if err != nil {
 					return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
 				}
-				if parsed.Topic != "" && parsed.Topic != t.TopicPath {
-					_, _ = m.client.MoveItems([]string{t.ID}, parsed.Topic, m.resolveActor())
+				origTopic := t.TopicPath
+				if origTopic == "" {
+					origTopic = domain.UnfiledTopic
+				}
+				if parsed.Topic != "" && parsed.Topic != origTopic {
+					if _, err := m.client.MoveItems([]string{t.ID}, parsed.Topic, m.resolveActor()); err != nil {
+						return m.reloadAfter(fmt.Errorf("saved, but move to @%s failed: %w", parsed.Topic, err))
+					}
 				}
 				_ = os.Remove(tmpPath)
-				return m.fetchTasksCmd()()
+				return m.reloadAfter(nil)
 			})
 		}
 	}

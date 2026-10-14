@@ -284,7 +284,7 @@ func (m *Model) cycleKindFilter() tea.Cmd {
 func (m *Model) setScope(scope string) {
 	m.scope = scope
 	if m.client != nil {
-		m.client.Scope = scope
+		m.client.SetScope(scope)
 	}
 	m.topicPath = ""
 	m.kindFilter = ""

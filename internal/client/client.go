@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 )
 
 type Client struct {
+	mu       sync.Mutex
 	cfg      *config.Config
 	conn     net.Conn
 	enc      *json.Encoder
@@ -36,7 +38,19 @@ func New(cfg *config.Config, scope, repoPath string) *Client {
 	}
 }
 
+func (c *Client) SetScope(scope string) {
+	c.mu.Lock()
+	c.Scope = scope
+	c.mu.Unlock()
+}
+
 func (c *Client) Connect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connectLocked()
+}
+
+func (c *Client) connectLocked() error {
 	conn, err := c.dial()
 	if err == nil {
 		c.conn = conn
@@ -66,6 +80,12 @@ func (c *Client) Connect() error {
 }
 
 func (c *Client) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closeLocked()
+}
+
+func (c *Client) closeLocked() error {
 	if c.conn != nil {
 		err := c.conn.Close()
 		c.conn = nil
@@ -102,8 +122,14 @@ func (c *Client) spawnDaemon() error {
 }
 
 func (c *Client) call(action protocol.Action, payload any) (*protocol.Response, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.callLocked(action, payload)
+}
+
+func (c *Client) callLocked(action protocol.Action, payload any) (*protocol.Response, error) {
 	if c.conn == nil {
-		if err := c.Connect(); err != nil {
+		if err := c.connectLocked(); err != nil {
 			return nil, err
 		}
 	}
@@ -128,19 +154,13 @@ func (c *Client) call(action protocol.Action, payload any) (*protocol.Response, 
 	}
 
 	if err := c.enc.Encode(req); err != nil {
-		_ = c.Close()
-		c.conn = nil
-		c.enc = nil
-		c.dec = nil
+		_ = c.closeLocked()
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
 	var resp protocol.Response
 	if err := c.dec.Decode(&resp); err != nil {
-		_ = c.Close()
-		c.conn = nil
-		c.enc = nil
-		c.dec = nil
+		_ = c.closeLocked()
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -248,14 +268,21 @@ func (c *Client) Actor() string {
 	return ""
 }
 
+func (c *Client) scopeAndRepo() (string, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Scope, c.RepoPath
+}
+
 func (c *Client) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
+	defScope, defRepo := c.scopeAndRepo()
 	scope := filter.Scope
 	if scope == "" {
-		scope = c.Scope
+		scope = defScope
 	}
 	repoPath := filter.RepoPath
 	if repoPath == "" {
-		repoPath = c.RepoPath
+		repoPath = defRepo
 	}
 	f := filter
 	f.Scope = scope
@@ -343,11 +370,12 @@ func (c *Client) TransferTask(id, actor, newAssignee, note string, force bool) (
 }
 
 func (c *Client) ReapStaleTasks(scope, repoPath string, threshold time.Duration, dryRun bool, actor, reason string) (*protocol.ReapStaleTasksResult, error) {
+	defScope, defRepo := c.scopeAndRepo()
 	if scope == "" {
-		scope = c.Scope
+		scope = defScope
 	}
 	if repoPath == "" {
-		repoPath = c.RepoPath
+		repoPath = defRepo
 	}
 	p := protocol.ReapStaleTasksPayload{
 		Scope:     scope,
@@ -547,6 +575,7 @@ func (c *Client) StreamEvents(handler func(protocol.Event)) error {
 // SubscribeEvents opens a dedicated socket connection for ActionStreamEvents so
 // live pubsub notifications do not block or interleave with RPC calls on c.conn.
 func (c *Client) SubscribeEvents() (<-chan protocol.Event, error) {
+	scope, repoPath := c.scopeAndRepo()
 	conn, err := c.dial()
 	if err != nil {
 		return nil, err
@@ -557,8 +586,8 @@ func (c *Client) SubscribeEvents() (<-chan protocol.Event, error) {
 	req := protocol.Request{
 		ID:       uuid.New().String(),
 		Action:   protocol.ActionStreamEvents,
-		Scope:    c.Scope,
-		RepoPath: c.RepoPath,
+		Scope:    scope,
+		RepoPath: repoPath,
 	}
 	if err := enc.Encode(req); err != nil {
 		_ = conn.Close()
@@ -599,6 +628,8 @@ func (c *Client) SubscribeEvents() (<-chan protocol.Event, error) {
 }
 
 func (c *Client) ShutdownDaemon() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.conn == nil {
 		conn, err := c.dial()
 		if err != nil {
@@ -608,7 +639,7 @@ func (c *Client) ShutdownDaemon() error {
 		c.enc = json.NewEncoder(conn)
 		c.dec = json.NewDecoder(conn)
 	}
-	_, err := c.call(protocol.ActionShutdown, nil)
+	_, err := c.callLocked(protocol.ActionShutdown, nil)
 	return err
 }
 

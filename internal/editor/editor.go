@@ -233,6 +233,8 @@ func ParseNewTaskContent(content string) (*ParsedNewTask, error) {
 				}
 				continue
 			}
+			// Keyless comment lines (banners, bare "#") belong to the header template.
+			continue
 		}
 
 		inHeader = false
@@ -342,6 +344,8 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 				}
 				continue
 			}
+			// Keyless comment lines (banners, bare "#") belong to the header template.
+			continue
 		}
 
 		inHeader = false
