@@ -20,6 +20,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.statusMsg = ""
 	}
+	if msg.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
 	if m.showHelp {
 		switch msg.String() {
 		case "?", "esc", "enter", "q":
@@ -31,8 +34,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	maxRows := m.getMaxRows()
 	if dlg := m.activeConfirmDialog(); dlg != nil {
 		k := msg.String()
-		if k == "y" || k == "Y" || k == "enter" {
-			if dlg.Kind != ConfirmDeleteTopic {
+		if k == "y" || k == "Y" || k == "enter" || (k == "q" && dlg.Kind == ConfirmQuit) {
+			if dlg.Kind != ConfirmDeleteTopic && dlg.Kind != ConfirmQuit {
 				undo := m.buildUndoAction(dlg)
 				m.undoStack = append(m.undoStack, undo)
 				if len(m.undoStack) > 50 {
@@ -269,8 +272,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "q", "ctrl+c":
-		return m, tea.Quit
+	case "q":
+		m.confirmDialog = &ConfirmDialog{
+			Kind:   ConfirmQuit,
+			Title:  "QUIT TK",
+			Prompt: "Quit the task browser?",
+		}
+		return m, nil
 
 	case "?":
 		m.showHelp = true

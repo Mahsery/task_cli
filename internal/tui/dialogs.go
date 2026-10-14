@@ -236,6 +236,9 @@ func (m Model) executeConfirmedDialog(dlg *ConfirmDialog) (tea.Model, tea.Cmd) {
 	case ConfirmDeleteTopic:
 		m.statusMsg = fmt.Sprintf("Deleting topic @%s...", dlg.TopicRef)
 		return m, m.deleteTopicCmd(dlg.TopicRef, dlg.MoveTo)
+
+	case ConfirmQuit:
+		return m, tea.Quit
 	}
 	return m, nil
 }

@@ -57,6 +57,9 @@ func (m Model) renderConfirmationModal(dlg *ConfirmDialog, termWidth, termHeight
 	// Actions footer
 	lines = append(lines, "")
 	confirmKey := theme.ModalKey.Render("[y / Enter]") + " " + theme.ModalPrompt.Render("Confirm")
+	if dlg.Kind == ConfirmQuit {
+		confirmKey = theme.ModalKey.Render("[q / y / Enter]") + " " + theme.ModalPrompt.Render("Quit")
+	}
 	cancelKey := theme.ModalCancel.Render("[n / Esc]") + " " + theme.ModalPrompt.Render("Cancel")
 	actions := fmt.Sprintf("%s    %s", confirmKey, cancelKey)
 	lines = append(lines, actions)

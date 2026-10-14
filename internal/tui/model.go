@@ -30,6 +30,7 @@ const (
 	ConfirmStatus
 	ConfirmClaim
 	ConfirmDeleteTopic
+	ConfirmQuit
 )
 
 type ConfirmDialog struct {

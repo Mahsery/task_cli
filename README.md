@@ -198,7 +198,7 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `Esc` / `c` | Clear Filter / Selection | Cancel active chord, return focus to list, clear selection, or reset search filter |
 | `S` | Toggle Scope | Switch view between `local` (git repository) and `global` scopes |
 | `r` | Refresh | Re-query tasks and topics from daemon |
-| `q` / `Ctrl+C` | Quit | Exit the TUI |
+| `q` / `Ctrl+C` | Quit | `q` asks for confirmation (`q`/`y`/`Enter` to quit, `n`/`Esc` to stay); `Ctrl+C` exits immediately |
 
 ---
 

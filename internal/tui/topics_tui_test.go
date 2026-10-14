@@ -703,3 +703,52 @@ func TestTUIPowerUpsHelpReplyDrawerEventStreamAndDetailFields(t *testing.T) {
 		t.Fatalf("expected narrowSidebarOpen=false after Esc")
 	}
 }
+
+func TestTUIQuitRequiresConfirmation(t *testing.T) {
+	m := NewModel(nil, "", "local", "/tmp/repo")
+	m.width, m.height = 120, 40
+	m.tasks = []*domain.Task{{ID: "T-1", Title: "x", Status: domain.StatusOpen, Priority: domain.PriorityNormal}}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	mq := mustModel(t, updated)
+	if cmd != nil {
+		if _, quit := cmd().(tea.QuitMsg); quit {
+			t.Fatal("q quit without confirmation")
+		}
+	}
+	if dlg := mq.activeConfirmDialog(); dlg == nil || dlg.Kind != ConfirmQuit {
+		t.Fatalf("expected quit confirmation dialog, got %+v", dlg)
+	}
+	if !strings.Contains(mq.View(), "QUIT TK") {
+		t.Fatal("expected quit dialog to render")
+	}
+
+	// Esc cancels and keeps the TUI running.
+	updated, cmd = mq.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mc := mustModel(t, updated)
+	if mc.activeConfirmDialog() != nil || cmd != nil {
+		t.Fatal("expected Esc to dismiss the quit dialog without quitting")
+	}
+	if len(mc.undoStack) != 0 {
+		t.Fatal("quit dialog must not push undo entries")
+	}
+
+	// q, q quits.
+	updated, _ = mc.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	_, cmd = mustModel(t, updated).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if cmd == nil {
+		t.Fatal("expected second q to quit")
+	}
+	if _, quit := cmd().(tea.QuitMsg); !quit {
+		t.Fatal("expected tea.QuitMsg after confirming")
+	}
+
+	// Ctrl+C quits immediately, even with no dialog.
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("expected ctrl+c to quit")
+	}
+	if _, quit := cmd().(tea.QuitMsg); !quit {
+		t.Fatal("expected ctrl+c to quit immediately")
+	}
+}
