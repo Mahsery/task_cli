@@ -70,6 +70,9 @@ type CreateTaskPayload struct {
 	DependsOn   []string        `json:"depends_on,omitempty"`
 	Kind        domain.ItemKind `json:"kind,omitempty"`
 	Topic       string          `json:"topic,omitempty"`
+	Branch      string          `json:"branch,omitempty"`
+	ExternalRef string          `json:"external_ref,omitempty"`
+	PRURL       string          `json:"pr_url,omitempty"`
 }
 
 type UpdateTaskPayload struct {
@@ -85,12 +88,16 @@ type UpdateTaskPayload struct {
 	AddNote     *string          `json:"add_note,omitempty"`
 	Author      string           `json:"author,omitempty"`
 	Force       bool             `json:"force,omitempty"`
+	Branch      *string          `json:"branch,omitempty"`
+	ExternalRef *string          `json:"external_ref,omitempty"`
+	PRURL       *string          `json:"pr_url,omitempty"`
 }
 
 type ClaimTaskPayload struct {
 	ID       string `json:"id"`
 	Assignee string `json:"assignee"`
 	Force    bool   `json:"force,omitempty"`
+	Branch   string `json:"branch,omitempty"`
 }
 
 type GetTaskPayload struct {
@@ -120,6 +127,8 @@ type ListTasksPayload struct {
 	TopicRecursive  bool             `json:"topic_recursive,omitempty"`
 	Kind            domain.ItemKind  `json:"kind,omitempty"`
 	LinksTo         string           `json:"links_to,omitempty"`
+	Branch          string           `json:"branch,omitempty"`
+	ExternalRef     string           `json:"external_ref,omitempty"`
 }
 
 // ToFilter converts ListTasksPayload to a domain.TaskFilter.
@@ -147,6 +156,8 @@ func (p ListTasksPayload) ToFilter() domain.TaskFilter {
 		TopicRecursive:  p.TopicRecursive,
 		Kind:            p.Kind,
 		LinksTo:         p.LinksTo,
+		Branch:          p.Branch,
+		ExternalRef:     p.ExternalRef,
 	}
 }
 
@@ -175,6 +186,8 @@ func FilterToListTasksPayload(filter domain.TaskFilter) ListTasksPayload {
 		TopicRecursive:  filter.TopicRecursive,
 		Kind:            filter.Kind,
 		LinksTo:         filter.LinksTo,
+		Branch:          filter.Branch,
+		ExternalRef:     filter.ExternalRef,
 	}
 }
 
@@ -188,13 +201,14 @@ type RestoreTaskPayload struct {
 }
 
 type AttachGitPayload struct {
-	TaskID      string `json:"task_id"`
-	CommitSHA   string `json:"commit_sha,omitempty"`
-	CommitMsg   string `json:"commit_msg,omitempty"`
-	DiffStat    string `json:"diff_stat,omitempty"`
-	DiffContent string `json:"diff_content,omitempty"`
-	MarkDone    bool   `json:"mark_done"`
-	Force       bool   `json:"force,omitempty"`
+	TaskID      string              `json:"task_id"`
+	CommitSHA   string              `json:"commit_sha,omitempty"`
+	CommitMsg   string              `json:"commit_msg,omitempty"`
+	DiffStat    string              `json:"diff_stat,omitempty"`
+	DiffContent string              `json:"diff_content,omitempty"`
+	Commits     []domain.TaskCommit `json:"commits,omitempty"`
+	MarkDone    bool                `json:"mark_done"`
+	Force       bool                `json:"force,omitempty"`
 }
 
 type AddDependencyPayload struct {

@@ -346,6 +346,7 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 				Scope: req.Scope, RepoPath: req.RepoPath, Kind: p.Kind, Topic: p.Topic,
 				Title: p.Title, Description: p.Description, Status: p.Status, Priority: p.Priority,
 				Tags: p.Tags, Author: p.Author, Assignee: p.Assignee, DependsOn: p.DependsOn,
+				Branch: p.Branch, ExternalRef: p.ExternalRef, PRURL: p.PRURL,
 			})
 			if err != nil {
 				return nil, err
@@ -377,7 +378,12 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 				}
 			}
 
-			task, err := db.UpdateTask(p.ID, p.Title, p.Description, p.Status, p.Priority, p.Tags, p.AddTags, p.RemoveTags, p.Assignee, p.AddNote, p.Author)
+			task, err := db.UpdateTaskExtended(sqlite.UpdateTaskOpts{
+				ID: p.ID, Title: p.Title, Description: p.Description, Status: p.Status,
+				Priority: p.Priority, Tags: p.Tags, AddTags: p.AddTags, RemoveTags: p.RemoveTags,
+				Assignee: p.Assignee, AddNote: p.AddNote, Author: p.Author,
+				Branch: p.Branch, ExternalRef: p.ExternalRef, PRURL: p.PRURL,
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -393,7 +399,7 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 
 	case protocol.ActionClaimTask:
 		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.ClaimTaskPayload) (*domain.Task, error) {
-			task, err := db.ClaimTask(p.ID, p.Assignee, p.Force)
+			task, err := db.ClaimTaskWithBranch(p.ID, p.Assignee, p.Branch, p.Force)
 			if err != nil {
 				return nil, err
 			}
@@ -610,14 +616,25 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 				}
 			}
 
-			task, err := db.AttachGit(p.TaskID, p.CommitSHA, p.CommitMsg, p.DiffStat, p.DiffContent, p.MarkDone)
+			commits := p.Commits
+			if len(commits) == 0 && strings.TrimSpace(p.CommitSHA) != "" {
+				commits = []domain.TaskCommit{
+					{
+						SHA:         p.CommitSHA,
+						Subject:     p.CommitMsg,
+						DiffStat:    p.DiffStat,
+						DiffContent: p.DiffContent,
+					},
+				}
+			}
+			task, err := db.AttachGitCommits(p.TaskID, p.CommitSHA, p.CommitMsg, p.DiffStat, p.DiffContent, commits, p.MarkDone)
 			if err != nil {
 				return nil, err
 			}
 
-			msg := fmt.Sprintf("+ %s git info attached (%s)", task.ID, p.CommitSHA)
+			msg := fmt.Sprintf("+ %s git info attached (%s)", task.ID, task.CommitSHA)
 			if p.MarkDone {
-				msg = fmt.Sprintf("✓ %s marked DONE (+ %s)", task.ID, p.CommitSHA)
+				msg = fmt.Sprintf("✓ %s marked DONE (+ %s)", task.ID, task.CommitSHA)
 			}
 			s.pubsub.Publish(protocol.Event{
 				Type:      protocol.EventGitAttached,

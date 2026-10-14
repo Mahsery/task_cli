@@ -84,7 +84,7 @@ func (d *DB) Checkpoint(mode string) error {
 	return err
 }
 
-const CurrentSchemaVersion = 4
+const CurrentSchemaVersion = 5
 
 func (d *DB) migrate() error {
 	var userVersion int
@@ -151,6 +151,25 @@ func (d *DB) migrate() error {
 		}
 	}
 
+	// Schema v5 migration: branch, external_ref, and pr_url columns on tasks.
+	if userVersion < 5 && tableCount > 0 {
+		for _, col := range []struct{ name, ddl string }{
+			{"branch", "ALTER TABLE tasks ADD COLUMN branch TEXT NOT NULL DEFAULT '';"},
+			{"external_ref", "ALTER TABLE tasks ADD COLUMN external_ref TEXT NOT NULL DEFAULT '';"},
+			{"pr_url", "ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT '';"},
+		} {
+			has, err := d.hasColumn("tasks", col.name)
+			if err != nil {
+				return fmt.Errorf("migration to v5 failed (inspect tasks): %w", err)
+			}
+			if !has {
+				if _, err := d.conn.Exec(col.ddl); err != nil {
+					return fmt.Errorf("migration to v5 failed (add %s): %w", col.name, err)
+				}
+			}
+		}
+	}
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS topics (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,7 +208,10 @@ func (d *DB) migrate() error {
 		diff_content TEXT NOT NULL DEFAULT '',
 		kind TEXT NOT NULL DEFAULT 'task',
 		topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
-		orphaned_at DATETIME
+		orphaned_at DATETIME,
+		branch TEXT NOT NULL DEFAULT '',
+		external_ref TEXT NOT NULL DEFAULT '',
+		pr_url TEXT NOT NULL DEFAULT ''
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_tasks_scope_repo ON tasks(scope, repo_path, status);
@@ -198,6 +220,8 @@ func (d *DB) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at);
 	CREATE INDEX IF NOT EXISTS idx_tasks_topic ON tasks(topic_id);
+	CREATE INDEX IF NOT EXISTS idx_tasks_branch ON tasks(scope, repo_path, branch);
+	CREATE INDEX IF NOT EXISTS idx_tasks_external_ref ON tasks(scope, repo_path, external_ref);
 
 	CREATE TABLE IF NOT EXISTS task_notes (
 		id TEXT PRIMARY KEY,
@@ -208,6 +232,21 @@ func (d *DB) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_notes_task ON task_notes(task_id, created_at ASC);
+
+	CREATE TABLE IF NOT EXISTS task_commits (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+		sha TEXT NOT NULL,
+		subject TEXT NOT NULL DEFAULT '',
+		author TEXT NOT NULL DEFAULT '',
+		committed_at TEXT NOT NULL DEFAULT '',
+		diff_stat TEXT NOT NULL DEFAULT '',
+		diff_content TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL,
+		UNIQUE(task_id, sha)
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_commits_task ON task_commits(task_id, id ASC);
 
 	CREATE TABLE IF NOT EXISTS task_sequences (
 		scope TEXT NOT NULL,
@@ -274,6 +313,18 @@ func (d *DB) migrate() error {
 		}
 		if err := d.reindexAllLinks(); err != nil {
 			return fmt.Errorf("migration to v4 failed (index links): %w", err)
+		}
+	}
+
+	// v5 backfill: seed task_commits from existing tasks.commit_sha rows.
+	if userVersion < 5 && tableCount > 0 {
+		if _, err := d.conn.Exec(`
+			INSERT OR IGNORE INTO task_commits (task_id, sha, subject, author, committed_at, diff_stat, diff_content, created_at)
+			SELECT id, commit_sha, commit_msg, author, '', diff_stat, diff_content, COALESCE(closed_at, updated_at)
+			FROM tasks
+			WHERE commit_sha != ''
+		`); err != nil {
+			return fmt.Errorf("migration to v5 failed (seed task_commits): %w", err)
 		}
 	}
 

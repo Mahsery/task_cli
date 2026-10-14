@@ -220,9 +220,14 @@ func (c *Client) UpdateTask(p protocol.UpdateTaskPayload) (*domain.Task, error) 
 }
 
 func (c *Client) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
+	return c.ClaimTaskWithBranch(id, assignee, "", force)
+}
+
+func (c *Client) ClaimTaskWithBranch(id, assignee, branch string, force bool) (*domain.Task, error) {
 	p := protocol.ClaimTaskPayload{
 		ID:       id,
 		Assignee: assignee,
+		Branch:   branch,
 		Force:    force,
 	}
 	resp, err := c.call(protocol.ActionClaimTask, p)
@@ -456,6 +461,36 @@ func (c *Client) AttachGitWithForce(taskID, sha, msg, diffStat, diffContent stri
 		CommitMsg:   msg,
 		DiffStat:    diffStat,
 		DiffContent: diffContent,
+		MarkDone:    markDone,
+		Force:       force,
+	}
+	resp, err := c.call(protocol.ActionAttachGit, p)
+	if err != nil {
+		return nil, err
+	}
+	var task domain.Task
+	if err := json.Unmarshal(resp.Data, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (c *Client) AttachGitCommits(taskID string, commits []domain.TaskCommit, markDone, force bool) (*domain.Task, error) {
+	var sha, msg, diffStat, diffContent string
+	if len(commits) > 0 {
+		last := commits[len(commits)-1]
+		sha = last.SHA
+		msg = last.Subject
+		diffStat = last.DiffStat
+		diffContent = last.DiffContent
+	}
+	p := protocol.AttachGitPayload{
+		TaskID:      taskID,
+		CommitSHA:   sha,
+		CommitMsg:   msg,
+		DiffStat:    diffStat,
+		DiffContent: diffContent,
+		Commits:     commits,
 		MarkDone:    markDone,
 		Force:       force,
 	}

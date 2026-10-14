@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -18,6 +19,87 @@ type CommitInfo struct {
 	Body        string
 	DiffStat    string
 	DiffContent string
+}
+
+var branchTaskIDRegex = regexp.MustCompile(`(?i)(?:^|/)([tg])-?(\d+)(?:$|[-_/])`)
+
+// BranchSlugForTask builds a deterministic branch name for a task (e.g., "tk/t-84-branch-bound-tasks").
+func BranchSlugForTask(id, title string) string {
+	idSlug := strings.ToLower(strings.TrimSpace(id))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(title) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if !lastDash && b.Len() > 0 {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+		if b.Len() >= 40 {
+			break
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		return "tk/" + idSlug
+	}
+	return fmt.Sprintf("tk/%s-%s", idSlug, slug)
+}
+
+// InferTaskIDFromBranchName extracts a canonical task ID (e.g. "T-84") from a branch name
+// such as "tk/t-84-branch-bound-tasks" or "feat/T-12-fix", or returns "" if none is found.
+func InferTaskIDFromBranchName(branch string) string {
+	m := branchTaskIDRegex.FindStringSubmatch(strings.TrimSpace(branch))
+	if len(m) < 3 {
+		return ""
+	}
+	return fmt.Sprintf("%s-%s", strings.ToUpper(m[1]), m[2])
+}
+
+// CheckoutOrCreateBranch switches to branchName if it already exists locally, or creates and checks it out.
+func CheckoutOrCreateBranch(repoDir, branchName string) error {
+	branchName = strings.TrimSpace(branchName)
+	if branchName == "" {
+		return fmt.Errorf("branch name cannot be empty")
+	}
+	workDir, err := ResolveWorktreeDir(repoDir)
+	if err != nil {
+		return err
+	}
+	checkCmd := exec.Command("git", "-C", workDir, "show-ref", "--verify", "--quiet", "refs/heads/"+branchName)
+	if checkCmd.Run() == nil {
+		out, err := exec.Command("git", "-C", workDir, "checkout", branchName).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("git checkout %s failed: %s (%w)", branchName, strings.TrimSpace(string(out)), err)
+		}
+		return nil
+	}
+	out, err := exec.Command("git", "-C", workDir, "checkout", "-b", branchName).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git checkout -b %s failed: %s (%w)", branchName, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// HooksDir resolves the active git hooks directory for repoDir (respecting core.hooksPath and worktrees).
+func HooksDir(repoDir string) (string, error) {
+	workDir, err := ResolveWorktreeDir(repoDir)
+	if err != nil {
+		return "", err
+	}
+	out, err := exec.Command("git", "-C", workDir, "rev-parse", "--git-path", "hooks").Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve git hooks path: %w", err)
+	}
+	p := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(workDir, p)
+	}
+	return filepath.Clean(p), nil
 }
 
 // FindRepoRoot returns the shared repository root directory (resolving through
@@ -194,6 +276,73 @@ func GetCommit(repoDir, ref string) (*CommitInfo, error) {
 	}
 
 	return info, nil
+}
+
+// GetCommitRange resolves a git revision range (e.g. "main..HEAD" or "HEAD~3..HEAD")
+// in chronological order (oldest first).
+func GetCommitRange(repoDir, rangeSpec string) ([]*CommitInfo, error) {
+	workDir, err := ResolveWorktreeDir(repoDir)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command("git", "-C", workDir, "rev-list", "--reverse", rangeSpec)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve commit range %q: %w", rangeSpec, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var commits []*CommitInfo
+	for _, line := range lines {
+		sha := strings.TrimSpace(line)
+		if sha == "" {
+			continue
+		}
+		info, err := GetCommit(workDir, sha)
+		if err != nil {
+			return nil, err
+		}
+		commits = append(commits, info)
+	}
+	if len(commits) == 0 {
+		return nil, fmt.Errorf("no commits found in range %q", rangeSpec)
+	}
+	return commits, nil
+}
+
+// ScanCommitsForTask searches git log for commits whose subject or body references taskID (e.g. "T-12" or "[T-12]"),
+// returning matching commits in chronological order (oldest first).
+func ScanCommitsForTask(repoDir, taskID, rangeSpec string) ([]*CommitInfo, error) {
+	workDir, err := ResolveWorktreeDir(repoDir)
+	if err != nil {
+		return nil, err
+	}
+	taskID = strings.ToUpper(strings.TrimSpace(taskID))
+	if taskID == "" {
+		return nil, fmt.Errorf("task ID cannot be empty")
+	}
+	args := []string{"-C", workDir, "log", "--reverse", "--regexp-ignore-case", "--extended-regexp", "--grep=(^|[^A-Za-z0-9])" + regexp.QuoteMeta(taskID) + "([^0-9]|$)", "--format=%H"}
+	if strings.TrimSpace(rangeSpec) != "" {
+		args = append(args, strings.TrimSpace(rangeSpec))
+	}
+	cmd := exec.Command("git", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan git log for %s: %w", taskID, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var commits []*CommitInfo
+	for _, line := range lines {
+		sha := strings.TrimSpace(line)
+		if sha == "" {
+			continue
+		}
+		info, err := GetCommit(workDir, sha)
+		if err != nil {
+			return nil, err
+		}
+		commits = append(commits, info)
+	}
+	return commits, nil
 }
 
 func GetWorkingDiff(repoDir string) (*CommitInfo, error) {

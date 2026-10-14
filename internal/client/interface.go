@@ -16,6 +16,7 @@ type TaskClient interface {
 	GetTask(id string) (*domain.Task, error)
 	UpdateTask(p protocol.UpdateTaskPayload) (*domain.Task, error)
 	ClaimTask(id, assignee string, force bool) (*domain.Task, error)
+	ClaimTaskWithBranch(id, assignee, branch string, force bool) (*domain.Task, error)
 	Actor() string
 	ListTasks(filter domain.TaskFilter) ([]*domain.Task, error)
 	ArchiveTask(id, actor, reason string) (*domain.Task, error)
@@ -32,6 +33,7 @@ type TaskClient interface {
 	GetDependencies(taskID string) (*protocol.DependenciesData, error)
 	AttachGit(taskID string, sha, msg, diffStat, diffContent string, markDone bool) (*domain.Task, error)
 	AttachGitWithForce(taskID string, sha, msg, diffStat, diffContent string, markDone, force bool) (*domain.Task, error)
+	AttachGitCommits(taskID string, commits []domain.TaskCommit, markDone, force bool) (*domain.Task, error)
 	StreamEvents(handler func(protocol.Event)) error
 	ShutdownDaemon() error
 	CreateBackup(name string, maxSnapshots int) (string, error)

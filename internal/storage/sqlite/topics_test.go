@@ -692,3 +692,72 @@ func TestVerifyBackupFileRejectsMissingAndEmptyPaths(t *testing.T) {
 		t.Fatal("expected VerifyBackupFile to reject empty 0-byte file")
 	}
 }
+
+func TestBranchExternalRefAndMultiCommitStorage(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	item := mustItem(t, db, CreateItemParams{
+		Title:       "Implement OAuth",
+		Branch:      "feat/t-1-initial",
+		ExternalRef: "gh-42",
+	})
+	if item.Branch != "feat/t-1-initial" || item.ExternalRef != "gh-42" {
+		t.Fatalf("expected Branch=feat/t-1-initial ExternalRef=gh-42, got Branch=%q ExternalRef=%q", item.Branch, item.ExternalRef)
+	}
+
+	// ClaimTaskWithBranch updates branch and sets status in_progress
+	claimed, err := db.ClaimTaskWithBranch(item.ID, "alice", "feat/t-1-oauth", false)
+	if err != nil {
+		t.Fatalf("ClaimTaskWithBranch failed: %v", err)
+	}
+	if claimed.Branch != "feat/t-1-oauth" || claimed.Assignee != "alice" || claimed.Status != domain.StatusInProgress {
+		t.Fatalf("unexpected claimed state: %+v", claimed)
+	}
+
+	// Filter by branch and external_ref
+	byBranch, err := db.ListTasks(domain.TaskFilter{Branch: "feat/t-1-oauth"})
+	if err != nil || len(byBranch) != 1 || byBranch[0].ID != item.ID {
+		t.Fatalf("expected ListTasks(Branch=feat/t-1-oauth) to return [%s], got %v (err=%v)", item.ID, byBranch, err)
+	}
+	byExt, err := db.ListTasks(domain.TaskFilter{ExternalRef: "gh-42"})
+	if err != nil || len(byExt) != 1 || byExt[0].ID != item.ID {
+		t.Fatalf("expected ListTasks(ExternalRef=gh-42) to return [%s], got %v (err=%v)", item.ID, byExt, err)
+	}
+
+	// Update PRURL via UpdateTaskExtended
+	prURL := "https://github.com/org/repo/pull/99"
+	updated, err := db.UpdateTaskExtended(UpdateTaskOpts{
+		ID:     item.ID,
+		PRURL:  &prURL,
+		Author: "alice",
+	})
+	if err != nil || updated.PRURL != prURL {
+		t.Fatalf("expected PRURL=%q, got %+v (err=%v)", prURL, updated, err)
+	}
+
+	// Attach multiple commits and verify deduplication
+	commits := []domain.TaskCommit{
+		{SHA: "aaa1111", Subject: "feat: part 1", DiffStat: "1 file changed", Author: "alice"},
+		{SHA: "bbb2222", Subject: "feat: part 2", DiffStat: "2 files changed", Author: "alice"},
+	}
+	withCommits, err := db.AttachGitCommits(item.ID, "", "", "", "--- patch ---", commits, false)
+	if err != nil {
+		t.Fatalf("AttachGitCommits failed: %v", err)
+	}
+	if len(withCommits.Commits) != 2 || withCommits.CommitSHA != "bbb2222" {
+		t.Fatalf("expected 2 commits with latest SHA bbb2222, got Commits=%+v CommitSHA=%q", withCommits.Commits, withCommits.CommitSHA)
+	}
+
+	// Delete and restore, ensuring Branch, ExternalRef, PRURL, and Commits survive tombstone round-trip
+	if err := db.DeleteTask(item.ID); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := db.RestoreTaskByID(item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Branch != "feat/t-1-oauth" || restored.ExternalRef != "gh-42" || restored.PRURL != prURL || len(restored.Commits) != 2 {
+		t.Fatalf("expected restored task to preserve branch, external_ref, pr_url, and 2 commits, got %+v", restored)
+	}
+}

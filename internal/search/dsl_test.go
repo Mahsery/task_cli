@@ -251,3 +251,33 @@ func TestTopicKindAndLinkQualifiers(t *testing.T) {
 		}
 	}
 }
+
+func TestBranchExtAndPRQualifiers(t *testing.T) {
+	task := &domain.Task{
+		ID:          "T-15",
+		Scope:       "local",
+		Kind:        domain.KindTask,
+		Title:       "Implement OAuth",
+		Branch:      "feat/t-15-implement-oauth",
+		ExternalRef: "gh-42",
+		PRURL:       "https://github.com/org/repo/pull/99",
+	}
+
+	for _, q := range []string{
+		"branch:feat/t-15",
+		"b:implement-oauth",
+		"ext:gh-42",
+		"external:42",
+		"pr:pull/99",
+		"feat/t-15-implement-oauth",
+		"gh-42",
+	} {
+		if !Match(q, task) {
+			t.Errorf("expected query %q to match task", q)
+		}
+	}
+
+	if Match("branch:main", task) {
+		t.Error("expected branch:main not to match task")
+	}
+}

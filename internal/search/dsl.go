@@ -262,8 +262,17 @@ func (n *termNode) Eval(task *domain.Task) bool {
 	case "linkedfrom", "backlink", "backlinks":
 		return containsLinkTarget(task.Backlinks, target, task.Scope)
 
+	case "branch", "b":
+		return strings.Contains(strings.ToLower(task.Branch), target)
+
+	case "ext", "external":
+		return strings.Contains(strings.ToLower(task.ExternalRef), target)
+
+	case "pr":
+		return strings.Contains(strings.ToLower(task.PRURL), target)
+
 	default:
-		// General match: ID, Title, Description, Tags, Assignee, Author, Notes, Orphaned state
+		// General match: ID, Title, Description, Tags, Assignee, Author, Branch, ExternalRef, PRURL, Notes, Orphaned state
 		if (target == "orphan" || target == "orphaned") && task.IsOrphaned() {
 			return true
 		}
@@ -289,6 +298,15 @@ func (n *termNode) Eval(task *domain.Task) bool {
 			return true
 		}
 		if strings.Contains(strings.ToLower(task.Author), target) {
+			return true
+		}
+		if strings.Contains(strings.ToLower(task.Branch), target) {
+			return true
+		}
+		if strings.Contains(strings.ToLower(task.ExternalRef), target) {
+			return true
+		}
+		if strings.Contains(strings.ToLower(task.PRURL), target) {
 			return true
 		}
 		for _, note := range task.Notes {
@@ -415,7 +433,8 @@ func (p *parser) parsePrimary() Node {
 			termVal := val[idx+1:]
 			switch field {
 			case "tag", "t", "status", "s", "priority", "pri", "p", "assignee", "a", "author", "id",
-				"topic", "in", "kind", "type", "links", "linksto", "link", "linkedfrom", "backlink", "backlinks":
+				"topic", "in", "kind", "type", "links", "linksto", "link", "linkedfrom", "backlink", "backlinks",
+				"branch", "b", "ext", "external", "pr":
 				return &termNode{field: field, val: termVal}
 			}
 		}

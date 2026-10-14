@@ -32,6 +32,7 @@ var (
 	listKind      string
 	listPosts     bool
 	listTasks     bool
+	listBranch    string
 )
 
 var listCmd = &cobra.Command{
@@ -116,6 +117,7 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
 			Topic:           listTopicRef,
 			TopicRecursive:  listRecursive,
 			Kind:            kind,
+			Branch:          listBranch,
 		}
 
 		if err := applyStatusFilter(&filter, listStatus); err != nil {
@@ -227,6 +229,7 @@ func init() {
 	listCmd.Flags().StringVarP(&listKind, "kind", "k", "", "Only items of this kind (task, post)")
 	listCmd.Flags().BoolVar(&listPosts, "posts", false, "Only posts (same as --kind post)")
 	listCmd.Flags().BoolVar(&listTasks, "tasks", false, "Only tasks (same as --kind task)")
+	listCmd.Flags().StringVar(&listBranch, "branch", "", "Only tasks bound to this git branch")
 	_ = listCmd.Flags().MarkHidden("tag")
 	_ = listCmd.Flags().MarkHidden("label")
 

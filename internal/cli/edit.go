@@ -22,26 +22,32 @@ var (
 	editNote        string
 	editNoteAlias   string
 	editDescription string
+	editBranch      string
 	editClaim       bool
 )
 
 var editCmd = &cobra.Command{
-	Use:   "edit <id> [flags]",
+	Use:   "edit [id] [flags]",
 	Short: "Edit a task (opens $EDITOR or uses CLI flags)",
 	Long: `Update task attributes using CLI flags or open the task in $EDITOR.
 Providing flags updates the specified fields directly; omitting all flags
-opens an interactive buffer with existing values pre-populated.`,
+opens an interactive buffer with existing values pre-populated.
+When [id] is omitted, infers the active task from the current git branch.`,
 	Example: `  tk edit T-1 -s in_progress -p urgent
   tk edit T-1 --claim
   tk edit T-1 -m "Patch sent to mailing list"
+  tk edit -m "Progress on current branch task"
   tk edit T-1          # Opens full task buffer in $EDITOR`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if cmd.Flags().Changed("tags") || cmd.Flags().Changed("add-tag") || cmd.Flags().Changed("remove-tag") {
 			return fmt.Errorf("tags were replaced by topics; use 'tk move' / 'tk topic' / 'tk topic import-tags'")
 		}
 
-		taskID := normID(args[0])
+		taskID, err := resolveOrInferTaskID(args)
+		if err != nil {
+			return err
+		}
 		task, err := taskClient.GetTask(taskID)
 		if err != nil {
 			return err
@@ -65,7 +71,8 @@ opens an interactive buffer with existing values pre-populated.`,
 			(cmd.Flags().Changed("assignee") && !editClaim) ||
 			cmd.Flags().Changed("note") ||
 			cmd.Flags().Changed("comment") ||
-			cmd.Flags().Changed("desc")
+			cmd.Flags().Changed("desc") ||
+			cmd.Flags().Changed("branch")
 
 		if editClaim && !hasFlags {
 			if jsonFlag {
@@ -111,6 +118,9 @@ opens an interactive buffer with existing values pre-populated.`,
 			}
 			if cmd.Flags().Changed("desc") {
 				payload.Description = &editDescription
+			}
+			if cmd.Flags().Changed("branch") {
+				payload.Branch = &editBranch
 			}
 		} else if !editClaim {
 			// Interactive editor
@@ -159,6 +169,7 @@ func init() {
 	editCmd.Flags().StringVarP(&editNote, "note", "m", "", "Append a note/comment")
 	editCmd.Flags().StringVarP(&editNoteAlias, "comment", "n", "", "Append a note/comment (alias for -m, --note)")
 	editCmd.Flags().StringVarP(&editDescription, "desc", "d", "", "Update description")
+	editCmd.Flags().StringVarP(&editBranch, "branch", "b", "", "Update bound git branch name")
 	_ = editCmd.Flags().MarkHidden("tags")
 	_ = editCmd.Flags().MarkHidden("add-tag")
 	_ = editCmd.Flags().MarkHidden("remove-tag")

@@ -101,6 +101,18 @@ type TaskNote struct {
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
+type TaskCommit struct {
+	ID          int64     `json:"id,omitempty" db:"id"`
+	TaskID      string    `json:"task_id,omitempty" db:"task_id"`
+	SHA         string    `json:"sha" db:"sha"`
+	Subject     string    `json:"subject" db:"subject"`
+	Author      string    `json:"author,omitempty" db:"author"`
+	CommittedAt string    `json:"committed_at,omitempty" db:"committed_at"`
+	DiffStat    string    `json:"diff_stat,omitempty" db:"diff_stat"`
+	DiffContent string    `json:"diff_content,omitempty" db:"diff_content"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+}
+
 type Task struct {
 	ID          string     `json:"id"`        // e.g. "T-1" (local) or "G-1" (global)
 	Scope       string     `json:"scope"`     // "local" or "global"
@@ -118,11 +130,15 @@ type Task struct {
 	ArchivedAt  *time.Time `json:"archived_at,omitempty"`
 	OrphanedAt  *time.Time `json:"orphaned_at,omitempty"` // set when the task was explicitly orphaned/reaped; cleared on claim
 
-	// Git integration (Linux kernel style)
-	CommitSHA   string `json:"commit_sha,omitempty"`
-	CommitMsg   string `json:"commit_msg,omitempty"`
-	DiffStat    string `json:"diff_stat,omitempty"`
-	DiffContent string `json:"diff_content,omitempty"`
+	// Git & GitHub integration
+	Branch      string       `json:"branch,omitempty"`
+	ExternalRef string       `json:"external_ref,omitempty"`
+	PRURL       string       `json:"pr_url,omitempty"`
+	CommitSHA   string       `json:"commit_sha,omitempty"`
+	CommitMsg   string       `json:"commit_msg,omitempty"`
+	DiffStat    string       `json:"diff_stat,omitempty"`
+	DiffContent string       `json:"diff_content,omitempty"`
+	Commits     []TaskCommit `json:"commits,omitempty"`
 
 	// Dependencies & DAG
 	DependsOn []string `json:"depends_on,omitempty"` // Prerequisite task IDs that must be completed before this task
@@ -266,6 +282,8 @@ type TaskFilter struct {
 	TopicRecursive  bool   // Include items in descendant topics of Topic
 	Kind            ItemKind
 	LinksTo         string // Only items whose text links to this target (ID or @topic)
+	Branch          string // Filter by bound git branch
+	ExternalRef     string // Filter by external issue reference (e.g. "gh#42")
 }
 
 // EffectiveStatuses returns the de-duplicated union of Status and Statuses,

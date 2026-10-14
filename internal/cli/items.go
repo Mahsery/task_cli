@@ -87,16 +87,20 @@ with 'tk promote'. The description may contain [[wiki links]].`,
 }
 
 var replyCmd = &cobra.Command{
-	Use:     "reply <id> -m <message>",
+	Use:     "reply [id] -m <message>",
 	Aliases: []string{"comment"},
 	Short:   "Add a reply/comment to a post or task (supports [[wiki links]])",
-	Args:    cobra.ExactArgs(1),
+	Args:    cobra.MaximumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		msg := strings.TrimSpace(replyMessage)
 		if msg == "" {
 			return fmt.Errorf("reply cannot be empty (use -m)")
 		}
-		item, err := taskClient.UpdateTask(protocol.UpdateTaskPayload{ID: normID(args[0]), AddNote: &msg, Author: resolveAuthor("")})
+		taskID, err := resolveOrInferTaskID(args)
+		if err != nil {
+			return err
+		}
+		item, err := taskClient.UpdateTask(protocol.UpdateTaskPayload{ID: taskID, AddNote: &msg, Author: resolveAuthor("")})
 		if err != nil {
 			return err
 		}

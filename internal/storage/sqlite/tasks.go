@@ -40,6 +40,9 @@ type CreateItemParams struct {
 	Author      string
 	Assignee    string
 	DependsOn   []string
+	Branch      string
+	ExternalRef string
+	PRURL       string
 }
 
 // itemPrefix returns the ID prefix for an item kind in a scope.
@@ -155,12 +158,12 @@ func (d *DB) createItemInTxLocked(tx *sqlx.Tx, p CreateItemParams) (string, erro
 
 	insertSQL := `
 	INSERT INTO tasks (
-		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at, archived_at, kind, topic_id
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at, archived_at, kind, topic_id, branch, external_ref, pr_url
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err = tx.Exec(insertSQL,
-		taskID, scope, repoPath, nextSeq, title, p.Description, string(p.Status), string(p.Priority), string(tagsJSON), p.Author, p.Assignee, now, now, closedAt, archivedAt, string(p.Kind), topicID,
+		taskID, scope, repoPath, nextSeq, title, p.Description, string(p.Status), string(p.Priority), string(tagsJSON), p.Author, p.Assignee, now, now, closedAt, archivedAt, string(p.Kind), topicID, strings.TrimSpace(p.Branch), strings.TrimSpace(p.ExternalRef), strings.TrimSpace(p.PRURL),
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to insert %s: %w", p.Kind, err)
@@ -200,17 +203,17 @@ type rowScanner interface {
 
 const (
 	taskColumns = `id, scope, repo_path, title, description, status, priority, tags, author, assignee,
-	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id, orphaned_at`
+	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id, orphaned_at, branch, external_ref, pr_url`
 
 	taskColumnsSummary = `id, scope, repo_path, title, description, status, priority, tags, author, assignee,
-	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, '' AS diff_content, kind, topic_id, orphaned_at`
+	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, '' AS diff_content, kind, topic_id, orphaned_at, branch, external_ref, pr_url`
 )
 
 func taskColumnsPrefixed(prefix string) string {
 	cols := []string{
 		"id", "scope", "repo_path", "title", "description", "status", "priority", "tags", "author", "assignee",
 		"created_at", "updated_at", "closed_at", "archived_at", "commit_sha", "commit_msg", "diff_stat", "diff_content",
-		"kind", "topic_id", "orphaned_at",
+		"kind", "topic_id", "orphaned_at", "branch", "external_ref", "pr_url",
 	}
 	if prefix == "" {
 		return strings.Join(cols, ", ")
@@ -232,6 +235,7 @@ func scanTask(s rowScanner, task *domain.Task) error {
 		&task.CreatedAt, &task.UpdatedAt, &closedAt, &archivedAt,
 		&task.CommitSHA, &task.CommitMsg, &task.DiffStat, &task.DiffContent,
 		&kindStr, &topicID, &orphanedAt,
+		&task.Branch, &task.ExternalRef, &task.PRURL,
 	)
 	if err != nil {
 		return err
@@ -279,6 +283,7 @@ func (d *DB) hydrateTaskRelations(q sqlx.Queryer, tasks []*domain.Task, includeN
 		if t.Notes == nil {
 			t.Notes = []domain.TaskNote{}
 		}
+		t.Commits = nil
 		t.DependsOn = []string{}
 		t.BlockedBy = []string{}
 		t.Blocks = []string{}
@@ -288,7 +293,7 @@ func (d *DB) hydrateTaskRelations(q sqlx.Queryer, tasks []*domain.Task, includeN
 		taskIDs = append(taskIDs, t.ID)
 	}
 
-	// Batch load notes
+	// Batch load notes & commits
 	if includeNotes {
 		notesQuery, args, err := sqlx.In("SELECT id, task_id, author, content, created_at FROM task_notes WHERE task_id IN (?) ORDER BY created_at ASC", taskIDs)
 		if err != nil {
@@ -304,6 +309,21 @@ func (d *DB) hydrateTaskRelations(q sqlx.Queryer, tasks []*domain.Task, includeN
 		for _, n := range notes {
 			if t, ok := taskMap[n.TaskID]; ok {
 				t.Notes = append(t.Notes, n.TaskNote)
+			}
+		}
+
+		commitsQuery, cArgs, err := sqlx.In("SELECT id, task_id, sha, subject, author, committed_at, diff_stat, diff_content, created_at FROM task_commits WHERE task_id IN (?) ORDER BY id ASC", taskIDs)
+		if err != nil {
+			return fmt.Errorf("failed to build task commits query: %w", err)
+		}
+		var commits []domain.TaskCommit
+		if err := sqlx.Select(q, &commits, commitsQuery, cArgs...); err != nil {
+			return fmt.Errorf("failed to query task commits: %w", err)
+		}
+		for i := range commits {
+			c := &commits[i]
+			if t, ok := taskMap[c.TaskID]; ok {
+				t.Commits = append(t.Commits, *c)
 			}
 		}
 	}
@@ -396,10 +416,35 @@ func (d *DB) GetTask(id string) (*domain.Task, error) {
 	return d.getTaskLocked(d.conn, id)
 }
 
+type UpdateTaskOpts struct {
+	ID          string
+	Title       *string
+	Description *string
+	Status      *domain.Status
+	Priority    *domain.Priority
+	Tags        *[]string
+	AddTags     []string
+	RemoveTags  []string
+	Assignee    *string
+	AddNote     *string
+	Author      string
+	Branch      *string
+	ExternalRef *string
+	PRURL       *string
+}
+
 func (d *DB) UpdateTask(id string, title, description *string, status *domain.Status, priority *domain.Priority, tags *[]string, addTags, removeTags []string, assignee, addNote *string, author string) (*domain.Task, error) {
+	return d.UpdateTaskExtended(UpdateTaskOpts{
+		ID: id, Title: title, Description: description, Status: status, Priority: priority,
+		Tags: tags, AddTags: addTags, RemoveTags: removeTags, Assignee: assignee, AddNote: addNote, Author: author,
+	})
+}
+
+func (d *DB) UpdateTaskExtended(opts UpdateTaskOpts) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	id := opts.ID
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -422,57 +467,57 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 
 	// Re-submitting an unchanged title is always allowed so that legacy titles
 	// predating the length limit don't block unrelated edits.
-	if title != nil && strings.TrimSpace(*title) != strings.TrimSpace(currentTitle) {
-		normalized, err := domain.NormalizeTitle(*title)
+	if opts.Title != nil && strings.TrimSpace(*opts.Title) != strings.TrimSpace(currentTitle) {
+		normalized, err := domain.NormalizeTitle(*opts.Title)
 		if err != nil {
 			return nil, err
 		}
 		updates = append(updates, "title = ?")
 		args = append(args, normalized)
 	}
-	if description != nil {
+	if opts.Description != nil {
 		updates = append(updates, "description = ?")
-		args = append(args, *description)
+		args = append(args, *opts.Description)
 	}
-	if status != nil {
+	if opts.Status != nil {
 		updates = append(updates, "status = ?")
-		args = append(args, string(*status))
+		args = append(args, string(*opts.Status))
 
-		if *status == domain.StatusDone || *status == domain.StatusClosed {
+		if *opts.Status == domain.StatusDone || *opts.Status == domain.StatusClosed {
 			updates = append(updates, "closed_at = ?")
 			args = append(args, now)
 		} else {
 			updates = append(updates, "closed_at = NULL")
 		}
 
-		if *status == domain.StatusArchived {
+		if *opts.Status == domain.StatusArchived {
 			updates = append(updates, "archived_at = ?")
 			args = append(args, now)
 		} else {
 			updates = append(updates, "archived_at = NULL")
 		}
 	}
-	if priority != nil {
+	if opts.Priority != nil {
 		updates = append(updates, "priority = ?")
-		args = append(args, string(*priority))
+		args = append(args, string(*opts.Priority))
 	}
 
 	// Atomic tag mutations inside the transaction
-	if tags != nil || len(addTags) > 0 || len(removeTags) > 0 {
+	if opts.Tags != nil || len(opts.AddTags) > 0 || len(opts.RemoveTags) > 0 {
 		var currentTags []string
 		if currentTagsJSON != "" && currentTagsJSON != "[]" {
 			_ = json.Unmarshal([]byte(currentTagsJSON), &currentTags)
 		}
 
-		if tags != nil {
-			currentTags = *tags
+		if opts.Tags != nil {
+			currentTags = *opts.Tags
 		}
-		if len(addTags) > 0 {
+		if len(opts.AddTags) > 0 {
 			tagSet := make(map[string]bool)
 			for _, t := range currentTags {
 				tagSet[t] = true
 			}
-			for _, t := range addTags {
+			for _, t := range opts.AddTags {
 				t = strings.TrimSpace(t)
 				if t != "" && !tagSet[t] {
 					tagSet[t] = true
@@ -480,9 +525,9 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 				}
 			}
 		}
-		if len(removeTags) > 0 {
+		if len(opts.RemoveTags) > 0 {
 			removeSet := make(map[string]bool)
-			for _, t := range removeTags {
+			for _, t := range opts.RemoveTags {
 				removeSet[strings.TrimSpace(t)] = true
 			}
 			var filtered []string
@@ -504,9 +549,21 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 		args = append(args, string(newTagsBytes))
 	}
 
-	if assignee != nil {
+	if opts.Assignee != nil {
 		updates = append(updates, "assignee = ?")
-		args = append(args, *assignee)
+		args = append(args, *opts.Assignee)
+	}
+	if opts.Branch != nil {
+		updates = append(updates, "branch = ?")
+		args = append(args, strings.TrimSpace(*opts.Branch))
+	}
+	if opts.ExternalRef != nil {
+		updates = append(updates, "external_ref = ?")
+		args = append(args, strings.TrimSpace(*opts.ExternalRef))
+	}
+	if opts.PRURL != nil {
+		updates = append(updates, "pr_url = ?")
+		args = append(args, strings.TrimSpace(*opts.PRURL))
 	}
 
 	args = append(args, id)
@@ -516,15 +573,15 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 		return nil, fmt.Errorf("failed to update task: %w", err)
 	}
 
-	if addNote != nil && strings.TrimSpace(*addNote) != "" {
+	if opts.AddNote != nil && strings.TrimSpace(*opts.AddNote) != "" {
 		noteID := uuid.New().String()
 		noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
-		if _, err := tx.Exec(noteSQL, noteID, id, author, strings.TrimSpace(*addNote), now); err != nil {
+		if _, err := tx.Exec(noteSQL, noteID, id, opts.Author, strings.TrimSpace(*opts.AddNote), now); err != nil {
 			return nil, fmt.Errorf("failed to insert note: %w", err)
 		}
 	}
 
-	if description != nil || addNote != nil {
+	if opts.Description != nil || opts.AddNote != nil {
 		if err := reindexLinksTx(tx, id); err != nil {
 			return nil, err
 		}
@@ -539,6 +596,10 @@ func (d *DB) UpdateTask(id string, title, description *string, status *domain.St
 }
 
 func (d *DB) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
+	return d.ClaimTaskWithBranch(id, assignee, "", force)
+}
+
+func (d *DB) ClaimTaskWithBranch(id, assignee, branch string, force bool) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -546,6 +607,7 @@ func (d *DB) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
 	if assignee == "" {
 		return nil, fmt.Errorf("claim assignee cannot be empty")
 	}
+	branch = strings.TrimSpace(branch)
 
 	tx, err := d.conn.Begin()
 	if err != nil {
@@ -553,9 +615,9 @@ func (d *DB) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var currentAssignee, currentStatus, currentTagsJSON, kind string
-	query := "SELECT assignee, status, tags, kind FROM tasks WHERE id = ?"
-	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus, &currentTagsJSON, &kind); err != nil {
+	var currentAssignee, currentStatus, currentTagsJSON, kind, currentBranch string
+	query := "SELECT assignee, status, tags, kind, branch FROM tasks WHERE id = ?"
+	if err := tx.QueryRow(query, id).Scan(&currentAssignee, &currentStatus, &currentTagsJSON, &kind, &currentBranch); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("task %s not found", id)
 		}
@@ -587,15 +649,22 @@ func (d *DB) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
 	if currentStatus == string(domain.StatusOpen) {
 		newStatus = string(domain.StatusInProgress)
 	}
+	newBranch := currentBranch
+	if branch != "" {
+		newBranch = branch
+	}
 
-	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, tags = ?, orphaned_at = NULL, updated_at = ? WHERE id = ?"
-	if _, err := tx.Exec(updateSQL, assignee, newStatus, string(newTagsBytes), now, id); err != nil {
+	updateSQL := "UPDATE tasks SET assignee = ?, status = ?, tags = ?, branch = ?, orphaned_at = NULL, updated_at = ? WHERE id = ?"
+	if _, err := tx.Exec(updateSQL, assignee, newStatus, string(newTagsBytes), newBranch, now, id); err != nil {
 		return nil, fmt.Errorf("failed to claim task: %w", err)
 	}
 
-	if currentAssignee != assignee {
+	if currentAssignee != assignee || (branch != "" && branch != currentBranch) {
 		noteID := uuid.New().String()
 		noteContent := fmt.Sprintf("Claimed task as %q", assignee)
+		if branch != "" {
+			noteContent = fmt.Sprintf("Claimed task as %q on branch %q", assignee, branch)
+		}
 		noteSQL := `INSERT INTO task_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
 		if _, err := tx.Exec(noteSQL, noteID, id, assignee, noteContent, now); err != nil {
 			return nil, fmt.Errorf("failed to insert claim note: %w", err)
@@ -1151,6 +1220,14 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		conditions = append(conditions, "kind = ?")
 		args = append(args, string(filter.Kind))
 	}
+	if filter.Branch != "" {
+		conditions = append(conditions, "branch = ?")
+		args = append(args, strings.TrimSpace(filter.Branch))
+	}
+	if filter.ExternalRef != "" {
+		conditions = append(conditions, "external_ref = ?")
+		args = append(args, strings.TrimSpace(filter.ExternalRef))
+	}
 	if ref := domain.NormalizeTopicRef(filter.Topic); ref != "" {
 		if ref == domain.UnfiledTopic {
 			conditions = append(conditions, "topic_id IS NULL")
@@ -1399,10 +1476,56 @@ func (d *DB) DeleteTask(id string) error {
 }
 
 func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, markDone bool) (*domain.Task, error) {
+	var commits []domain.TaskCommit
+	if strings.TrimSpace(commitSHA) != "" {
+		commits = []domain.TaskCommit{
+			{
+				SHA:         commitSHA,
+				Subject:     commitMsg,
+				DiffStat:    diffStat,
+				DiffContent: diffContent,
+			},
+		}
+	}
+	return d.AttachGitCommits(id, commitSHA, commitMsg, diffStat, diffContent, commits, markDone)
+}
+
+func (d *DB) AttachGitCommits(id, commitSHA, commitMsg, diffStat, diffContent string, commits []domain.TaskCommit, markDone bool) (*domain.Task, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Verify task exists
+	var exists int
+	if err := tx.QueryRow("SELECT 1 FROM tasks WHERE id = ?", id).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("task %s not found", id)
+		}
+		return nil, fmt.Errorf("failed to query task: %w", err)
+	}
+
 	now := time.Now().UTC()
+	if len(commits) > 0 {
+		last := commits[len(commits)-1]
+		if commitSHA == "" {
+			commitSHA = last.SHA
+		}
+		if commitMsg == "" {
+			commitMsg = last.Subject
+		}
+		if diffStat == "" {
+			diffStat = last.DiffStat
+		}
+		if diffContent == "" {
+			diffContent = last.DiffContent
+		}
+	}
+
 	updates := []string{
 		"commit_sha = ?",
 		"commit_msg = ?",
@@ -1418,9 +1541,38 @@ func (d *DB) AttachGit(id, commitSHA, commitMsg, diffStat, diffContent string, m
 	}
 
 	args = append(args, id)
-	updateSQL := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(updates, ", "))
-	if _, err := d.conn.Exec(updateSQL, args...); err != nil {
+	updateSQL := fmt.Sprintf("UPDATE tasks SET %s WHERE id = ?", strings.Join(updates, ", ")) //nolint:gosec // G201: only fixed column names are interpolated
+	if _, err := tx.Exec(updateSQL, args...); err != nil {
 		return nil, fmt.Errorf("failed to attach git info: %w", err)
+	}
+
+	for i := range commits {
+		c := &commits[i]
+		sha := strings.TrimSpace(c.SHA)
+		if sha == "" {
+			continue
+		}
+		createdAt := c.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = now
+		}
+		_, err := tx.Exec(`
+			INSERT INTO task_commits (task_id, sha, subject, author, committed_at, diff_stat, diff_content, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(task_id, sha) DO UPDATE SET
+				subject = excluded.subject,
+				author = CASE WHEN excluded.author != '' THEN excluded.author ELSE task_commits.author END,
+				committed_at = CASE WHEN excluded.committed_at != '' THEN excluded.committed_at ELSE task_commits.committed_at END,
+				diff_stat = CASE WHEN excluded.diff_stat != '' THEN excluded.diff_stat ELSE task_commits.diff_stat END,
+				diff_content = CASE WHEN excluded.diff_content != '' THEN excluded.diff_content ELSE task_commits.diff_content END
+		`, id, sha, c.Subject, c.Author, c.CommittedAt, c.DiffStat, c.DiffContent, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to record task commit %s: %w", sha, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit git attachment: %w", err)
 	}
 	d.invalidateTopicCacheLocked()
 
@@ -1453,9 +1605,12 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		seqNum, _ = strconv.Atoi(parts[1])
 	}
 
-	// Clean up any stale notes before restoring to prevent PRIMARY KEY collisions
+	// Clean up any stale notes and commits before restoring to prevent PRIMARY KEY collisions
 	if _, err := tx.Exec("DELETE FROM task_notes WHERE task_id = ?", task.ID); err != nil {
 		return fmt.Errorf("failed to clean existing notes: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM task_commits WHERE task_id = ?", task.ID); err != nil {
+		return fmt.Errorf("failed to clean existing commits: %w", err)
 	}
 
 	kind := task.Kind
@@ -1478,8 +1633,8 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 	insertSQL := `
 	INSERT INTO tasks (
 		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at, archived_at,
-		commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id, orphaned_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id, orphaned_at, branch, external_ref, pr_url
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		scope = excluded.scope,
 		repo_path = excluded.repo_path,
@@ -1501,13 +1656,17 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		diff_content = excluded.diff_content,
 		kind = excluded.kind,
 		topic_id = excluded.topic_id,
-		orphaned_at = excluded.orphaned_at
+		orphaned_at = excluded.orphaned_at,
+		branch = excluded.branch,
+		external_ref = excluded.external_ref,
+		pr_url = excluded.pr_url
 	`
 	_, err = tx.Exec(insertSQL,
 		task.ID, task.Scope, task.RepoPath, seqNum, task.Title, task.Description,
 		string(task.Status), string(task.Priority), string(tagsJSON), task.Author, task.Assignee,
 		task.CreatedAt, task.UpdatedAt, closedAt, archivedAt,
 		task.CommitSHA, task.CommitMsg, task.DiffStat, task.DiffContent, string(kind), topicID, orphanedAt,
+		task.Branch, task.ExternalRef, task.PRURL,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert restored task: %w", err)
@@ -1524,6 +1683,21 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		if err != nil {
 			return fmt.Errorf("failed to restore note: %w", err)
 		}
+	}
+
+	nowCommit := time.Now().UTC()
+	for i := range task.Commits {
+		c := &task.Commits[i]
+		if strings.TrimSpace(c.SHA) == "" {
+			continue
+		}
+		createdAt := c.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = nowCommit
+		}
+		_, _ = tx.Exec(`INSERT OR IGNORE INTO task_commits (task_id, sha, subject, author, committed_at, diff_stat, diff_content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			task.ID, c.SHA, c.Subject, c.Author, c.CommittedAt, c.DiffStat, c.DiffContent, createdAt,
+		)
 	}
 
 	seqRepoPath := task.RepoPath

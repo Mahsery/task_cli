@@ -45,19 +45,24 @@ func numberLines(text string) string {
 }
 
 var showCmd = &cobra.Command{
-	Use:   "show <id>",
+	Use:   "show [id]",
 	Short: "Show task details, notes, and attached git commit/diff",
 	Long: `Display comprehensive details for a task, including metadata, tags,
 chronological activity notes, and attached Linux kernel-style git commit SHA,
-commit message, diffstat, and unified patch diff.`,
+commit message, diffstat, and unified patch diff.
+When [id] is omitted, infers the active task from the current git branch.`,
 	Example: `  tk show T-1
+  tk show                 # Infer task from current git branch
   tk -g show G-3
   tk show t1              # IDs are forgiving: t1, T1, t-1, 1
   tk show T-1 -n          # number description lines (for [[T-1#L3]] anchors)
   tk show T-1 --json`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
-		taskID := normID(args[0])
+		taskID, err := resolveOrInferTaskID(args)
+		if err != nil {
+			return err
+		}
 		task, err := taskClient.GetTask(taskID)
 		if err != nil {
 			return fmt.Errorf("%w (run 'tk list' to view available tasks)", err)
@@ -81,6 +86,15 @@ commit message, diffstat, and unified patch diff.`,
 		}
 		if task.Assignee != "" {
 			fmt.Fprintf(&sb, "Assignee: %s\n", task.Assignee)
+		}
+		if task.Branch != "" {
+			fmt.Fprintf(&sb, "Branch:   %s\n", task.Branch)
+		}
+		if task.ExternalRef != "" {
+			fmt.Fprintf(&sb, "External: %s\n", task.ExternalRef)
+		}
+		if task.PRURL != "" {
+			fmt.Fprintf(&sb, "PR URL:   %s\n", task.PRURL)
 		}
 		if len(task.DependsOn) > 0 {
 			blockedText := ""
@@ -137,7 +151,19 @@ commit message, diffstat, and unified patch diff.`,
 			sb.WriteString("\n")
 		}
 
-		if task.CommitSHA != "" {
+		if len(task.Commits) > 1 {
+			fmt.Fprintf(&sb, "── Commits & Changes (%d commits) %s\n", len(task.Commits), strings.Repeat("─", 46))
+			for i, c := range task.Commits {
+				fmt.Fprintf(&sb, "[%d/%d] commit %s — %s\n", i+1, len(task.Commits), c.SHA, c.Subject)
+				if c.DiffStat != "" {
+					sb.WriteString(c.DiffStat + "\n")
+				}
+				sb.WriteString("\n")
+			}
+			if task.DiffContent != "" {
+				sb.WriteString(task.DiffContent + "\n")
+			}
+		} else if task.CommitSHA != "" {
 			sb.WriteString("── Commits & Changes " + strings.Repeat("─", 59) + "\n")
 			fmt.Fprintf(&sb, "commit %s\n", task.CommitSHA)
 			if task.CommitMsg != "" {

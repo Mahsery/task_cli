@@ -176,3 +176,94 @@ func TestSanitizeDiffContentMultiByteUTF8(t *testing.T) {
 		}
 	}
 }
+
+func TestBranchSlugAndInference(t *testing.T) {
+	slug := BranchSlugForTask("T-84", "P2.2: Branch-Bound Tasks & Active Inference!")
+	if slug != "tk/t-84-p2-2-branch-bound-tasks-active-inference" {
+		t.Fatalf("unexpected branch slug: %q", slug)
+	}
+
+	cases := map[string]string{
+		"tk/t-84-branch-bound-tasks": "T-84",
+		"feat/T-12-login":            "T-12",
+		"t-5":                        "T-5",
+		"tk/g-3-global-item":         "G-3",
+		"main":                       "",
+		"feature/authentication":     "",
+	}
+	for branch, want := range cases {
+		if got := InferTaskIDFromBranchName(branch); got != want {
+			t.Errorf("InferTaskIDFromBranchName(%q) = %q, want %q", branch, got, want)
+		}
+	}
+}
+
+func TestCheckoutOrCreateBranchAndCommitRangeScan(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	runGit("init", "-b", "main")
+	runGit("config", "user.name", "Test User")
+	runGit("config", "user.email", "test@example.com")
+
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "a.txt")
+	runGit("commit", "-m", "initial on main")
+
+	// CheckoutOrCreateBranch creates a new branch
+	if err := CheckoutOrCreateBranch(repo, "tk/t-10-feature"); err != nil {
+		t.Fatalf("CheckoutOrCreateBranch new branch failed: %v", err)
+	}
+	cur, err := CurrentBranch(repo)
+	if err != nil || cur != "tk/t-10-feature" {
+		t.Fatalf("expected current branch tk/t-10-feature, got %q (%v)", cur, err)
+	}
+
+	// Make 2 commits mentioning [T-10]
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("commit", "-am", "[T-10] step one")
+
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("commit", "-am", "feat: complete T-10 step two")
+
+	// Checkout back to main and then back to tk/t-10-feature (existing branch path)
+	if err := CheckoutOrCreateBranch(repo, "main"); err != nil {
+		t.Fatalf("CheckoutOrCreateBranch existing main failed: %v", err)
+	}
+	if err := CheckoutOrCreateBranch(repo, "tk/t-10-feature"); err != nil {
+		t.Fatalf("CheckoutOrCreateBranch existing feature branch failed: %v", err)
+	}
+
+	// Test GetCommitRange("main..HEAD")
+	rangeCommits, err := GetCommitRange(repo, "main..HEAD")
+	if err != nil {
+		t.Fatalf("GetCommitRange failed: %v", err)
+	}
+	if len(rangeCommits) != 2 {
+		t.Fatalf("expected 2 commits in main..HEAD, got %d", len(rangeCommits))
+	}
+	if rangeCommits[0].Subject != "[T-10] step one" || rangeCommits[1].Subject != "feat: complete T-10 step two" {
+		t.Fatalf("unexpected commit subjects in chronological order: %q, %q", rangeCommits[0].Subject, rangeCommits[1].Subject)
+	}
+
+	// Test ScanCommitsForTask
+	scanned, err := ScanCommitsForTask(repo, "T-10", "")
+	if err != nil {
+		t.Fatalf("ScanCommitsForTask failed: %v", err)
+	}
+	if len(scanned) != 2 {
+		t.Fatalf("expected 2 commits scanned for T-10, got %d", len(scanned))
+	}
+}
