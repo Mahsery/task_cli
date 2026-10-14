@@ -46,16 +46,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case taskDetailMsg:
 		if msg != nil {
 			for _, t := range m.tasks {
-				if t.ID == msg.ID {
-					t.DiffContent = msg.DiffContent
-					t.Description = msg.Description
-					t.Notes = msg.Notes
-					break
+				if t.ID != msg.ID {
+					continue
 				}
+				t.DiffContent = msg.DiffContent
+				t.Description = msg.Description
+				t.Notes = msg.Notes
+				t.Commits = msg.Commits
+				t.Branch = msg.Branch
+				t.ExternalRef = msg.ExternalRef
+				t.PRURL = msg.PRURL
+				break
 			}
 			m.clampScroll()
 		}
 		return m, nil
+
+	case streamSubscribedMsg:
+		m.eventCh = msg.ch
+		return m, m.waitForEventCmd()
+
+	case daemonEventMsg:
+		return m, tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd(), m.waitForEventCmd())
 
 	case statusMsg:
 		m.statusMsg = string(msg)

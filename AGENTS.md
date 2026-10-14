@@ -36,6 +36,8 @@
 | **Reply / Note** | `tk reply <ID> -m "Comment text"` | Appends discussion note (supports `[[wiki links]]`) |
 | **Promote Post** | `tk promote <post-id> --to <tasks-topic>` | Promotes P-n to T-n task with bidirectional link |
 | **Claim Work** | `tk claim <ID> [--actor <name>]` | Atomic assignment; transitions `open` → `in_progress` |
+| **Start & Branch** | `tk start [ID] [-b] [--worktree <dir>]` | Claims task, binds branch `feat/t-<id>-<slug>`, optional checkout/worktree |
+| **Branch Context** | `tk branch [ID] [-d]` | Shows task bound to current Git branch, or binds/unbinds `<ID>` |
 | **Takeover / Steer**| `tk takeover <ID> -m "Reason" [--actor <name>]` | Takes over task; clears orphan status and audits reason |
 | **Transfer** | `tk transfer <ID> <new-actor> -m "Handoff note"` | Reassigns task with audit note |
 | **Manage Deps** | `tk link <ID> <prereq...>` / `tk unlink <ID> <prereq...>` | Declares `<ID>` depends on `<prereq...>` |
@@ -43,7 +45,11 @@
 | **Move Topic** | `tk move <ID...> --to <topic\|unfiled>` | Moves items to topic; dependencies/links preserved |
 | **Wikilinks & Jump**| `tk links <ID>` / `tk go <ID> [n]` | `tk links` lists links/backlinks; `tk go <ID> 2` jumps to link #2 |
 | **Progress Note** | `tk edit <ID> -m "Progress note [[T-5#n1]]"` | Appends chronological note to task |
-| **Complete Task** | `tk done <ID> [-c commit] [--diff] [-f]` | Resolves task + snaps HEAD SHA/diff. `-f` overrides blocked deps |
+| **Attach Commits** | `tk attach [ID] [ref\|A..B] [--scan [range]]` | Attaches single commit, commit range (`main..HEAD`), or trailer-scanned commits |
+| **Export Patches** | `tk patch [ID] [-o dir] [--stdout]` | Exports attached commits or diff as a `git format-patch` / `git am` series |
+| **Git Hooks** | `tk hooks [install\|uninstall\|status]` | Installs non-destructive `prepare-commit-msg` & `post-commit` hooks |
+| **GitHub PR / Sync**| `tk pr [create\|status] [ID]` / `tk gh [import\|push]` | Zero-config GitHub PR creation/status and Issue import/push via `gh` CLI |
+| **Complete Task** | `tk done [ID] [-c commit] [--diff] [-f]` | Resolves task + snaps HEAD SHA/diff. `-f` overrides blocked deps |
 | **Orphan Stale** | `tk orphan reap --older-than 1h [--dry-run]` | Drops unresponsive assignee, resets to open, sets orphaned_at |
 | **Undo / Restore** | `tk restore <ID>` / `tk restore -l` | Recovers deleted task from tombstone archive |
 | **Disaster Recovery**| `tk db restore latest -f` / `tk db backup` | Atomic point-in-time recovery via central vault |

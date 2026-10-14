@@ -544,6 +544,60 @@ func (c *Client) StreamEvents(handler func(protocol.Event)) error {
 	}
 }
 
+// SubscribeEvents opens a dedicated socket connection for ActionStreamEvents so
+// live pubsub notifications do not block or interleave with RPC calls on c.conn.
+func (c *Client) SubscribeEvents() (<-chan protocol.Event, error) {
+	conn, err := c.dial()
+	if err != nil {
+		return nil, err
+	}
+	enc := json.NewEncoder(conn)
+	dec := json.NewDecoder(conn)
+
+	req := protocol.Request{
+		ID:       uuid.New().String(),
+		Action:   protocol.ActionStreamEvents,
+		Scope:    c.Scope,
+		RepoPath: c.RepoPath,
+	}
+	if err := enc.Encode(req); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+
+	var ack protocol.Response
+	if err := dec.Decode(&ack); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if !ack.Success {
+		_ = conn.Close()
+		return nil, fmt.Errorf("%s", ack.Error)
+	}
+
+	ch := make(chan protocol.Event, 32)
+	go func() {
+		defer close(ch)
+		defer func() { _ = conn.Close() }()
+		for {
+			var resp protocol.Response
+			if err := dec.Decode(&resp); err != nil {
+				return
+			}
+			if resp.Success && len(resp.Data) > 0 {
+				var ev protocol.Event
+				if err := json.Unmarshal(resp.Data, &ev); err == nil {
+					select {
+					case ch <- ev:
+					default:
+					}
+				}
+			}
+		}
+	}()
+	return ch, nil
+}
+
 func (c *Client) ShutdownDaemon() error {
 	if c.conn == nil {
 		conn, err := c.dial()

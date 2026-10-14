@@ -50,17 +50,26 @@ func (m Model) View() string {
 	lines = append(lines, m.theme.Border.Render(strings.Repeat("─", l.width)), m.renderFooter(l.width))
 	rawView := strings.Join(lines, "\n")
 
+	if m.showHelp {
+		return m.overlayModalString(rawView, m.renderHelpModal(l.width, l.height))
+	}
 	if dlg := m.activeConfirmDialog(); dlg != nil {
 		return m.overlayModal(rawView, dlg)
 	}
 	if m.isLinking {
 		return m.overlayModalString(rawView, m.renderLinkModal(l.width, l.height))
 	}
+	if m.isReplying {
+		return m.overlayModalString(rawView, m.renderReplyModal(l.width, l.height))
+	}
 	if m.topicForm != nil {
 		return m.overlayModalString(rawView, m.renderTopicForm(l.width))
 	}
 	if m.picker != nil {
 		return m.overlayModalString(rawView, m.renderPicker(l.width, l.height))
+	}
+	if m.narrowSidebarOpen && l.sidebarWidth == 0 {
+		return m.overlayModalString(rawView, m.renderNarrowSidebarModal(l.width, l.height))
 	}
 	return rawView
 }

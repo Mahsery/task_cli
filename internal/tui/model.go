@@ -9,6 +9,7 @@ import (
 
 	"task_cli/internal/client"
 	"task_cli/internal/domain"
+	"task_cli/internal/protocol"
 )
 
 type Pane int
@@ -99,6 +100,13 @@ type Model struct {
 	isLinking          bool
 	linkInput          string
 	linkTaskID         string
+	linkCandidateIdx   int
+	isReplying         bool
+	replyInput         string
+	replyTaskID        string
+	showHelp           bool
+	narrowSidebarOpen  bool
+	eventCh            <-chan protocol.Event
 	chordBuffer        string
 	showArchived       bool
 	input              textinput.Model
@@ -204,7 +212,13 @@ type statusMsg string
 
 type errMsg error
 
+type streamSubscribedMsg struct {
+	ch <-chan protocol.Event
+}
+
+type daemonEventMsg protocol.Event
+
 // Init loads topics before tasks: the client connection is not safe for concurrent use.
 func (m Model) Init() tea.Cmd {
-	return tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd())
+	return tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd(), m.subscribeEventsCmd())
 }

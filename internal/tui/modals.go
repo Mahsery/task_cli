@@ -65,9 +65,33 @@ func (m Model) renderConfirmationModal(dlg *ConfirmDialog, termWidth, termHeight
 	return theme.ModalBox.Width(boxWidth).Render(inner)
 }
 
-func (m Model) renderLinkModal(termWidth, _ int) string {
+func (m Model) linkCandidateItems() []pickerItem {
+	var exclude map[string]bool
+	if src := m.lookupItem(m.linkTaskID); src != nil {
+		exclude = make(map[string]bool, len(src.DependsOn)+1)
+		exclude[m.linkTaskID] = true
+		for _, depID := range src.DependsOn {
+			exclude[depID] = true
+		}
+	} else {
+		exclude = map[string]bool{m.linkTaskID: true}
+	}
+	q := strings.TrimSpace(m.linkInput)
+	var out []pickerItem
+	for _, t := range m.tasks {
+		if t == nil || t.IsPost() || exclude[t.ID] {
+			continue
+		}
+		if _, ok := fuzzyScore(q, t.ID+" "+t.Title); ok {
+			out = append(out, pickerItem{Label: t.ID, Detail: t.Title, Value: t.ID})
+		}
+	}
+	return out
+}
+
+func (m Model) renderLinkModal(termWidth, termHeight int) string {
 	theme := m.theme
-	boxWidth := 56
+	boxWidth := 60
 	if termWidth > 0 && termWidth-6 < boxWidth {
 		boxWidth = termWidth - 6
 	}
@@ -90,7 +114,27 @@ func (m Model) renderLinkModal(termWidth, _ int) string {
 	inputStr := fmt.Sprintf("  Prereq Task ID: %s", m.inputViewOrText(m.linkInput))
 	lines = append(lines, theme.SearchPrompt.Render(inputStr), "")
 
-	hint := fmt.Sprintf("E.g. enter T-1 to require T-1 before %s can be closed.", m.linkTaskID)
+	candidates := m.linkCandidateItems()
+	if len(candidates) > 0 {
+		maxRows := max(min(6, termHeight-16), 2)
+		idx := min(max(m.linkCandidateIdx, 0), len(candidates)-1)
+		start := 0
+		if idx >= maxRows {
+			start = idx - maxRows + 1
+		}
+		for i := start; i < min(start+maxRows, len(candidates)); i++ {
+			c := candidates[i]
+			row := truncateToWidth(fmt.Sprintf("%s  %s", c.Label, c.Detail), contentWidth-2)
+			if i == idx {
+				lines = append(lines, theme.RowSelected.Render("► "+row))
+			} else {
+				lines = append(lines, theme.RowNormal.Render("  "+row))
+			}
+		}
+		lines = append(lines, "")
+	}
+
+	hint := fmt.Sprintf("E.g. enter T-1 or use ↑/↓ to require prerequisite before %s can be closed.", m.linkTaskID)
 	for _, hw := range wrapText(hint, contentWidth, "") {
 		lines = append(lines, theme.ModalDesc.Render(hw))
 	}
@@ -102,6 +146,116 @@ func (m Model) renderLinkModal(termWidth, _ int) string {
 
 	inner := strings.Join(lines, "\n")
 	return theme.ModalBox.Width(boxWidth).Render(inner)
+}
+
+func (m Model) renderReplyModal(termWidth, _ int) string {
+	theme := m.theme
+	boxWidth := 64
+	if termWidth > 0 && termWidth-6 < boxWidth {
+		boxWidth = termWidth - 6
+	}
+	if boxWidth < 36 {
+		boxWidth = 36
+	}
+	contentWidth := boxWidth - 4
+
+	lines := []string{
+		theme.ModalTitle.Render(fmt.Sprintf(" ADD REPLY / NOTE TO %s ", m.replyTaskID)),
+		"",
+		theme.SearchPrompt.Render(fmt.Sprintf("  > %s", m.inputViewOrText(m.replyInput))),
+		"",
+	}
+	hint := "Supports [[T-12]], [[T-12#L5]], and [[@topic]] wikilinks."
+	for _, hw := range wrapText(hint, contentWidth, "") {
+		lines = append(lines, theme.ModalDesc.Render(hw))
+	}
+	lines = append(lines, "")
+	confirmKey := theme.ModalKey.Render("[Enter]") + " " + theme.ModalPrompt.Render("Post Reply")
+	cancelKey := theme.ModalCancel.Render("[Esc]") + " " + theme.ModalPrompt.Render("Cancel")
+	lines = append(lines, fmt.Sprintf("%s    %s", confirmKey, cancelKey))
+	return theme.ModalBox.Width(boxWidth).Render(strings.Join(lines, "\n"))
+}
+
+func (m Model) renderHelpModal(termWidth, termHeight int) string {
+	theme := m.theme
+	boxWidth := min(max(termWidth-6, 44), 76)
+	contentWidth := boxWidth - 4
+
+	rows := []string{
+		theme.ModalTitle.Render(" KEYBINDING CHEATSHEET (?) "),
+		"",
+		theme.DetailLabel.Render("Navigation & Layout"),
+		"  j / k, ↑ / ↓       Move cursor / scroll detail pane",
+		"  J / K, Ctrl+d/u    Half-page down / up",
+		"  gg / G             Jump to top / bottom (supports count prefix)",
+		"  Tab / Shift+Tab    Cycle active pane (Topics ↔ Tasks ↔ Details)",
+		"  t                  Toggle dependency DAG Tree View mode",
+		"  B                  Toggle Topics sidebar / narrow-screen drawer",
+		"  < / > / =          Resize or reset split pane divider",
+		"",
+		theme.DetailLabel.Render("Task & Post Actions"),
+		"  n / e              Create new item / Edit item in $EDITOR",
+		"  R / C              Inline reply / comment modal (with [[wikilinks]])",
+		"  d                  Mark DONE / Resolve (or reopen completed item)",
+		"  s / a              Toggle In-Progress / Claim task",
+		"  L / U              Link prerequisite (fuzzy) / Unlink prerequisite",
+		"  M / p              Move item(s) to topic / Promote post to task",
+		"  A / Ctrl+a         Archive or unarchive / Toggle archive visibility",
+		"  Space / v / V      Multi-select item / Toggle all / u to Undo",
+		"",
+		theme.DetailLabel.Render("Topics, Search & Wikilinks"),
+		"  /                  Search & DSL filter (branch:, ext:, pr:, topic:, s:)",
+		"  O / S              Cycle kind (All/Tasks/Posts) / Toggle Local/Global",
+		"  gt / ]t / [t       Fuzzy jump to topic / Next or previous topic",
+		"  gl / ]l / [l / gf  Insert [[link]] / Cycle links / Follow link (gb back)",
+		"",
+		theme.ModalKey.Render("[? / Esc / Enter]") + " " + theme.ModalPrompt.Render("Close Help"),
+	}
+
+	maxLines := max(termHeight-6, 10)
+	if len(rows) > maxLines {
+		rows = append(rows[:maxLines-1], rows[len(rows)-1])
+	}
+	for i := range rows {
+		rows[i] = truncateToWidth(rows[i], contentWidth)
+	}
+	return theme.ModalBox.Width(boxWidth).Render(strings.Join(rows, "\n"))
+}
+
+func (m Model) renderNarrowSidebarModal(termWidth, termHeight int) string {
+	theme := m.theme
+	boxWidth := min(max(termWidth-6, 36), 56)
+	contentWidth := boxWidth - 4
+
+	title := " TOPICS DRAWER "
+	if m.scope == "global" {
+		title = " TOPICS DRAWER · GLOBAL "
+	}
+	lines := []string{theme.ModalTitle.Render(title), ""}
+
+	entries := m.sidebarEntries()
+	maxRows := max(min(12, termHeight-12), 4)
+	start := 0
+	if m.sidebarCursor >= maxRows {
+		start = m.sidebarCursor - maxRows + 1
+	}
+	end := min(start+maxRows, len(entries))
+	for i := start; i < end; i++ {
+		e := entries[i]
+		collapsed := e.Topic != nil && m.collapsed[e.Path]
+		text := strings.Repeat("  ", e.Depth) + topicGlyph(e, collapsed) + " " + e.Label
+		if e.Topic != nil && e.Topic.OpenCount > 0 {
+			text += fmt.Sprintf(" (%d)", e.Topic.OpenCount)
+		}
+		row := truncateToWidth(text, contentWidth-2)
+		if i == m.sidebarCursor {
+			lines = append(lines, theme.RowSelected.Render("► "+row))
+		} else {
+			lines = append(lines, theme.RowNormal.Render("  "+row))
+		}
+	}
+	lines = append(lines, "", theme.ModalDesc.Render(truncateToWidth("j/k nav · Enter select · N new · R rename · D del · B/Esc close", contentWidth)))
+	return theme.ModalBox.Width(boxWidth).Render(strings.Join(lines, "\n"))
 }
 
 func (m Model) overlayModal(bg string, dlg *ConfirmDialog) string {

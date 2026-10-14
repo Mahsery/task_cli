@@ -334,3 +334,47 @@ func (m Model) resolveActor() string {
 	}
 	return git.GetAuthor()
 }
+
+func (m Model) replyTaskCmd(taskID, note string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		actor := m.resolveActor()
+		if _, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+			ID:      taskID,
+			AddNote: &note,
+			Author:  actor,
+		}); err != nil {
+			return errMsg(err)
+		}
+		return m.reloadAfter(nil)
+	}
+}
+
+func (m Model) subscribeEventsCmd() tea.Cmd {
+	if m.client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ch, err := m.client.SubscribeEvents()
+		if err != nil || ch == nil {
+			return nil
+		}
+		return streamSubscribedMsg{ch: ch}
+	}
+}
+
+func (m Model) waitForEventCmd() tea.Cmd {
+	ch := m.eventCh
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ev, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return daemonEventMsg(ev)
+	}
+}

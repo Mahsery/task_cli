@@ -580,3 +580,126 @@ func TestTUIVimKMotionHalfPageUp(t *testing.T) {
 		t.Fatalf("expected kindFilter 'task' after pressing 'O', got %q", mCycled.kindFilter)
 	}
 }
+
+func TestTUIPowerUpsHelpReplyDrawerEventStreamAndDetailFields(t *testing.T) {
+	t1 := &domain.Task{
+		ID:          "T-1",
+		Title:       "Primary Task",
+		Kind:        domain.KindTask,
+		Status:      domain.StatusInProgress,
+		Priority:    domain.PriorityHigh,
+		Branch:      "feat/t-1-primary",
+		ExternalRef: "gh:org/repo#42",
+		PRURL:       "https://github.com/org/repo/pull/99",
+		Commits: []domain.TaskCommit{
+			{TaskID: "T-1", SHA: "11111112222222", Subject: "feat: first commit"},
+			{TaskID: "T-1", SHA: "33333334444444", Subject: "feat: second commit"},
+		},
+	}
+	t2 := &domain.Task{
+		ID:       "T-2",
+		Title:    "Second Candidate Task",
+		Kind:     domain.KindTask,
+		Status:   domain.StatusOpen,
+		Priority: domain.PriorityNormal,
+	}
+	t3 := &domain.Task{
+		ID:       "T-3",
+		Title:    "Third Candidate Task",
+		Kind:     domain.KindTask,
+		Status:   domain.StatusOpen,
+		Priority: domain.PriorityLow,
+	}
+
+	m := NewModel(nil, "local", "/tmp/repo", "tester")
+	m.width = 140
+	m.height = 40
+	m.tasks = []*domain.Task{t1, t2, t3}
+	m.activePane = PaneList
+
+	// 1. Verify detailDoc renders Branch, Ext, PR, and Attached Commits (2)
+	doc := m.detailDoc(70)
+	joined := strings.Join(doc.lines, "\n")
+	for _, want := range []string{
+		"feat/t-1-primary",
+		"gh:org/repo#42",
+		"https://github.com/org/repo/pull/99",
+		"Attached Commits (2)",
+		"1111111",
+		"3333333",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("expected detail doc to contain %q, got:\n%s", want, joined)
+		}
+	}
+
+	// 2. Verify '?' opens and closes the help cheatsheet modal
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	mHelp := mustModel(t, updated)
+	if !mHelp.showHelp {
+		t.Fatalf("expected showHelp=true after pressing '?'")
+	}
+	if !strings.Contains(mHelp.View(), "KEYBINDING CHEATSHEET") {
+		t.Fatalf("expected View() to render KEYBINDING CHEATSHEET")
+	}
+	updated, _ = mHelp.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mHelpClosed := mustModel(t, updated)
+	if mHelpClosed.showHelp {
+		t.Fatalf("expected showHelp=false after Esc")
+	}
+
+	// 3. Verify 'R' opens inline reply modal in PaneList
+	updated, _ = mHelpClosed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	mReply := mustModel(t, updated)
+	if !mReply.isReplying || mReply.replyTaskID != "T-1" {
+		t.Fatalf("expected isReplying=true for T-1, got isReplying=%v replyTaskID=%q", mReply.isReplying, mReply.replyTaskID)
+	}
+	if !strings.Contains(mReply.View(), "ADD REPLY / NOTE") {
+		t.Fatalf("expected View() to render ADD REPLY / NOTE")
+	}
+	updated, _ = mReply.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mReplyClosed := mustModel(t, updated)
+	if mReplyClosed.isReplying {
+		t.Fatalf("expected isReplying=false after Esc")
+	}
+
+	// 4. Verify 'L' opens fuzzy prerequisite picker and down/up navigates candidates
+	updated, _ = mReplyClosed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'L'}})
+	mLink := mustModel(t, updated)
+	if !mLink.isLinking {
+		t.Fatalf("expected isLinking=true after pressing 'L'")
+	}
+	cands := mLink.linkCandidateItems()
+	if len(cands) != 2 {
+		t.Fatalf("expected 2 link candidates (T-2, T-3), got %d", len(cands))
+	}
+	updated, _ = mLink.Update(tea.KeyMsg{Type: tea.KeyDown})
+	mLinkDown := mustModel(t, updated)
+	if mLinkDown.linkCandidateIdx != 1 {
+		t.Fatalf("expected linkCandidateIdx=1 after KeyDown, got %d", mLinkDown.linkCandidateIdx)
+	}
+	updated, _ = mLinkDown.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mLinkClosed := mustModel(t, updated)
+
+	// 5. Verify 'B' toggles sidebarHidden on wide screens and narrowSidebarOpen on narrow screens
+	updated, _ = mLinkClosed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	mWideB := mustModel(t, updated)
+	if !mWideB.sidebarHidden {
+		t.Fatalf("expected sidebarHidden=true after pressing 'B' on wide screen")
+	}
+	mWideB.width = 90 // Narrow screen (< 100 cols)
+	mWideB.sidebarHidden = false
+	updated, _ = mWideB.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	mNarrowB := mustModel(t, updated)
+	if !mNarrowB.narrowSidebarOpen || mNarrowB.activePane != PaneSidebar {
+		t.Fatalf("expected narrowSidebarOpen=true and activePane=PaneSidebar on narrow screen")
+	}
+	if !strings.Contains(mNarrowB.View(), "TOPICS DRAWER") {
+		t.Fatalf("expected View() to render TOPICS DRAWER on narrow screen")
+	}
+	updated, _ = mNarrowB.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mNarrowClosed := mustModel(t, updated)
+	if mNarrowClosed.narrowSidebarOpen {
+		t.Fatalf("expected narrowSidebarOpen=false after Esc")
+	}
+}

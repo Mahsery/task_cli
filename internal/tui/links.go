@@ -564,6 +564,15 @@ func (m Model) detailDoc(detailWidth int) detailDoc {
 		}
 		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(assigneeDisplay)))
 	}
+	if t.Branch != "" {
+		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Branch:"), theme.ModalKey.Render(t.Branch)))
+	}
+	if t.ExternalRef != "" {
+		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Ext:"), theme.TaskID.Render(t.ExternalRef)))
+	}
+	if t.PRURL != "" {
+		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("PR:"), theme.Link.Render(t.PRURL)))
+	}
 	fullMeta := meta1 + "   " + strings.Join(metaParts, "   ")
 	if lipgloss.Width(fullMeta) <= detailWidth {
 		doc.lines = append(doc.lines, fullMeta)
@@ -623,7 +632,22 @@ func (m Model) detailDoc(detailWidth int) detailDoc {
 		doc.lines = append(doc.lines, renderedDesc...)
 	}
 
-	// Commit resolution & diff
+	// Commit resolution, multi-commit log & diff
+	if len(t.Commits) > 1 {
+		doc.lines = append(doc.lines,
+			strings.Repeat(" ", detailWidth),
+			theme.DetailResolved.Width(detailWidth).Render(fmt.Sprintf("  ✓ Attached Commits (%d):", len(t.Commits))),
+		)
+		for i := range t.Commits {
+			c := &t.Commits[i]
+			sha := c.SHA
+			if len(sha) > 7 {
+				sha = sha[:7]
+			}
+			line := fmt.Sprintf("    • %s %s", sha, c.Subject)
+			doc.lines = append(doc.lines, theme.DetailResolved.Width(detailWidth).Render(truncateToWidth(line, detailWidth-2)))
+		}
+	}
 	if t.CommitSHA != "" {
 		doc.lines = append(doc.lines, strings.Repeat(" ", detailWidth))
 		resText := fmt.Sprintf("✓ Resolved by commit %s: %s", t.CommitSHA, t.CommitMsg)

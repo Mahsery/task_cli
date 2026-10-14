@@ -20,6 +20,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.statusMsg = ""
 	}
+	if m.showHelp {
+		switch msg.String() {
+		case "?", "esc", "enter", "q":
+			m.showHelp = false
+			return m, nil
+		}
+		return m, nil
+	}
 	maxRows := m.getMaxRows()
 	if dlg := m.activeConfirmDialog(); dlg != nil {
 		k := msg.String()
@@ -71,10 +79,28 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.isLinking {
+		candidates := m.linkCandidateItems()
 		switch msg.String() {
+		case "down":
+			if len(candidates) > 0 {
+				m.linkCandidateIdx = min(m.linkCandidateIdx+1, len(candidates)-1)
+			}
+			return m, nil
+		case "up":
+			if len(candidates) > 0 {
+				m.linkCandidateIdx = max(m.linkCandidateIdx-1, 0)
+			}
+			return m, nil
 		case "enter":
 			m.isLinking = false
 			prereqID := strings.TrimSpace(m.input.Value())
+			if len(candidates) > 0 && m.linkCandidateIdx >= 0 && m.linkCandidateIdx < len(candidates) {
+				if prereqID == "" {
+					prereqID = candidates[m.linkCandidateIdx].Value
+				} else if norm, err := domain.NormalizeID(prereqID, m.scope); err != nil || m.lookupItem(norm) == nil {
+					prereqID = candidates[m.linkCandidateIdx].Value
+				}
+			}
 			m.linkInput = prereqID
 			m.input.Blur()
 			if prereqID != "" {
@@ -85,6 +111,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.isLinking = false
 			m.linkInput = ""
+			m.linkCandidateIdx = 0
 			m.input.Reset()
 			m.input.Blur()
 			m.statusMsg = "Link cancelled"
@@ -92,6 +119,43 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		default:
 			cmd := m.updateInput(msg)
 			m.linkInput = m.input.Value()
+			m.linkCandidateIdx = 0
+			return m, cmd
+		}
+	}
+
+	if m.isReplying {
+		switch msg.String() {
+		case "enter":
+			m.isReplying = false
+			note := strings.TrimSpace(m.input.Value())
+			taskID := m.replyTaskID
+			m.replyInput = ""
+			m.input.Reset()
+			m.input.Blur()
+			if note == "" {
+				m.statusMsg = "Reply cancelled (empty)"
+				return m, nil
+			}
+			if cur := m.lookupItem(taskID); cur != nil {
+				cur.Notes = append(cur.Notes, domain.TaskNote{
+					Author:    m.resolveActor(),
+					Content:   note,
+					CreatedAt: time.Now(),
+				})
+			}
+			m.statusMsg = fmt.Sprintf("Added reply to %s", taskID)
+			return m, m.replyTaskCmd(taskID, note)
+		case "esc":
+			m.isReplying = false
+			m.replyInput = ""
+			m.input.Reset()
+			m.input.Blur()
+			m.statusMsg = "Reply cancelled"
+			return m, nil
+		default:
+			cmd := m.updateInput(msg)
+			m.replyInput = m.input.Value()
 			return m, cmd
 		}
 	}
@@ -207,6 +271,48 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+
+	case "?":
+		m.showHelp = true
+		return m, nil
+
+	case "B":
+		width, _ := m.termSize()
+		if width >= splitMinWidth+15 {
+			m.sidebarHidden = !m.sidebarHidden
+			if m.sidebarHidden {
+				if m.activePane == PaneSidebar {
+					m.activePane = PaneList
+				}
+				m.statusMsg = "Topics sidebar hidden"
+			} else {
+				m.activePane = PaneSidebar
+				m.statusMsg = "Topics sidebar visible"
+			}
+		} else {
+			m.narrowSidebarOpen = !m.narrowSidebarOpen
+			if m.narrowSidebarOpen {
+				m.activePane = PaneSidebar
+				m.statusMsg = "Topics drawer opened"
+			} else {
+				m.activePane = PaneList
+				m.statusMsg = "Topics drawer closed"
+			}
+		}
+		return m, nil
+
+	case "C", "R":
+		if m.activePane == PaneSidebar {
+			return m, nil
+		}
+		if cur := m.currentTask(); cur != nil {
+			m.isReplying = true
+			m.replyInput = ""
+			m.replyTaskID = cur.ID
+			m.focusInput()
+			m.statusMsg = fmt.Sprintf("Replying to %s", cur.ID)
+		}
+		return m, nil
 
 	case "tab":
 		l := m.layout()

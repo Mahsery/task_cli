@@ -540,6 +540,7 @@ func (m Model) handleSidebarKey(k string, count int) (Model, tea.Cmd, bool) {
 		}
 		e := entries[m.sidebarCursor]
 		m.activePane = PaneList
+		m.narrowSidebarOpen = false
 		if e.Path == m.topicPath && e.Kind == m.kindFilter {
 			m.statusMsg = "Tasks focused"
 			return m, nil, true
@@ -559,6 +560,7 @@ func (m Model) handleSidebarKey(k string, count int) (Model, tea.Cmd, bool) {
 		// Already the leftmost pane.
 	case "esc", "c":
 		m.activePane = PaneList
+		m.narrowSidebarOpen = false
 		m.statusMsg = "Tasks focused"
 	case "N":
 		m.openTopicForm(topicFormCreate)

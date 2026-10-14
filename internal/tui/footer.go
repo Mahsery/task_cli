@@ -173,6 +173,7 @@ func (m Model) renderFooter(width int) string {
 		}
 		candidateKeys = append(candidateKeys,
 			key("Enter", "Follow/Diff"),
+			key("R", "Reply"),
 			key("[]l", "Link"),
 			key("gf", "Follow"),
 			key("gl", "Insert"),
@@ -185,6 +186,7 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = append(candidateKeys, key("U", "Unlink"))
 		}
 		candidateKeys = append(candidateKeys,
+			key("?", "Help"),
 			theme.Age.Render("[q] Quit"),
 		)
 	} else {
@@ -240,6 +242,7 @@ func (m Model) renderFooter(width int) string {
 				key("Space", "Sel"),
 				key("n", "New"),
 				key("e", "Edit"),
+				key("R", "Reply"),
 			)
 			if isPost {
 				candidateKeys = append(candidateKeys, key("p", "Promote"))
@@ -254,6 +257,7 @@ func (m Model) renderFooter(width int) string {
 				archiveLabel,
 				theme.DiffSub.Render("[x] Del"),
 				key("/", "Find"),
+				key("?", "Help"),
 				theme.Age.Render("[q] Quit"),
 			)
 		} else if width >= 80 {

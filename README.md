@@ -107,12 +107,18 @@ tk
 | `tk search` | `find` | `<query...> [-s status] [-p prio] [-a user] [--short] [--limit N]` | Search items with boolean DSL (`AND`, `OR`, `NOT`, `topic:`, `kind:`, `links:`, `s:`, `p:`) | `tk search "mem leak" AND urgent`<br>`tk search links:T-1` |
 | `tk show` | — | `<id> [-n/--lines] [--json]` | Display metadata, links, backlinks, notes, commit SHA, and diff; `-n` numbers lines | `tk show 1 -n`<br>`tk show G-2 --json` |
 | `tk claim` | — | `<id> [--actor actor] [--force]` | Atomically claim a task for the current actor; prevents race conditions | `tk claim 1`<br>`tk claim T-1 --actor bot-1` |
+| `tk start` | — | `[id] [-b/--branch] [--worktree <dir>] [--actor actor]` | Claim task, bind git branch (`feat/t-<id>-<slug>`), and optionally create/checkout branch or worktree | `tk start T-1 -b`<br>`tk start T-1 --worktree ../wt-1` |
+| `tk branch` | — | `[id] [-d/--detach]` | Show task bound to current git branch, or bind/unbind a task to the current branch | `tk branch`<br>`tk branch T-1` |
 | `tk takeover` | `take` | `<id> -m <message> [--actor actor] [--force]` | Take over a task from another actor or an orphaned task with attribution | `tk takeover 1 -m "Taking over"`<br>`tk take T-1` |
 | `tk transfer` | — | `<id> [new-actor] [--to actor] [-m note]` | Hand off and transfer task ownership to another actor | `tk transfer 1 agent-gamma -m "Handing off"` |
 | `tk orphan` | — | `[id] [--older-than dur] [--all] [--dry-run] [-l/--list]` | Detect and mark abandoned tasks as orphaned; drops assignee and resets to open | `tk orphan reap --dry-run`<br>`tk orphan list` |
 | `tk edit` | — | `<id> [-t title] [-s status] [-p prio] [--claim] [-a user] [-m note] [-d desc]` | Modify task fields via CLI flags, append notes/wikilinks, or open `$EDITOR` | `tk edit T-1 -s in_progress -m "Note"` |
-| `tk done` | `close`, `resolve` | `<id> [-c commit] [-m msg] [--diff] [--no-commit] [-f/--force]` | Mark task done; auto-snaps HEAD Git commit/diff (override blocked with `-f`) | `tk done T-1`<br>`tk done T-1 --diff` |
-| `tk attach` | — | `<id> [commit-ref] [-m msg] [--diff]` | Snapshot git commit or uncommitted working tree diff into task without closing | `tk attach T-1 HEAD`<br>`tk attach T-1 --diff` |
+| `tk done` | `close`, `resolve` | `[id] [-c commit] [-m msg] [--diff] [--no-commit] [-f/--force]` | Mark task done (infers ID from branch if omitted); auto-snaps HEAD Git commit/diff | `tk done T-1`<br>`tk done` |
+| `tk attach` | — | `[id] [commit-ref\|A..B] [-m msg] [--diff] [--scan [range]]` | Snapshot commit, commit range (`main..HEAD`), or `--scan` trailer commits into task | `tk attach T-1 HEAD`<br>`tk attach --scan main..HEAD` |
+| `tk patch` | `format-patch` | `[id] [-o dir] [--stdout]` | Export attached task commits or unified diff as a Git patch series (`git am` ready) | `tk patch T-1 --stdout`<br>`tk patch T-1 -o ./patches` |
+| `tk hooks` | — | `[install\|uninstall\|status]` | Install non-destructive `prepare-commit-msg` and `post-commit` Git hooks for auto task linking | `tk hooks install`<br>`tk hooks status` |
+| `tk pr` | — | `[create\|status] [id] [--draft] [--base branch]` | Create or sync a GitHub Pull Request from a task via `gh` CLI | `tk pr create T-1`<br>`tk pr status T-1` |
+| `tk gh` | — | `[import <num>\|push <id>] [-T topic]` | Import a GitHub Issue as a task (`gh:owner/repo#N`) or push a local task/post to GitHub Issues | `tk gh import 42`<br>`tk gh push T-1` |
 | `tk delete` | `rm` | `<id> [-y/--yes] [-f/--force]` | Remove a task to the tombstone archive (prompts unless `-y` or `-f`) | `tk delete T-1 -y` |
 | `tk restore` | `undo-delete` | `<id\|latest> [-l/--list] [-d/--db] [-f]` | Restore deleted task from tombstone archive, or restore database with `--db` | `tk restore T-1`<br>`tk restore --db latest -f` |
 | `tk archive` | `arc` | `[id...] [-l] [-m reason]` | Archive tasks to hide from active backlog; `tk archive list` | `tk archive T-1 T-2` |
@@ -156,8 +162,10 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 
 | Keybinding | Action | Description |
 |:----------:|--------|-------------|
+| `?` | Help Cheatsheet | Toggle full interactive keybinding cheatsheet modal |
 | `Tab` / `Shift+Tab` | Cycle Active Pane | Switch focus between Topic Sidebar, Item List, and Details Pane |
 | `h` / `l` / `←` / `→` | Navigate Panes | Move focus horizontally between panes |
+| `B` | Topic Drawer / Sidebar | Toggle Topic Sidebar visibility on wide screens, or open slide-over Topic Drawer on narrow terminals (`<100` cols) |
 | `j` / `k` / `↓` / `↑` | Move / Scroll | In **Sidebar**: select topic; in **List**: navigate items; in **Details**: scroll content (supports `{count}j`/`{count}k`) |
 | `gg` / `G` / `Home` / `End` | Top / Bottom | Jump to top or bottom of the active pane (supports `{line}G`) |
 | `Ctrl+D` / `Ctrl+U` / `J` / `K` / `PgDn` / `PgUp` | Fast Page Scroll | Page scroll content down/up in the active pane |
@@ -169,11 +177,12 @@ Running `tk` without subcommands inside any standard terminal opens the interact
 | `Enter` / `gf` | Follow Link / Toggle Diff | Follow focused wikilink (`{n}gf` jumps to link #n), or toggle unified git diff in Details |
 | `gb` / `gB` | Jump History | Navigate backward / forward through navigation history stack |
 | `gl` | Insert Link Modal | Open modal to select an item and append an Obsidian-style wikilink `[[...]]` |
+| `R` / `C` | Inline Reply / Note | In **List** / **Details**: open inline modal to append a note/comment without launching `$EDITOR` |
 | `M` | Move Items / Topic | In **List**: move selected items to another topic; in **Sidebar**: move topic under a new parent |
 | `p` | Promote Post | In **List**: promote selected board post (`P-n`) into a task (`T-n`) |
 | `N` / `R` / `D` | Topic Management | In **Sidebar**: `N` creates topic, `R` renames topic, `D` deletes topic (`Space` folds group) |
 | `t` | Toggle Tree Mode | In **Tasks topic**: toggle between flat list and hierarchical DAG graph tree |
-| `L` | Link Dependency Modal | Open interactive modal to add a prerequisite dependency |
+| `L` | Link Dependency Modal | Open interactive fuzzy modal to add a prerequisite dependency |
 | `U` | Unlink Dependency Modal | Open interactive fuzzy picker to remove a prerequisite dependency |
 | `Space` | Multi-Select Toggle | Toggle item selection (`●`/`○` marker) and advance cursor down |
 | `v` / `V` | Select / Select All | Toggle item selection / select all visible items |
