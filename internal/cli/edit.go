@@ -128,22 +128,35 @@ When [id] is omitted, infers the active task from the current git branch.`,
 			if err != nil {
 				return err
 			}
-			trimmedTitle := strings.TrimSpace(parsed.Title)
-			if trimmedTitle == "" {
+			if strings.TrimSpace(parsed.Title) == "" {
 				return fmt.Errorf("task title cannot be empty")
 			}
-			payload.Title = &trimmedTitle
-			payload.Status = &parsed.Status
-			payload.Priority = &parsed.Priority
-			payload.Tags = &parsed.Tags
-			payload.Assignee = &parsed.Assignee
-			payload.Description = &parsed.Description
-			if parsed.NewNote != "" {
-				payload.AddNote = &parsed.NewNote
+			ch := parsed.Changes(task)
+			if ch.Empty() {
+				fmt.Printf("%s: no changes\n", task.ID)
+				return nil
+			}
+			payload.Title = ch.Title
+			payload.Status = ch.Status
+			payload.Priority = ch.Priority
+			payload.Tags = ch.Tags
+			payload.Assignee = ch.Assignee
+			payload.Description = ch.Description
+			payload.AddNote = ch.AddNote
+			if ch.Topic != "" {
+				if _, err := taskClient.MoveItems([]string{task.ID}, ch.Topic, resolveAuthor("")); err != nil {
+					return fmt.Errorf("failed to move %s to @%s: %w", task.ID, ch.Topic, err)
+				}
 			}
 		}
 
-		updated, err := taskClient.UpdateTask(payload)
+		var updated *domain.Task
+		if payloadIsEmpty(payload) {
+			// Only the topic changed (already applied via MoveItems).
+			updated, err = taskClient.GetTask(taskID)
+		} else {
+			updated, err = taskClient.UpdateTask(payload)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to update task: %w", err)
 		}
@@ -173,4 +186,11 @@ func init() {
 	_ = editCmd.Flags().MarkHidden("tags")
 	_ = editCmd.Flags().MarkHidden("add-tag")
 	_ = editCmd.Flags().MarkHidden("remove-tag")
+}
+
+// payloadIsEmpty reports whether p would change nothing on the task.
+func payloadIsEmpty(p protocol.UpdateTaskPayload) bool {
+	return p.Title == nil && p.Description == nil && p.Status == nil && p.Priority == nil &&
+		p.Tags == nil && len(p.AddTags) == 0 && len(p.RemoveTags) == 0 && p.Assignee == nil &&
+		p.AddNote == nil && p.Branch == nil && p.ExternalRef == nil && p.PRURL == nil
 }

@@ -1000,57 +1000,80 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if cur := m.currentTask(); cur != nil {
-			t := cur
-			tmpPath, err := editor.CreateEditTaskFile(t)
-			if err != nil {
-				return m, func() tea.Msg { return errMsg(err) }
-			}
-			cmd := editor.BuildEditorCmd(m.editorCmd, tmpPath)
-			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-				if err != nil {
-					_ = os.Remove(tmpPath)
-					return errMsg(err)
-				}
-				data, err := os.ReadFile(tmpPath)
-				if err != nil {
-					return errMsg(err)
-				}
-				parsed, err := editor.ParseEditTaskContent(string(data), t)
-				if err != nil {
-					return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
-				}
-				var addNote *string
-				if parsed.NewNote != "" {
-					addNote = &parsed.NewNote
-				}
-				_, err = m.client.UpdateTask(protocol.UpdateTaskPayload{
-					ID:          t.ID,
-					Title:       &parsed.Title,
-					Description: &parsed.Description,
-					Status:      &parsed.Status,
-					Priority:    &parsed.Priority,
-					Assignee:    &parsed.Assignee,
-					AddNote:     addNote,
-					Author:      m.resolveActor(),
-				})
-				if err != nil {
-					return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
-				}
-				origTopic := t.TopicPath
-				if origTopic == "" {
-					origTopic = domain.UnfiledTopic
-				}
-				if parsed.Topic != "" && parsed.Topic != origTopic {
-					if _, err := m.client.MoveItems([]string{t.ID}, parsed.Topic, m.resolveActor()); err != nil {
-						return m.reloadAfter(fmt.Errorf("saved, but move to @%s failed: %w", parsed.Topic, err))
-					}
-				}
-				_ = os.Remove(tmpPath)
-				return m.reloadAfter(nil)
-			})
+			return m, m.fetchForEditCmd(cur)
 		}
 	}
 	return m, nil
+}
+
+// editTaskMsg carries the freshest copy of an item, ready to open in $EDITOR.
+type editTaskMsg struct{ task *domain.Task }
+
+// fetchForEditCmd re-reads the item from the daemon so the editor template is
+// not built from a list snapshot that another actor may have updated since.
+func (m Model) fetchForEditCmd(cached *domain.Task) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return editTaskMsg{task: cached}
+		}
+		fresh, err := m.client.GetTask(cached.ID)
+		if err != nil || fresh == nil {
+			return errMsg(fmt.Errorf("cannot edit %s: failed to load latest version: %w", cached.ID, err))
+		}
+		return editTaskMsg{task: fresh}
+	}
+}
+
+// openEditTaskEditor opens t in $EDITOR and, on save, sends only the fields the
+// user changed relative to t.
+func (m Model) openEditTaskEditor(t *domain.Task) (tea.Model, tea.Cmd) {
+	tmpPath, err := editor.CreateEditTaskFile(t)
+	if err != nil {
+		return m, func() tea.Msg { return errMsg(err) }
+	}
+	cmd := editor.BuildEditorCmd(m.editorCmd, tmpPath)
+	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			_ = os.Remove(tmpPath)
+			return errMsg(err)
+		}
+		data, err := os.ReadFile(tmpPath)
+		if err != nil {
+			return errMsg(err)
+		}
+		parsed, err := editor.ParseEditTaskContent(string(data), t)
+		if err != nil {
+			return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
+		}
+		ch := parsed.Changes(t)
+		if ch.Empty() {
+			_ = os.Remove(tmpPath)
+			return statusMsg(fmt.Sprintf("%s: no changes", t.ID))
+		}
+		if ch.Title != nil || ch.Description != nil || ch.Status != nil || ch.Priority != nil ||
+			ch.Tags != nil || ch.Assignee != nil || ch.AddNote != nil {
+			if _, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
+				ID:          t.ID,
+				Title:       ch.Title,
+				Description: ch.Description,
+				Status:      ch.Status,
+				Priority:    ch.Priority,
+				Tags:        ch.Tags,
+				Assignee:    ch.Assignee,
+				AddNote:     ch.AddNote,
+				Author:      m.resolveActor(),
+			}); err != nil {
+				return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
+			}
+		}
+		if ch.Topic != "" {
+			if _, err := m.client.MoveItems([]string{t.ID}, ch.Topic, m.resolveActor()); err != nil {
+				return m.reloadAfter(fmt.Errorf("saved, but move to @%s failed: %w", ch.Topic, err))
+			}
+		}
+		_ = os.Remove(tmpPath)
+		return m.reloadAfter(nil)
+	})
 }
 
 func (m Model) openNewTaskEditor(top string) (tea.Model, tea.Cmd) {

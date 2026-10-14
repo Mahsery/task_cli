@@ -157,3 +157,60 @@ func TestParseNewTaskSkipsKeylessHeaderComments(t *testing.T) {
 		t.Errorf("got desc=%q prio=%q", parsed.Description, parsed.Priority)
 	}
 }
+
+func editRoundTrip(t *testing.T, orig *domain.Task, mutate func(string) string) *ParsedEditTask {
+	t.Helper()
+	path, err := CreateEditTaskFile(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Remove(path) }()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseEditTaskContent(mutate(string(data)), orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed
+}
+
+// Opening and closing the editor without touching anything must produce no
+// update at all (no write, no event, nothing to clobber).
+func TestEditChangesEmptyWhenUntouched(t *testing.T) {
+	for _, orig := range []*domain.Task{
+		{ID: "T-1", Title: "A", Status: domain.StatusOpen, Priority: domain.PriorityNormal, Description: "body\n\n"},
+		{ID: "T-2", Title: "B", Status: domain.StatusInProgress, Priority: domain.PriorityHigh, Assignee: "x", TopicPath: "game/nav", Tags: []string{"a"}},
+	} {
+		ch := editRoundTrip(t, orig, func(s string) string { return s }).Changes(orig)
+		if !ch.Empty() {
+			t.Errorf("%s: expected no changes, got %+v", orig.ID, ch)
+		}
+	}
+}
+
+// Changing one field must send only that field, so a concurrent update to any
+// other field (e.g. an agent claiming the task while $EDITOR is open) survives.
+func TestEditChangesOnlyTouchedFields(t *testing.T) {
+	orig := &domain.Task{ID: "T-3", Title: "C", Status: domain.StatusOpen, Priority: domain.PriorityNormal, Description: "body"}
+	ch := editRoundTrip(t, orig, func(s string) string {
+		return strings.Replace(s, "# Priority: normal", "# Priority: urgent", 1)
+	}).Changes(orig)
+	if ch.Priority == nil || *ch.Priority != domain.PriorityUrgent {
+		t.Fatalf("expected priority change, got %+v", ch)
+	}
+	if ch.Title != nil || ch.Description != nil || ch.Status != nil || ch.Assignee != nil || ch.Tags != nil || ch.AddNote != nil || ch.Topic != "" {
+		t.Errorf("untouched fields leaked into update: %+v", ch)
+	}
+}
+
+func TestEditChangesTopicMove(t *testing.T) {
+	orig := &domain.Task{ID: "T-4", Title: "D", Status: domain.StatusOpen, Priority: domain.PriorityNormal}
+	ch := editRoundTrip(t, orig, func(s string) string {
+		return strings.Replace(s, "# Topic: unfiled", "# Topic: game/nav", 1)
+	}).Changes(orig)
+	if ch.Topic != "game/nav" {
+		t.Errorf("expected topic move to game/nav, got %q", ch.Topic)
+	}
+}

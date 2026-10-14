@@ -69,6 +69,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case daemonEventMsg:
 		return m, tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd(), m.waitForEventCmd())
 
+	case editTaskMsg:
+		return m.openEditTaskEditor(msg.task)
+
 	case statusMsg:
 		m.statusMsg = string(msg)
 		return m, nil

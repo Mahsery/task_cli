@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"task_cli/internal/domain"
@@ -32,6 +33,57 @@ type ParsedEditTask struct {
 	Assignee    string
 	Description string
 	NewNote     string
+}
+
+// EditChanges lists the fields an editor session actually modified relative to
+// the snapshot it was opened with. Nil pointers mean "unchanged", so a save
+// never overwrites concurrent updates to fields the user did not touch.
+type EditChanges struct {
+	Title       *string
+	Description *string
+	Status      *domain.Status
+	Priority    *domain.Priority
+	Tags        *[]string
+	Assignee    *string
+	AddNote     *string
+	// Topic is the new topic ("unfiled" = clear), or "" when unchanged.
+	Topic string
+}
+
+// Empty reports whether the session changed nothing at all.
+func (c EditChanges) Empty() bool {
+	return c.Title == nil && c.Description == nil && c.Status == nil && c.Priority == nil &&
+		c.Tags == nil && c.Assignee == nil && c.AddNote == nil && c.Topic == ""
+}
+
+// Changes diffs p against orig, the task the edit template was generated from.
+func (p *ParsedEditTask) Changes(orig *domain.Task) EditChanges {
+	var c EditChanges
+	if p.Title != orig.Title {
+		c.Title = &p.Title
+	}
+	if p.Description != strings.TrimSpace(orig.Description) {
+		c.Description = &p.Description
+	}
+	if p.Status != orig.Status {
+		c.Status = &p.Status
+	}
+	if p.Priority != orig.Priority {
+		c.Priority = &p.Priority
+	}
+	if !slices.Equal(p.Tags, orig.Tags) {
+		c.Tags = &p.Tags
+	}
+	if p.Assignee != orig.Assignee {
+		c.Assignee = &p.Assignee
+	}
+	if p.NewNote != "" {
+		c.AddNote = &p.NewNote
+	}
+	if p.Topic != "" && p.Topic != editTopicValue(orig) {
+		c.Topic = p.Topic
+	}
+	return c
 }
 
 // writeTempFile creates a temp file matching pattern, writes content to it and
