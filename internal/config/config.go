@@ -4,8 +4,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 
 	"task_cli/internal/git"
 )
@@ -34,12 +37,14 @@ func Load() *Config {
 
 	socketPath := os.Getenv("TK_SOCKET")
 	if socketPath == "" {
-		// Use /run/user/<uid>/tk.sock if available, otherwise appDir/tk.sock
-		uid := os.Getuid()
-		runUserDir := "/run/user/" + strconv.Itoa(uid)
-		if stat, err := os.Stat(runUserDir); err == nil && stat.IsDir() {
-			socketPath = filepath.Join(runUserDir, "tk.sock")
-		} else {
+		// Use /run/user/<uid>/tk.sock if available on Unix, otherwise appDir/tk.sock
+		if uid := os.Getuid(); uid >= 0 {
+			runUserDir := "/run/user/" + strconv.Itoa(uid)
+			if stat, err := os.Stat(runUserDir); err == nil && stat.IsDir() {
+				socketPath = filepath.Join(runUserDir, "tk.sock")
+			}
+		}
+		if socketPath == "" {
 			socketPath = filepath.Join(appDir, "tk.sock")
 		}
 	}
@@ -51,7 +56,7 @@ func Load() *Config {
 		editor = os.Getenv("EDITOR")
 	}
 	if editor == "" {
-		editor = "nvim"
+		editor = defaultEditor()
 	}
 
 	actor := os.Getenv("TK_ACTOR")
@@ -65,6 +70,9 @@ func Load() *Config {
 		actor = os.Getenv("USER")
 	}
 	if actor == "" {
+		actor = os.Getenv("USERNAME")
+	}
+	if actor == "" {
 		actor = "anonymous"
 	}
 
@@ -75,6 +83,16 @@ func Load() *Config {
 		Editor:     editor,
 		Actor:      actor,
 	}
+}
+
+func defaultEditor() string {
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath("nvim"); err == nil {
+			return "nvim"
+		}
+		return "notepad"
+	}
+	return "nvim"
 }
 
 func (c *Config) GlobalDBPath() string {
@@ -92,7 +110,7 @@ func (c *Config) CentralBackupDir(repoPath string) string {
 	}
 	clean := filepath.Clean(repoPath)
 	base := filepath.Base(clean)
-	if base == "" || base == "/" || base == "." {
+	if base == "" || base == "/" || base == `\` || base == "." || strings.ContainsRune(base, ':') {
 		base = "root"
 	}
 	h := sha256.Sum256([]byte(clean))

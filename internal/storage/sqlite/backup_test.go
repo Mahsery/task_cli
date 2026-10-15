@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -131,26 +132,31 @@ func TestResurrectUnlinkedDatabase(t *testing.T) {
 		t.Fatalf("create task failed: %v", err)
 	}
 
-	dbPath := db.Path()
-
-	// 2. Unlink/delete the database file from disk while db is still open
-	if err := os.Remove(dbPath); err != nil {
-		t.Fatalf("failed to delete db file: %v", err)
+	targetPath := db.Path()
+	if runtime.GOOS == "windows" {
+		// Windows SQLite VFS holds an OS-level delete lock while the file handle is open;
+		// test resurrecting the active connection to a missing target path on disk.
+		targetPath = filepath.Join(t.TempDir(), "resurrected", "test.db")
+	} else {
+		// 2. Unlink/delete the database file from disk while db is still open
+		if err := os.Remove(targetPath); err != nil {
+			t.Fatalf("failed to delete db file: %v", err)
+		}
+		_ = os.Remove(targetPath + "-wal")
+		_ = os.Remove(targetPath + "-shm")
 	}
-	_ = os.Remove(dbPath + "-wal")
-	_ = os.Remove(dbPath + "-shm")
 
-	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
-		t.Fatalf("expected dbPath to not exist on disk")
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Fatalf("expected targetPath to not exist on disk")
 	}
 
-	// 3. Resurrect to dbPath
-	if err := db.Resurrect(dbPath); err != nil {
+	// 3. Resurrect to targetPath
+	if err := db.Resurrect(targetPath); err != nil {
 		t.Fatalf("Resurrect failed: %v", err)
 	}
 
 	// 4. Verify file exists on disk and is non-empty
-	stat, err := os.Stat(dbPath)
+	stat, err := os.Stat(targetPath)
 	if err != nil || stat.Size() == 0 {
 		t.Fatalf("expected resurrected db on disk with non-zero size, got stat: %v", err)
 	}

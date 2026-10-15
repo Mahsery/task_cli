@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -28,7 +29,7 @@ func TestHookInstallAndUninstallPreservesUserHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("expected hook script to be executable, got mode %v", info.Mode())
 	}
 

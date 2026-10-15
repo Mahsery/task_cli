@@ -80,7 +80,8 @@ and subsequent lines form the description.`,
 				desc = newDescription
 			}
 
-			if piped {
+			hasExplicitTitleAndDesc := cmd.Flags().Changed("title") && (cmd.Flags().Changed("desc") || cmd.Flags().Changed("message"))
+			if piped && !hasExplicitTitleAndDesc {
 				bytes, err := io.ReadAll(os.Stdin)
 				if err == nil && len(bytes) > 0 {
 					if desc == "" {

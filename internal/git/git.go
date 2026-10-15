@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -154,6 +155,14 @@ func FindWorktreeRootInDir(dir string) (string, error) {
 	return filepath.Clean(root), nil
 }
 
+func samePath(a, b string) bool {
+	ca, cb := filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(ca, cb)
+	}
+	return ca == cb
+}
+
 // ResolveWorktreeDir returns the active worktree directory when the current process is
 // inside a linked worktree of repoDir, or repoDir itself otherwise.
 func ResolveWorktreeDir(repoDir string) (string, error) {
@@ -162,10 +171,10 @@ func ResolveWorktreeDir(repoDir string) (string, error) {
 	}
 	wt, err := FindWorktreeRoot()
 	if err == nil && wt != "" {
-		if wt == repoDir {
+		if samePath(wt, repoDir) {
 			return wt, nil
 		}
-		if commonRoot, err := FindRepoRootInDir(wt); err == nil && commonRoot == filepath.Clean(repoDir) {
+		if commonRoot, err := FindRepoRootInDir(wt); err == nil && samePath(commonRoot, repoDir) {
 			return wt, nil
 		}
 	}
@@ -199,6 +208,9 @@ func GetAuthor() string {
 		return name
 	}
 	u := os.Getenv("USER")
+	if u == "" {
+		u = os.Getenv("USERNAME")
+	}
 	if u != "" {
 		return u
 	}

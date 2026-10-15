@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -18,7 +19,11 @@ import (
 // issue RPCs concurrently. Every caller must receive the response to its own
 // request, with no interleaved frames and no nil-encoder panics.
 func TestConcurrentCallsAreSerialized(t *testing.T) {
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("", "tk-cc-*")
+	if err != nil {
+		t.Fatalf("mkdirtemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	sock := filepath.Join(dir, "c.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"task_cli/internal/termutil"
@@ -18,9 +19,9 @@ var noPagerFlag bool
 // terminal (both stdout and stdin are TTYs), is not a dumb terminal, and is not running
 // in an automated AI agent runner, CI workflow, or non-interactive batch environment.
 func IsInteractiveTerminal() bool {
-	// 1. Dumb or empty terminal capability checks
+	// 1. Dumb or empty terminal capability checks (on Windows, TERM is typically unset in native consoles)
 	termEnv := strings.ToLower(os.Getenv("TERM"))
-	if termEnv == "dumb" || termEnv == "" {
+	if termEnv == "dumb" || (termEnv == "" && runtime.GOOS != "windows") {
 		return false
 	}
 

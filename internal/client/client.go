@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"task_cli/internal/config"
@@ -110,9 +109,7 @@ func (c *Client) spawnDaemon() error {
 	}
 
 	cmd := exec.Command(exe, "daemon", "run")
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid: true, // Run in new session so daemon persists
-	}
+	ConfigureDetachedProcess(cmd)
 	// Detach stdio
 	cmd.Stdin = nil
 	cmd.Stdout = nil

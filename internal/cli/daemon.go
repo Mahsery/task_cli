@@ -5,9 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
+	"task_cli/internal/client"
 	"task_cli/internal/daemon"
 
 	"github.com/spf13/cobra"
@@ -74,9 +74,7 @@ var daemonStartCmd = &cobra.Command{
 		}
 
 		subCmd := exec.Command(exe, spawnArgs...)
-		subCmd.SysProcAttr = &syscall.SysProcAttr{
-			Setsid: true,
-		}
+		client.ConfigureDetachedProcess(subCmd)
 		subCmd.Stdin = nil
 		subCmd.Stdout = logFile
 		subCmd.Stderr = logFile

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -217,6 +218,9 @@ func TestDaemonArchiveAndUnarchive(t *testing.T) {
 }
 
 func TestDaemonGhostAutoResurrection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows SQLite VFS locks open database files against deletion; closed-file auto-restore is tested by TestDaemonCentralAutoRestore")
+	}
 	tmpDir, err := os.MkdirTemp("", "tk-daemon-ghost-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)

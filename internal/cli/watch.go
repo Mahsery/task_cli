@@ -736,7 +736,7 @@ piped environments, streams raw event logs or JSON.`,
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 		sigwinchCh := make(chan os.Signal, 2)
-		signal.Notify(sigwinchCh, syscall.SIGWINCH)
+		notifyWindowResize(sigwinchCh)
 
 		redrawCh := make(chan struct{}, 1)
 		requestRedraw := func() {

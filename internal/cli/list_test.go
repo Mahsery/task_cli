@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -64,7 +65,12 @@ func TestApplyStatusFilter(t *testing.T) {
 // TestListCommandSendsMultipleStatuses runs `tk list -s open,in_progress` against a
 // mock daemon socket and checks the statuses reach the wire protocol.
 func TestListCommandSendsMultipleStatuses(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "mock.sock")
+	tmpDir, err := os.MkdirTemp("", "tk-ls-*")
+	if err != nil {
+		t.Fatalf("mkdirtemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+	sockPath := filepath.Join(tmpDir, "m.sock")
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
 		t.Fatalf("listen: %v", err)

@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -65,10 +66,18 @@ func TestGitHubHelpersAndMockGHExecution(t *testing.T) {
 
 	// Verify mock gh execution in PATH
 	binDir := t.TempDir()
-	mockGH := filepath.Join(binDir, "gh")
-	script := "#!/usr/bin/env sh\necho 'https://github.com/org/repo/pull/55'\n"
-	if err := os.WriteFile(mockGH, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	if runtime.GOOS == "windows" {
+		mockGH := filepath.Join(binDir, "gh.bat")
+		script := "@echo off\r\necho https://github.com/org/repo/pull/55\r\n"
+		if err := os.WriteFile(mockGH, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		mockGH := filepath.Join(binDir, "gh")
+		script := "#!/usr/bin/env sh\necho 'https://github.com/org/repo/pull/55'\n"
+		if err := os.WriteFile(mockGH, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 

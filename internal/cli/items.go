@@ -36,7 +36,8 @@ with 'tk promote'. The description may contain [[wiki links]].`,
 		title := strings.TrimSpace(postTitle)
 		desc := postDesc
 		stat, _ := os.Stdin.Stat()
-		if (stat.Mode() & os.ModeCharDevice) == 0 {
+		hasExplicitTitleAndDesc := cmd.Flags().Changed("title") && (cmd.Flags().Changed("desc") || cmd.Flags().Changed("message"))
+		if (stat.Mode()&os.ModeCharDevice) == 0 && !hasExplicitTitleAndDesc {
 			if b, err := io.ReadAll(os.Stdin); err == nil && len(b) > 0 {
 				piped := strings.TrimSpace(string(b))
 				if title == "" {

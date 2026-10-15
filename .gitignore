@@ -1,4 +1,7 @@
 /tk
+/tk.exe
 .tasks/
+.tmp/
 *.test
+*.test.exe
 !AGENTS.md
