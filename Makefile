@@ -10,6 +10,8 @@ COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 MODULE := task_cli
+# Static, glibc-free binaries by default: nothing in tk needs cgo (modernc.org/sqlite is pure Go).
+CGO_ENABLED ?= 0
 ifeq ($(EXE),.exe)
 STRIP_FLAGS :=
 else
@@ -31,7 +33,7 @@ version:
 
 build:
 	@echo "==> Building $(BINARY_NAME) ($(VERSION))..."
-	go build -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) ./cmd/tk
+	CGO_ENABLED=$(CGO_ENABLED) go build -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) ./cmd/tk
 
 test:
 	@echo "==> Running tests..."

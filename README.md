@@ -58,6 +58,10 @@ make build
 make install
 ```
 
+Both build a static binary (`CGO_ENABLED=0`), so it runs on any Linux regardless of glibc version. A plain
+`go build` / `go install` follows your Go environment instead; use `CGO_ENABLED=0 go install ./cmd/tk` for the same
+result.
+
 ### Quickstart Walkthrough
 
 ```bash
