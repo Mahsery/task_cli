@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var nextQuiet bool
+
 var nextCmd = &cobra.Command{
 	Use:   "next [flags]",
 	Short: "Find the next actionable task (steers agents and humans to unblocked work)",
@@ -16,6 +18,7 @@ var nextCmd = &cobra.Command{
 Automatically filters out tasks blocked by unfinished prerequisites.
 Ideal for AI agents, CI runners, and developers asking 'what should I work on next?'.`,
 	Example: `  tk next               # Get next actionable task
+  tk next -q            # Print only the next task ID (or empty if none)
   tk next --json        # Machine-readable output for automated agent claiming`,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		// 1. First look for in_progress or open tasks that are NOT blocked
@@ -49,6 +52,11 @@ Ideal for AI agents, CI runners, and developers asking 'what should I work on ne
 					target = t
 					break
 				}
+			}
+
+			if nextQuiet {
+				fmt.Println(target.ID)
+				return nil
 			}
 
 			if jsonFlag {
@@ -89,6 +97,10 @@ Ideal for AI agents, CI runners, and developers asking 'what should I work on ne
 			}
 			fmt.Printf("  tk show %s              # Inspect details and notes\n", target.ID)
 			fmt.Printf("  tk done %s              # Mark completed when finished\n", target.ID)
+			return nil
+		}
+
+		if nextQuiet {
 			return nil
 		}
 
@@ -140,5 +152,6 @@ Ideal for AI agents, CI runners, and developers asking 'what should I work on ne
 }
 
 func init() {
+	nextCmd.Flags().BoolVarP(&nextQuiet, "quiet", "q", false, "Print only the next actionable task ID")
 	RootCmd.AddCommand(nextCmd)
 }

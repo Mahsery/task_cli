@@ -17,6 +17,7 @@ var (
 	doneNoCommit bool
 	doneForce    bool
 	doneScan     bool
+	doneQuiet    bool
 )
 
 func commitInfosToDomain(infos []*git.CommitInfo) []domain.TaskCommit {
@@ -123,6 +124,11 @@ Use --diff to snapshot uncommitted working tree changes, -c main..HEAD for a com
 			return fmt.Errorf("failed to complete task: %w", err)
 		}
 
+		if doneQuiet {
+			fmt.Println(updated.ID)
+			return nil
+		}
+
 		if jsonFlag {
 			return outputJSON(updated)
 		}
@@ -151,4 +157,5 @@ func init() {
 	doneCmd.Flags().BoolVar(&doneScan, "scan", false, "Scan git log and attach all commits mentioning the task ID")
 	doneCmd.Flags().BoolVar(&doneNoCommit, "no-commit", false, "Do not auto-attach git commit")
 	doneCmd.Flags().BoolVarP(&doneForce, "force", "f", false, "Force completion even if prerequisite dependencies are unfinished")
+	doneCmd.Flags().BoolVarP(&doneQuiet, "quiet", "q", false, "Print only the completed task ID")
 }

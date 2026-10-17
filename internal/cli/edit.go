@@ -25,7 +25,9 @@ var (
 	editReviewNote  string
 	editDescription string
 	editBranch      string
+	editTopic       string
 	editClaim       bool
+	editQuiet       bool
 )
 
 var editCmd = &cobra.Command{
@@ -33,10 +35,12 @@ var editCmd = &cobra.Command{
 	Short: "Edit a task (opens $EDITOR or uses CLI flags)",
 	Long: `Update task attributes using CLI flags or open the task in $EDITOR.
 Providing flags updates the specified fields directly; omitting all flags
-opens an interactive buffer with existing values pre-populated.
+opens an interactive buffer with existing values pre-populated when attached
+to an interactive terminal.
 When [id] is omitted, infers the active task from the current git branch.`,
 	Example: `  tk edit T-1 -s in_progress -p urgent
   tk edit T-1 --claim
+  tk edit T-1 -T backend
   tk edit T-1 -R alice --review-note "LGTM"
   tk edit T-1 -m "Patch sent to mailing list"
   tk edit -m "Progress on current branch task"
@@ -44,7 +48,7 @@ When [id] is omitted, infers the active task from the current git branch.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if cmd.Flags().Changed("tags") || cmd.Flags().Changed("add-tag") || cmd.Flags().Changed("remove-tag") {
-			return fmt.Errorf("tags were replaced by topics; use 'tk move' / 'tk topic' / 'tk topic import-tags'")
+			return fmt.Errorf("tags were replaced by topics; use -T/--topic or 'tk move' / 'tk topic'")
 		}
 
 		taskID, err := resolveOrInferTaskID(args)
@@ -77,11 +81,16 @@ When [id] is omitted, infers the active task from the current git branch.`,
 			cmd.Flags().Changed("comment") ||
 			cmd.Flags().Changed("review-note") ||
 			cmd.Flags().Changed("desc") ||
-			cmd.Flags().Changed("branch")
+			cmd.Flags().Changed("branch") ||
+			cmd.Flags().Changed("topic")
 
 		if editClaim && !hasFlags {
 			if jsonFlag {
 				return outputJSON(task)
+			}
+			if editQuiet {
+				fmt.Println(task.ID)
+				return nil
 			}
 			fmt.Printf("✓ Claimed %s as %q (status: %s)\n", task.ID, task.Assignee, task.Status)
 			return nil
@@ -133,7 +142,19 @@ When [id] is omitted, infers the active task from the current git branch.`,
 			if cmd.Flags().Changed("branch") {
 				payload.Branch = &editBranch
 			}
+			if cmd.Flags().Changed("topic") {
+				targetTopic := strings.TrimSpace(editTopic)
+				if targetTopic == "" {
+					targetTopic = domain.UnfiledTopic
+				}
+				if _, err := taskClient.MoveItems([]string{task.ID}, targetTopic, resolveAuthor("")); err != nil {
+					return fmt.Errorf("failed to move %s to @%s: %w", task.ID, targetTopic, err)
+				}
+			}
 		} else if !editClaim {
+			if !IsInteractiveTerminal() {
+				return fmt.Errorf("cannot open editor in non-interactive terminal: pass flags (e.g. -t, -s, -p, -d, -m, -T) to update %s", task.ID)
+			}
 			// Interactive editor
 			parsed, err := editor.OpenEditTask(cfg.Editor, task)
 			if err != nil {
@@ -144,6 +165,10 @@ When [id] is omitted, infers the active task from the current git branch.`,
 			}
 			ch := parsed.Changes(task)
 			if ch.Empty() {
+				if editQuiet {
+					fmt.Println(task.ID)
+					return nil
+				}
 				fmt.Printf("%s: no changes\n", task.ID)
 				return nil
 			}
@@ -177,6 +202,10 @@ When [id] is omitted, infers the active task from the current git branch.`,
 		if jsonFlag {
 			return outputJSON(updated)
 		}
+		if editQuiet {
+			fmt.Println(updated.ID)
+			return nil
+		}
 
 		fmt.Printf("✓ Updated %s: %s (status: %s)\n", updated.ID, updated.Title, updated.Status)
 		return nil
@@ -198,6 +227,8 @@ func init() {
 	editCmd.Flags().StringVar(&editReviewNote, "review-note", "", "Append a reviewer note")
 	editCmd.Flags().StringVarP(&editDescription, "desc", "d", "", "Update description")
 	editCmd.Flags().StringVarP(&editBranch, "branch", "b", "", "Update bound git branch name")
+	editCmd.Flags().StringVarP(&editTopic, "topic", "T", "", "Move item to topic (path, slug or 'unfiled')")
+	editCmd.Flags().BoolVarP(&editQuiet, "quiet", "q", false, "Print only the task ID")
 	_ = editCmd.Flags().MarkHidden("tags")
 	_ = editCmd.Flags().MarkHidden("add-tag")
 	_ = editCmd.Flags().MarkHidden("remove-tag")

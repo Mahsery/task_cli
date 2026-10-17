@@ -103,17 +103,24 @@ func HooksDir(repoDir string) (string, error) {
 	return filepath.Clean(p), nil
 }
 
-// FindRepoRoot returns the shared repository root directory (resolving through
-// git-common-dir when inside a linked git worktree so all worktrees share .tasks/tasks.db).
+// FindRepoRoot returns the repository root directory. Inside a linked git worktree,
+// it resolves through git-common-dir so worktrees share the main .tasks/tasks.db by default,
+// unless the worktree has its own .tasks/ directory or TK_WORKTREE_DB is set.
 func FindRepoRoot() (string, error) {
 	return FindRepoRootInDir("")
 }
 
-// FindRepoRootInDir returns the shared repository root for dir (or CWD when dir is empty).
+// FindRepoRootInDir returns the repository root for dir (or CWD when dir is empty).
 func FindRepoRootInDir(dir string) (string, error) {
 	wtRoot, err := FindWorktreeRootInDir(dir)
 	if err != nil {
 		return "", err
+	}
+	if os.Getenv("TK_WORKTREE_DB") != "" {
+		return wtRoot, nil
+	}
+	if info, err := os.Stat(filepath.Join(wtRoot, ".tasks")); err == nil && info.IsDir() {
+		return wtRoot, nil
 	}
 	var cmd *exec.Cmd
 	if dir != "" {

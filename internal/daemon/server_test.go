@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -738,5 +739,181 @@ func TestDaemonReviewAndCloseGate(t *testing.T) {
 	})
 	if !doneResp3OK.Success {
 		t.Fatalf("expected closing reviewed T-3 after T-1 is closed to succeed, got: %s", doneResp3OK.Error)
+	}
+}
+
+func TestIsolatedTCPDaemonAlongsideUnixDaemon(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tk-iso-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
+	sharedDefaultSock := filepath.Join(tmpDir, "tk.sock")
+
+	// 1. Start primary daemon bound to sharedDefaultSock
+	cfgUnix := &config.Config{
+		GlobalDir:      filepath.Join(tmpDir, "global1"),
+		SocketPath:     sharedDefaultSock,
+		ExplicitSocket: true,
+	}
+	srvUnix := NewServer(cfgUnix)
+	errChUnix := make(chan error, 1)
+	go func() {
+		errChUnix <- srvUnix.Start()
+	}()
+	t.Cleanup(func() {
+		srvUnix.Stop()
+	})
+
+	// Wait until sharedDefaultSock is listening
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, err := net.DialTimeout("unix", sharedDefaultSock, 50*time.Millisecond); err == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Find a free TCP port
+	probeLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to allocate free tcp port: %v", err)
+	}
+	tcpAddr := probeLn.Addr().String()
+	_ = probeLn.Close()
+
+	// 2. Start a second daemon with the SAME default SocketPath (ExplicitSocket=false) and explicit TCPAddr.
+	// Previously this failed with "daemon is already running on .../default-tk.sock".
+	cfgTCP := &config.Config{
+		GlobalDir:      filepath.Join(tmpDir, "global2"),
+		SocketPath:     sharedDefaultSock,
+		ExplicitSocket: false,
+		TCPAddr:        tcpAddr,
+	}
+	srvTCP := NewServer(cfgTCP)
+	errChTCP := make(chan error, 1)
+	go func() {
+		errChTCP <- srvTCP.Start()
+	}()
+	t.Cleanup(func() {
+		srvTCP.Stop()
+	})
+
+	// Wait for TCP listener to accept connections and respond to ping
+	var tcpReady bool
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case startErr := <-errChTCP:
+			t.Fatalf("TCP-only daemon exited early with error: %v", startErr)
+		default:
+		}
+		conn, err := net.DialTimeout("tcp", tcpAddr, 50*time.Millisecond)
+		if err == nil {
+			_ = json.NewEncoder(conn).Encode(protocol.Request{ID: "ping-1", Action: protocol.ActionPing})
+			var resp protocol.Response
+			if err := json.NewDecoder(conn).Decode(&resp); err == nil && resp.Success {
+				tcpReady = true
+			}
+			_ = conn.Close()
+			if tcpReady {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !tcpReady {
+		t.Fatalf("TCP-only daemon on %s did not become ready", tcpAddr)
+	}
+
+	// 3. Stop the TCP daemon and verify it did NOT unlink sharedDefaultSock owned by srvUnix
+	srvTCP.Stop()
+	if _, err := os.Stat(sharedDefaultSock); err != nil {
+		t.Fatalf("stopping TCP-only daemon unlinked primary daemon's unix socket %s: %v", sharedDefaultSock, err)
+	}
+}
+
+func TestCustomDBPathAndTargetSnapshotExport(t *testing.T) {
+	srv, repoPath := setupTestServer(t)
+	customDB1 := filepath.Join(t.TempDir(), "wt1", "tasks.db")
+	customDB2 := filepath.Join(t.TempDir(), "wt2", "tasks.db")
+
+	createPayload1, _ := json.Marshal(protocol.CreateTaskPayload{
+		Title:    "Task in Isolated DB 1",
+		Status:   domain.StatusOpen,
+		Priority: domain.PriorityHigh,
+	})
+	resp1 := srv.dispatch(protocol.Request{
+		ID:       "c1",
+		Action:   protocol.ActionCreateTask,
+		Payload:  createPayload1,
+		Scope:    "local",
+		RepoPath: repoPath,
+		DBPath:   customDB1,
+	})
+	if !resp1.Success {
+		t.Fatalf("create in customDB1 failed: %s", resp1.Error)
+	}
+
+	createPayload2, _ := json.Marshal(protocol.CreateTaskPayload{
+		Title:    "Task in Isolated DB 2",
+		Status:   domain.StatusOpen,
+		Priority: domain.PriorityLow,
+	})
+	resp2 := srv.dispatch(protocol.Request{
+		ID:       "c2",
+		Action:   protocol.ActionCreateTask,
+		Payload:  createPayload2,
+		Scope:    "local",
+		RepoPath: repoPath,
+		DBPath:   customDB2,
+	})
+	if !resp2.Success {
+		t.Fatalf("create in customDB2 failed: %s", resp2.Error)
+	}
+
+	// Verify customDB1 only sees its own task
+	listPayload, _ := json.Marshal(domain.TaskFilter{Scope: "local", RepoPath: repoPath})
+	listResp1 := srv.dispatch(protocol.Request{
+		ID:       "l1",
+		Action:   protocol.ActionListTasks,
+		Payload:  listPayload,
+		Scope:    "local",
+		RepoPath: repoPath,
+		DBPath:   customDB1,
+	})
+	if !listResp1.Success {
+		t.Fatalf("list customDB1 failed: %s", listResp1.Error)
+	}
+	var tasks1 []*domain.Task
+	_ = json.Unmarshal(listResp1.Data, &tasks1)
+	if len(tasks1) != 1 || tasks1[0].Title != "Task in Isolated DB 1" {
+		t.Fatalf("unexpected tasks in customDB1: %+v", tasks1)
+	}
+
+	// Export a portable WAL-free snapshot from customDB1 to an explicit target path
+	snapshotFile := filepath.Join(t.TempDir(), "exported-snapshot.db")
+	snapPayload, _ := json.Marshal(protocol.BackupCreatePayload{
+		TargetPath: snapshotFile,
+	})
+	snapResp := srv.dispatch(protocol.Request{
+		ID:       "snap-1",
+		Action:   protocol.ActionBackupCreate,
+		Payload:  snapPayload,
+		Scope:    "local",
+		RepoPath: repoPath,
+		DBPath:   customDB1,
+	})
+	if !snapResp.Success {
+		t.Fatalf("snapshot export failed: %s", snapResp.Error)
+	}
+
+	if err := sqlite.VerifyBackupFile(snapshotFile); err != nil {
+		t.Fatalf("exported snapshot file failed integrity verification: %v", err)
+	}
+	// Verify no WAL or SHM sidecar files exist next to the exported snapshot before opening
+	if _, err := os.Stat(snapshotFile + "-wal"); !os.IsNotExist(err) {
+		t.Errorf("expected no -wal file next to fresh VACUUM INTO snapshot")
 	}
 }

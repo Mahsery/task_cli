@@ -13,10 +13,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	daemonSocketPath string
-	daemonTCPAddr    string
-)
+func daemonEndpoint() string {
+	if cfg == nil {
+		return ""
+	}
+	if cfg.TCPAddr != "" && !cfg.ExplicitSocket {
+		return "tcp://" + cfg.TCPAddr
+	}
+	if cfg.TCPAddr != "" && cfg.ExplicitSocket {
+		return fmt.Sprintf("%s (tcp: %s)", cfg.SocketPath, cfg.TCPAddr)
+	}
+	return cfg.SocketPath
+}
 
 var daemonCmd = &cobra.Command{
 	Use:   "daemon",
@@ -36,20 +44,15 @@ var daemonStartCmd = &cobra.Command{
 	Short: "Start the daemon in the background",
 	Long:  `Launch the tk daemon in a detached background session and verify it is accepting connections.`,
 	Example: `  tk daemon start
-  tk daemon start --socket /tmp/tk-custom.sock`,
+  tk daemon start --socket /tmp/tk-custom.sock
+  tk daemon start --tcp 127.0.0.1:4567 --db /tmp/isolated.db`,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		if daemonSocketPath != "" {
-			cfg.SocketPath = daemonSocketPath
-		}
-		if daemonTCPAddr != "" {
-			cfg.TCPAddr = daemonTCPAddr
-		}
-
+		ep := daemonEndpoint()
 		if err := taskClient.PingPassive(); err == nil {
 			if jsonFlag {
-				return outputJSON(map[string]any{"running": true, "message": "Daemon is already running.", "socket": cfg.SocketPath})
+				return outputJSON(map[string]any{"running": true, "message": "Daemon is already running.", "socket": ep, "tcp": cfg.TCPAddr})
 			}
-			fmt.Printf("Daemon is already running (socket: %s)\n", cfg.SocketPath)
+			fmt.Printf("Daemon is already running (endpoint: %s)\n", ep)
 			return nil
 		}
 
@@ -66,11 +69,14 @@ var daemonStartCmd = &cobra.Command{
 		defer func() { _ = logFile.Close() }()
 
 		spawnArgs := []string{"daemon", "run"}
-		if daemonSocketPath != "" {
-			spawnArgs = append(spawnArgs, "--socket", daemonSocketPath)
+		if cfg.ExplicitSocket && cfg.SocketPath != "" {
+			spawnArgs = append(spawnArgs, "--socket", cfg.SocketPath)
 		}
-		if daemonTCPAddr != "" {
-			spawnArgs = append(spawnArgs, "--tcp", daemonTCPAddr)
+		if cfg.TCPAddr != "" {
+			spawnArgs = append(spawnArgs, "--tcp", cfg.TCPAddr)
+		}
+		if cfg.DBPath != "" {
+			spawnArgs = append(spawnArgs, "--db", cfg.DBPath)
 		}
 
 		subCmd := exec.Command(exe, spawnArgs...)
@@ -83,7 +89,7 @@ var daemonStartCmd = &cobra.Command{
 			return fmt.Errorf("failed to start daemon process: %w", err)
 		}
 
-		// Wait for socket to become active
+		// Wait for endpoint to become active
 		deadline := time.Now().Add(3 * time.Second)
 		started := false
 		for time.Now().Before(deadline) {
@@ -95,19 +101,20 @@ var daemonStartCmd = &cobra.Command{
 		}
 
 		if !started {
-			return fmt.Errorf("daemon started (PID %d) but socket %s was not ready within timeout; check %s", subCmd.Process.Pid, cfg.SocketPath, logPath)
+			return fmt.Errorf("daemon started (PID %d) but endpoint %s was not ready within timeout; check %s", subCmd.Process.Pid, ep, logPath)
 		}
 
 		if jsonFlag {
 			return outputJSON(map[string]any{
 				"started": true,
 				"pid":     subCmd.Process.Pid,
-				"socket":  cfg.SocketPath,
+				"socket":  ep,
+				"tcp":     cfg.TCPAddr,
 				"log":     logPath,
 			})
 		}
 
-		fmt.Printf("✓ Started tk daemon in background (PID %d, socket: %s, log: %s)\n", subCmd.Process.Pid, cfg.SocketPath, logPath)
+		fmt.Printf("✓ Started tk daemon in background (PID %d, endpoint: %s, log: %s)\n", subCmd.Process.Pid, ep, logPath)
 		return nil
 	},
 }
@@ -118,13 +125,6 @@ var daemonRestartCmd = &cobra.Command{
 	Long:    `Stop any active daemon, wait for graceful shutdown, and launch a fresh daemon in the background.`,
 	Example: `  tk daemon restart`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if daemonSocketPath != "" {
-			cfg.SocketPath = daemonSocketPath
-		}
-		if daemonTCPAddr != "" {
-			cfg.TCPAddr = daemonTCPAddr
-		}
-
 		if err := taskClient.PingPassive(); err == nil {
 			_ = taskClient.ShutdownDaemon()
 			_ = taskClient.Close()
@@ -146,14 +146,9 @@ var daemonRunCmd = &cobra.Command{
 	Short: "Run the daemon in the foreground",
 	Long:  `Run the task daemon process in the foreground, logging requests and events to stdout. Useful for debugging or containerized services.`,
 	Example: `  tk daemon run
-  tk daemon run --socket /tmp/tk-custom.sock`,
+  tk daemon run --socket /tmp/tk-custom.sock
+  tk daemon run --tcp 127.0.0.1:4567`,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		if daemonSocketPath != "" {
-			cfg.SocketPath = daemonSocketPath
-		}
-		if daemonTCPAddr != "" {
-			cfg.TCPAddr = daemonTCPAddr
-		}
 		srv := daemon.NewServer(cfg)
 		return srv.Start()
 	},
@@ -164,6 +159,7 @@ var daemonStopCmd = &cobra.Command{
 	Short: "Stop the running daemon",
 	Long:  `Send a graceful shutdown signal to the active daemon, closing database connections, flushing WAL frames, and unlinking the socket.`,
 	Example: `  tk daemon stop
+  tk daemon stop --socket /tmp/tk-custom.sock
   tk daemon stop --json`,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		if err := taskClient.PingPassive(); err != nil {
@@ -201,37 +197,45 @@ var daemonStatusCmd = &cobra.Command{
 	Short: "Check daemon status",
 	Long:  `Ping the daemon socket passively without triggering auto-spawn to verify whether the background process is running and healthy.`,
 	Example: `  tk daemon status
+  tk daemon status --socket /tmp/tk-custom.sock
   tk daemon status --json`,
 	RunE: func(_ *cobra.Command, _ []string) error {
+		ep := daemonEndpoint()
 		err := taskClient.PingPassive()
 		if err != nil {
 			if jsonFlag {
 				return outputJSON(map[string]any{
 					"running": false,
-					"socket":  cfg.SocketPath,
+					"socket":  ep,
+					"tcp":     cfg.TCPAddr,
 				})
 			}
-			fmt.Printf("Daemon is NOT running (socket: %s)\n", cfg.SocketPath)
+			fmt.Printf("Daemon is NOT running (endpoint: %s)\n", ep)
 			return nil
 		}
 		if jsonFlag {
 			return outputJSON(map[string]any{
 				"running": true,
-				"socket":  cfg.SocketPath,
+				"socket":  ep,
+				"tcp":     cfg.TCPAddr,
 			})
 		}
-		fmt.Printf("Daemon is running and healthy (socket: %s)\n", cfg.SocketPath)
+		fmt.Printf("Daemon is running and healthy (endpoint: %s)\n", ep)
 		return nil
 	},
 }
 
+func bindDaemonFlags(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&flagSocket, "socket", "", "Custom unix socket path for daemon")
+	cmd.Flags().StringVar(&flagTCP, "tcp", "", "Optional TCP address to listen on / connect to (e.g. 127.0.0.1:4567)")
+}
+
 func init() {
-	daemonStartCmd.Flags().StringVar(&daemonSocketPath, "socket", "", "Custom unix socket path")
-	daemonStartCmd.Flags().StringVar(&daemonTCPAddr, "tcp", "", "Optional TCP address to listen on (e.g. 127.0.0.1:4567)")
-	daemonRestartCmd.Flags().StringVar(&daemonSocketPath, "socket", "", "Custom unix socket path")
-	daemonRestartCmd.Flags().StringVar(&daemonTCPAddr, "tcp", "", "Optional TCP address to listen on (e.g. 127.0.0.1:4567)")
-	daemonRunCmd.Flags().StringVar(&daemonSocketPath, "socket", "", "Custom unix socket path")
-	daemonRunCmd.Flags().StringVar(&daemonTCPAddr, "tcp", "", "Optional TCP address to listen on (e.g. 127.0.0.1:4567)")
+	bindDaemonFlags(daemonStartCmd)
+	bindDaemonFlags(daemonRestartCmd)
+	bindDaemonFlags(daemonRunCmd)
+	bindDaemonFlags(daemonStopCmd)
+	bindDaemonFlags(daemonStatusCmd)
 
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonRestartCmd)

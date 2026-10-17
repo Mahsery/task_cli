@@ -20,6 +20,7 @@ var (
 	topicMoveTo  string
 	topicTitle   string
 	topicRmForce bool
+	topicQuiet   bool
 )
 
 var topicCmd = &cobra.Command{
@@ -74,6 +75,10 @@ var topicNewCmd = &cobra.Command{
 		})
 		if err != nil {
 			return err
+		}
+		if topicQuiet {
+			fmt.Println(tp.Path)
+			return nil
 		}
 		if jsonFlag {
 			return outputJSON(tp)
@@ -279,6 +284,9 @@ var topicRmCmd = &cobra.Command{
 	RunE: func(_ *cobra.Command, args []string) error {
 		norm := domain.NormalizeTopicRef(args[0])
 		if !topicRmForce && !jsonFlag {
+			if !IsInteractiveTerminal() {
+				return fmt.Errorf("refusing to delete topic @%s without confirmation in non-interactive terminal: pass -y or -f", norm)
+			}
 			prompt := fmt.Sprintf("Delete topic @%s permanently? [y/N]: ", norm)
 			if topicMoveTo != "" {
 				prompt = fmt.Sprintf("Delete topic @%s and move contents to @%s? [y/N]: ", norm, domain.NormalizeTopicRef(topicMoveTo))
@@ -483,6 +491,7 @@ func init() {
 	topicNewCmd.Flags().StringVar(&topicParent, "parent", "", "Parent topic (path or slug)")
 	topicNewCmd.Flags().StringVar(&topicSlug, "slug", "", "Path segment (default: derived from the title)")
 	topicNewCmd.Flags().StringVarP(&topicDesc, "desc", "d", "", "Topic description")
+	topicNewCmd.Flags().BoolVarP(&topicQuiet, "quiet", "q", false, "Print only the new topic path")
 
 	topicRenameCmd.Flags().StringVar(&topicSlug, "slug", "", "Also change the path segment")
 

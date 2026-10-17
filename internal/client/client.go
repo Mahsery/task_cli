@@ -108,7 +108,20 @@ func (c *Client) spawnDaemon() error {
 		exe = "tk"
 	}
 
-	cmd := exec.Command(exe, "daemon", "run")
+	args := []string{"daemon", "run"}
+	if c.cfg != nil {
+		if c.cfg.ExplicitSocket && c.cfg.SocketPath != "" {
+			args = append(args, "--socket", c.cfg.SocketPath)
+		}
+		if c.cfg.TCPAddr != "" {
+			args = append(args, "--tcp", c.cfg.TCPAddr)
+		}
+		if c.cfg.DBPath != "" {
+			args = append(args, "--db", c.cfg.DBPath)
+		}
+	}
+
+	cmd := exec.Command(exe, args...)
 	ConfigureDetachedProcess(cmd)
 	// Detach stdio
 	cmd.Stdin = nil
@@ -141,6 +154,11 @@ func (c *Client) callLocked(action protocol.Action, payload any) (*protocol.Resp
 		}
 	}
 
+	var dbPath string
+	if c.cfg != nil {
+		dbPath = c.cfg.DBPath
+	}
+
 	reqID := uuid.New().String()
 	req := protocol.Request{
 		ID:       reqID,
@@ -148,6 +166,7 @@ func (c *Client) callLocked(action protocol.Action, payload any) (*protocol.Resp
 		Payload:  payloadBytes,
 		Scope:    c.Scope,
 		RepoPath: c.RepoPath,
+		DBPath:   dbPath,
 	}
 
 	if err := c.enc.Encode(req); err != nil {
@@ -662,6 +681,21 @@ func (c *Client) CreateBackup(name string, maxSnapshots int) (string, error) {
 	resp, err := c.call(protocol.ActionBackupCreate, protocol.BackupCreatePayload{
 		Name:         name,
 		MaxSnapshots: maxSnapshots,
+	})
+	if err != nil {
+		return "", err
+	}
+	var res map[string]string
+	if err := json.Unmarshal(resp.Data, &res); err != nil {
+		return "", err
+	}
+	return res["path"], nil
+}
+
+// ExportSnapshot writes a standalone, portable SQLite snapshot to targetPath via VACUUM INTO.
+func (c *Client) ExportSnapshot(targetPath string) (string, error) {
+	resp, err := c.call(protocol.ActionBackupCreate, protocol.BackupCreatePayload{
+		TargetPath: targetPath,
 	})
 	if err != nil {
 		return "", err

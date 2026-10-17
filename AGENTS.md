@@ -27,17 +27,17 @@
 | Action | Command | Notes |
 | :--- | :--- | :--- |
 | **Status Overview** | `tk status` | High-signal repo overview (open, active, orphaned, ready, blocked) |
-| **Next Actionable** | `tk next [--json]` | Highest-priority unblocked task ready for work |
+| **Next Actionable** | `tk next [-q\|--json]` | Highest-priority unblocked task ready for work (`-q` prints only ID) |
 | **Dependency Tree** | `tk tree [@topic] [-r]` | DAG graph; `-r` shows prerequisite breakdown |
-| **List Backlog** | `tk list [--ready\|--blocked\|--tasks\|--posts]` | Filterable table; supports `-s open,in_progress`, `@topic`, `-q` |
+| **List Backlog** | `tk list [--ready\|--blocked\|--tasks\|--posts\|--ids]` | Filterable table; supports `-s open,in_progress`, `@topic`, `-q`, `--ids` |
 | **Inspect Details** | `tk show <ID> [-n]` | Full spec, notes, diffs, backlinks; `-n` numbers lines for anchors |
-| **Create Task** | `tk new -t "Title" -p urgent -T <topic> [--after <ID>]` | Accepts `-d` description or piped stdin |
-| **Create Board Post**| `tk post -t "Title" -T <board> [-d "Body"]` | Untracked bug report or idea (P-n) |
-| **Reply / Note** | `tk reply <ID> -m "Comment text"` | Appends discussion note (supports `[[wiki links]]`) |
-| **Promote Post** | `tk promote <post-id> --to <tasks-topic>` | Promotes P-n to T-n task with bidirectional link |
-| **Claim Work** | `tk claim <ID> [--actor <name>]` | Atomic assignment; transitions `open` → `in_progress` |
-| **Start & Branch** | `tk start [ID] [-b] [--worktree <dir>]` | Claims task, binds branch `feat/t-<id>-<slug>`, optional checkout/worktree |
-| **Branch Context** | `tk branch [ID] [-d]` | Shows task bound to current Git branch, or binds/unbinds `<ID>` |
+| **Create Task** | `tk new [-q] -t "Title" -p urgent -T <topic> [--after <ID>]` | Accepts `-d` description, positional title, or piped stdin; `-q` prints only ID |
+| **Create Board Post**| `tk post [-q] -t "Title" -T <board> [-d "Body"]` | Untracked bug report or idea (P-n); `-q` prints only ID |
+| **Reply / Note** | `tk reply <ID> -m "Comment text"` | Appends discussion note (supports `[[wiki links]]` and piped stdin) |
+| **Promote Post** | `tk promote [-q] <post-id> --to <tasks-topic>` | Promotes P-n to T-n task with bidirectional link |
+| **Claim Work** | `tk claim [-q] <ID> [--actor <name>]` | Atomic assignment; transitions `open` → `in_progress` |
+| **Start & Branch** | `tk start [ID] [-b] [--no-checkout]` | Claims task, binds branch `tk/t-<id>-<slug>`, optional checkout |
+| **Branch Context** | `tk branch [ID] [-c] [-b <branch>] [-q]` | Shows task bound to current Git branch, or binds/checks out `<ID>`'s branch |
 | **Takeover / Steer**| `tk takeover <ID> -m "Reason" [--actor <name>]` | Takes over task; clears orphan status and audits reason |
 | **Transfer** | `tk transfer <ID> <new-actor> -m "Handoff note"` | Reassigns task with audit note |
 | **Manage Deps** | `tk link <ID> <prereq...>` / `tk unlink <ID> <prereq...>` | Declares `<ID>` depends on `<prereq...>` |
@@ -49,11 +49,12 @@
 | **Export Patches** | `tk patch [ID] [-o dir] [--stdout]` | Exports attached commits or diff as a `git format-patch` / `git am` series |
 | **Git Hooks** | `tk hooks [install\|uninstall\|status]` | Installs non-destructive `prepare-commit-msg` & `post-commit` hooks |
 | **GitHub PR / Sync**| `tk pr [create\|status] [ID]` / `tk gh [import\|push]` | Zero-config GitHub PR creation/status and Issue import/push via `gh` CLI |
-| **Complete Task** | `tk done [ID] [-c commit] [--diff] [-f]` | Resolves task + snaps HEAD SHA/diff. `-f` overrides blocked deps |
+| **Complete Task** | `tk done [ID] [-c commit] [--diff] [-f] [-q]` | Resolves task + snaps HEAD SHA/diff. `-f` overrides blocked deps |
 | **Orphan Stale** | `tk orphan reap --older-than 1h [--dry-run]` | Drops unresponsive assignee, resets to open, sets orphaned_at |
 | **Undo / Restore** | `tk restore <ID>` / `tk restore -l` | Recovers deleted task from tombstone archive |
+| **Portable Snapshot**| `tk snapshot <path>` / `tk export <path>` | Writes standalone WAL-free SQLite file (`VACUUM INTO`) or JSON export |
 | **Disaster Recovery**| `tk db restore latest -f` / `tk db backup` | Atomic point-in-time recovery via central vault |
-| **Daemon Control** | `tk daemon [status\|start\|restart\|stop]` | Controls background socket service |
+| **Daemon Control** | `tk daemon [status\|start\|restart\|stop]` | Controls background socket service (supports `--socket`, `--tcp`, `--db`) |
 | **Live Stream** | `tk watch [--json]` | Live event stream (terminal UI or JSON event pipe) |
 
 *Forgiving IDs: `t15`, `T15`, `t-15`, or `15` automatically resolve to `T-15` (or `G-15` in global mode `-g`).*

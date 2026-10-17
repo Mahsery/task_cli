@@ -23,6 +23,9 @@ Prompts for confirmation unless --yes (-y) or --force (-f) is specified.`,
 		taskID := normID(args[0])
 
 		if !deleteForce && !jsonFlag {
+			if !IsInteractiveTerminal() {
+				return fmt.Errorf("refusing to delete %s without confirmation in non-interactive terminal: pass -y or -f", taskID)
+			}
 			task, _ := taskClient.GetTask(taskID)
 			var titlePrompt string
 			if task != nil && task.Title != "" {

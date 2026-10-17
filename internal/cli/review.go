@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -18,6 +17,7 @@ var (
 	reviewNoteAlt  string
 	reviewClaim    bool
 	reviewClear    bool
+	reviewQuiet    bool
 )
 
 var reviewCmd = &cobra.Command{
@@ -56,6 +56,10 @@ To pre-assign a reviewer without completing the review yet, use --assign <name> 
 			if err != nil {
 				return fmt.Errorf("failed to clear reviewer: %w", err)
 			}
+			if reviewQuiet {
+				fmt.Println(updated.ID)
+				return nil
+			}
 			if jsonFlag {
 				return outputJSON(updated)
 			}
@@ -76,6 +80,10 @@ To pre-assign a reviewer without completing the review yet, use --assign <name> 
 			if err != nil {
 				return fmt.Errorf("failed to assign reviewer: %w", err)
 			}
+			if reviewQuiet {
+				fmt.Println(updated.ID)
+				return nil
+			}
 			if jsonFlag {
 				return outputJSON(updated)
 			}
@@ -88,13 +96,10 @@ To pre-assign a reviewer without completing the review yet, use --assign <name> 
 			note = strings.TrimSpace(reviewNoteAlt)
 		}
 
-		// Support piped stdin for optional review note
-		stat, _ := os.Stdin.Stat()
-		piped := (stat.Mode() & os.ModeCharDevice) == 0
-		if piped && note == "" {
-			bytes, err := io.ReadAll(os.Stdin)
-			if err == nil && len(bytes) > 0 {
-				note = strings.TrimSpace(string(bytes))
+		// Support piped stdin for optional review note without hanging on open idle pipes
+		if note == "" {
+			if piped, ok := ReadPipedStdin(true); ok && piped != "" {
+				note = piped
 			}
 		}
 
@@ -118,6 +123,10 @@ To pre-assign a reviewer without completing the review yet, use --assign <name> 
 			return fmt.Errorf("failed to review task: %w", err)
 		}
 
+		if reviewQuiet {
+			fmt.Println(updated.ID)
+			return nil
+		}
 		if jsonFlag {
 			return outputJSON(updated)
 		}
@@ -138,4 +147,5 @@ func init() {
 	reviewCmd.Flags().StringVarP(&reviewNoteAlt, "note", "n", "", "Optional reviewer note (alias for -m, --message)")
 	reviewCmd.Flags().BoolVar(&reviewClaim, "claim", false, "Review as the current actor")
 	reviewCmd.Flags().BoolVar(&reviewClear, "clear", false, "Clear the assigned reviewer and reviewed-by tag")
+	reviewCmd.Flags().BoolVarP(&reviewQuiet, "quiet", "q", false, "Print only the reviewed task ID")
 }

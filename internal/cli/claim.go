@@ -13,6 +13,7 @@ var (
 	claimForce  bool
 	claimActor  string
 	claimBranch string
+	claimQuiet  bool
 )
 
 var claimCmd = &cobra.Command{
@@ -62,6 +63,11 @@ To hand off or transfer a task to another collaborator, use 'tk transfer'.`,
 			return err
 		}
 
+		if claimQuiet {
+			fmt.Println(updated.ID)
+			return nil
+		}
+
 		if jsonFlag {
 			return outputJSON(updated)
 		}
@@ -79,6 +85,7 @@ func init() {
 	claimCmd.Flags().BoolVar(&claimForce, "force", false, "Force claim even if already assigned to another actor")
 	claimCmd.Flags().StringVar(&claimActor, "actor", "", "Explicit actor identity (overrides global actor)")
 	claimCmd.Flags().StringVarP(&claimBranch, "branch", "b", "", "Create/checkout and bind a git branch (default: tk/t-<id>-<slug>)")
+	claimCmd.Flags().BoolVarP(&claimQuiet, "quiet", "q", false, "Print only the claimed task ID")
 	if f := claimCmd.Flags().Lookup("branch"); f != nil {
 		f.NoOptDefVal = "auto"
 	}

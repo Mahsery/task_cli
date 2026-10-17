@@ -16,9 +16,11 @@ var (
 	startNoCheckout bool
 	startForce      bool
 	startActor      string
+	startQuiet      bool
 
 	branchSetName  string
 	branchCheckout bool
+	branchQuiet    bool
 )
 
 // resolveOrInferTaskID resolves an explicit task ID argument if provided, or infers the active
@@ -107,6 +109,11 @@ Once on a task-bound branch, commands like 'tk show', 'tk reply', 'tk edit',
 			return err
 		}
 
+		if startQuiet {
+			fmt.Println(updated.ID)
+			return nil
+		}
+
 		if jsonFlag {
 			return outputJSON(updated)
 		}
@@ -127,6 +134,7 @@ var branchCmd = &cobra.Command{
 With a task ID, prints (or with -c/--checkout switches to) that task's bound git branch,
 or binds a custom branch name with -b/--set.`,
 	Example: `  tk branch                  # Show the task bound to the current git branch
+  tk branch -q               # Print only the bound task ID
   tk branch T-12             # Show the branch name for T-12
   tk branch T-12 -c          # Checkout (or create) T-12's branch
   tk branch T-12 -b feat/x   # Bind T-12 to branch feat/x`,
@@ -140,6 +148,10 @@ or binds a custom branch name with -b/--set.`,
 			task, err := taskClient.GetTask(taskID)
 			if err != nil {
 				return err
+			}
+			if branchQuiet {
+				fmt.Println(task.ID)
+				return nil
 			}
 			if jsonFlag {
 				return outputJSON(task)
@@ -194,6 +206,10 @@ or binds a custom branch name with -b/--set.`,
 			}
 		}
 
+		if branchQuiet {
+			fmt.Println(branchName)
+			return nil
+		}
 		if jsonFlag {
 			return outputJSON(task)
 		}
@@ -211,9 +227,11 @@ func init() {
 	startCmd.Flags().BoolVar(&startNoCheckout, "no-checkout", false, "Bind branch without running git checkout")
 	startCmd.Flags().BoolVarP(&startForce, "force", "f", false, "Force claim even if already assigned to another actor")
 	startCmd.Flags().StringVar(&startActor, "actor", "", "Explicit actor identity (overrides global actor)")
+	startCmd.Flags().BoolVarP(&startQuiet, "quiet", "q", false, "Print only the started task ID")
 
 	branchCmd.Flags().StringVarP(&branchSetName, "set", "b", "", "Bind task to the specified branch name")
 	branchCmd.Flags().BoolVarP(&branchCheckout, "checkout", "c", false, "Checkout (or create) the task's branch in git")
+	branchCmd.Flags().BoolVarP(&branchQuiet, "quiet", "q", false, "Print only the task ID (no args) or branch name")
 
 	RootCmd.AddCommand(startCmd, branchCmd)
 }

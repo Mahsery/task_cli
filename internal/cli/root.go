@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"task_cli/internal/client"
@@ -21,6 +22,7 @@ var (
 	jsonFlag   bool
 	flagSocket string
 	flagTCP    string
+	flagDB     string
 	flagActor  string
 	cfg        *config.Config
 	taskClient *client.Client
@@ -46,22 +48,35 @@ Running 'tk' without arguments in an interactive terminal launches the TUI.`,
 
 		if flagSocket != "" {
 			cfg.SocketPath = flagSocket
+			cfg.ExplicitSocket = true
 		}
 		if flagTCP != "" {
 			cfg.TCPAddr = flagTCP
+		}
+		if flagDB != "" {
+			if abs, err := filepath.Abs(flagDB); err == nil {
+				cfg.DBPath = abs
+			} else {
+				cfg.DBPath = flagDB
+			}
 		}
 		if flagActor != "" {
 			cfg.Actor = flagActor
 		}
 
 		scope = "local"
+		repoRoot = ""
 		if globalFlag {
 			scope = "global"
 		} else {
 			root, err := git.FindRepoRoot()
 			if err != nil {
-				// Outside git repo, automatically fall back to global
-				scope = "global"
+				if cfg.DBPath != "" {
+					repoRoot = filepath.Dir(cfg.DBPath)
+				} else {
+					// Outside git repo, automatically fall back to global
+					scope = "global"
+				}
 			} else {
 				repoRoot = root
 			}
@@ -96,6 +111,7 @@ func init() {
 	RootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Output machine-readable JSON for LLM / script automation")
 	RootCmd.PersistentFlags().StringVar(&flagSocket, "socket", "", "Custom unix socket path for daemon IPC")
 	RootCmd.PersistentFlags().StringVar(&flagTCP, "tcp", "", "Optional TCP address to connect to (e.g. 127.0.0.1:4567)")
+	RootCmd.PersistentFlags().StringVar(&flagDB, "db", "", "Custom SQLite database file path (overrides repo/global DB and TK_DB)")
 	RootCmd.PersistentFlags().StringVar(&flagActor, "actor", "", "Explicit actor identity for task attribution (overrides TK_ACTOR/TK_AUTHOR/git)")
 	RootCmd.PersistentFlags().BoolVar(&noPagerFlag, "no-pager", false, "Disable interactive pager for long output")
 

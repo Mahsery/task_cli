@@ -163,6 +163,9 @@ func runOrphanReap(threshold time.Duration, dryRun bool, actor, reason string) e
 			fmt.Printf("✓ No stale tasks found exceeding %s of inactivity.\n", threshold)
 			return nil
 		}
+		if !IsInteractiveTerminal() {
+			return fmt.Errorf("refusing to reap %d stale task(s) without confirmation in non-interactive terminal: pass -y or -f (or --dry-run to preview)", len(preview.Candidates))
+		}
 		fmt.Printf("Reap %d stale tasks? [y/N]: ", len(preview.Candidates))
 		var resp string
 		_, _ = fmt.Scanln(&resp)

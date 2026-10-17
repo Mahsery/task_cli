@@ -2,8 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io"
-	"os"
 	"strings"
 
 	"task_cli/internal/domain"
@@ -17,29 +15,36 @@ var (
 	postDesc     string
 	postTopic    string
 	postPriority string
+	postQuiet    bool
 	replyMessage string
+	replyQuiet   bool
 	promoteTo    string
+	promoteQuiet bool
 	moveTo       string
 	moveFrom     string
 )
 
 var postCmd = &cobra.Command{
-	Use:   "post [flags]",
+	Use:   "post [title] [flags]",
 	Short: "Create a board post (P-n), e.g. a bug report or idea",
 	Long: `Create a post. Posts live in board topics, have no assignee, claims or
 dependencies, and move through open -> resolved/closed. Promote a post to a task
 with 'tk promote'. The description may contain [[wiki links]].`,
 	Example: `  tk post -t "Crash on load" --topic bug-reports -d "Stack trace: ..."
+  tk post "Crash on load" -T bug-reports
+  tk post -q -t "Crash on load"       # print only the new post ID (e.g. P-4)
   echo "Idea body" | tk post -t "Better minimap" -T ideas
   tk post -t "Seen with [[T-12]]"     # uses the default board from 'tk topic use'`,
-	RunE: func(cmd *cobra.Command, _ []string) error {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		title := strings.TrimSpace(postTitle)
+		if title == "" && len(args) > 0 {
+			title = strings.TrimSpace(strings.Join(args, " "))
+		}
 		desc := postDesc
-		stat, _ := os.Stdin.Stat()
-		hasExplicitTitleAndDesc := cmd.Flags().Changed("title") && (cmd.Flags().Changed("desc") || cmd.Flags().Changed("message"))
-		if (stat.Mode()&os.ModeCharDevice) == 0 && !hasExplicitTitleAndDesc {
-			if b, err := io.ReadAll(os.Stdin); err == nil && len(b) > 0 {
-				piped := strings.TrimSpace(string(b))
+		hasExplicitTitle := title != ""
+		hasExplicitDesc := cmd.Flags().Changed("desc") || cmd.Flags().Changed("message")
+		if !hasExplicitTitle || !hasExplicitDesc {
+			if piped, ok := ReadPipedStdin(hasExplicitTitle); ok && piped != "" {
 				if title == "" {
 					lines := strings.SplitN(piped, "\n", 2)
 					title = lines[0]
@@ -58,7 +63,7 @@ with 'tk promote'. The description may contain [[wiki links]].`,
 			}
 		}
 		if title == "" {
-			return fmt.Errorf("post title cannot be empty (use -t)")
+			return fmt.Errorf("post title cannot be empty (use -t \"Title\" or pass title argument)")
 		}
 		prio := domain.PriorityNormal
 		if cmd.Flags().Changed("priority") {
@@ -79,6 +84,10 @@ with 'tk promote'. The description may contain [[wiki links]].`,
 		if err != nil {
 			return fmt.Errorf("failed to create post: %w", err)
 		}
+		if postQuiet {
+			fmt.Println(post.ID)
+			return nil
+		}
 		if jsonFlag {
 			return outputJSON(post)
 		}
@@ -95,7 +104,12 @@ var replyCmd = &cobra.Command{
 	RunE: func(_ *cobra.Command, args []string) error {
 		msg := strings.TrimSpace(replyMessage)
 		if msg == "" {
-			return fmt.Errorf("reply cannot be empty (use -m)")
+			if piped, ok := ReadPipedStdin(false); ok && piped != "" {
+				msg = piped
+			}
+		}
+		if msg == "" {
+			return fmt.Errorf("reply cannot be empty (use -m or pipe stdin)")
 		}
 		taskID, err := resolveOrInferTaskID(args)
 		if err != nil {
@@ -104,6 +118,10 @@ var replyCmd = &cobra.Command{
 		item, err := taskClient.UpdateTask(protocol.UpdateTaskPayload{ID: taskID, AddNote: &msg, Author: resolveAuthor("")})
 		if err != nil {
 			return err
+		}
+		if replyQuiet {
+			fmt.Println(item.ID)
+			return nil
 		}
 		if jsonFlag {
 			return outputJSON(item)
@@ -125,6 +143,10 @@ var promoteCmd = &cobra.Command{
 		res, err := taskClient.PromotePost(normID(args[0]), to, resolveAuthor(""))
 		if err != nil {
 			return err
+		}
+		if promoteQuiet {
+			fmt.Println(res.Task.ID)
+			return nil
 		}
 		if jsonFlag {
 			return outputJSON(res)
@@ -226,10 +248,14 @@ func init() {
 	postCmd.Flags().StringVarP(&postDesc, "message", "m", "", "Post body (alias for --desc)")
 	postCmd.Flags().StringVarP(&postTopic, "topic", "T", "", "Board topic (default: 'tk topic use' board, else unfiled)")
 	postCmd.Flags().StringVarP(&postPriority, "priority", "p", "normal", "Priority (low, normal, high, urgent)")
+	postCmd.Flags().BoolVarP(&postQuiet, "quiet", "q", false, "Print only the new post ID")
 
 	replyCmd.Flags().StringVarP(&replyMessage, "message", "m", "", "Reply text")
+	replyCmd.Flags().StringVarP(&replyMessage, "note", "n", "", "Reply text (alias for -m)")
+	replyCmd.Flags().BoolVarP(&replyQuiet, "quiet", "q", false, "Print only the target item ID")
 
 	promoteCmd.Flags().StringVar(&promoteTo, "to", "", "Destination tasks topic (default: 'tk topic use' topic, else unfiled)")
+	promoteCmd.Flags().BoolVarP(&promoteQuiet, "quiet", "q", false, "Print only the promoted task ID")
 
 	moveCmd.Flags().StringVar(&moveTo, "to", "", "Destination topic, 'unfiled' (items) or 'root' (topics)")
 	moveCmd.Flags().StringVar(&moveFrom, "from", "", "Move every item of this topic")

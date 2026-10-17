@@ -267,3 +267,53 @@ func TestCheckoutOrCreateBranchAndCommitRangeScan(t *testing.T) {
 		t.Fatalf("expected 2 commits scanned for T-10, got %d", len(scanned))
 	}
 }
+
+func TestWorktreeLocalTasksIsolation(t *testing.T) {
+	baseDir := t.TempDir()
+	mainRepo := filepath.Join(baseDir, "main-repo")
+	wtRepo := filepath.Join(baseDir, "wt-isolated")
+
+	runGit := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+
+	if err := os.MkdirAll(mainRepo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(mainRepo, "init", "-b", "main")
+	runGit(mainRepo, "config", "user.name", "Test User")
+	runGit(mainRepo, "config", "user.email", "test@example.com")
+	if err := os.WriteFile(filepath.Join(mainRepo, "file.txt"), []byte("init\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(mainRepo, "add", "file.txt")
+	runGit(mainRepo, "commit", "-m", "initial commit")
+	runGit(mainRepo, "worktree", "add", "-b", "feat/isolated", wtRepo)
+
+	// By default without .tasks or TK_WORKTREE_DB, FindRepoRootInDir returns mainRepo
+	got, err := FindRepoRootInDir(wtRepo)
+	if err != nil || got != filepath.Clean(mainRepo) {
+		t.Fatalf("expected shared mainRepo %q by default, got %q (err=%v)", mainRepo, got, err)
+	}
+
+	// With TK_WORKTREE_DB=1, FindRepoRootInDir returns the worktree's own root
+	t.Setenv("TK_WORKTREE_DB", "1")
+	gotEnv, err := FindRepoRootInDir(wtRepo)
+	if err != nil || gotEnv != filepath.Clean(wtRepo) {
+		t.Fatalf("expected isolated worktree root %q with TK_WORKTREE_DB=1, got %q (err=%v)", wtRepo, gotEnv, err)
+	}
+	t.Setenv("TK_WORKTREE_DB", "")
+
+	// When the linked worktree has its own .tasks directory, FindRepoRootInDir returns wtRepo
+	if err := os.MkdirAll(filepath.Join(wtRepo, ".tasks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gotDir, err := FindRepoRootInDir(wtRepo)
+	if err != nil || gotDir != filepath.Clean(wtRepo) {
+		t.Fatalf("expected isolated worktree root %q when .tasks exists in worktree, got %q (err=%v)", wtRepo, gotDir, err)
+	}
+}

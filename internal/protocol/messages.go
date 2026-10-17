@@ -51,6 +51,7 @@ type Request struct {
 	Payload  json.RawMessage `json:"payload,omitempty"`
 	Scope    string          `json:"scope,omitempty"`     // "local" or "global"
 	RepoPath string          `json:"repo_path,omitempty"` // current repo root
+	DBPath   string          `json:"db_path,omitempty"`   // optional custom SQLite DB path
 }
 
 type Response struct {
@@ -267,6 +268,7 @@ type Event struct {
 
 type BackupCreatePayload struct {
 	Name         string `json:"name,omitempty"`
+	TargetPath   string `json:"target_path,omitempty"`
 	MaxSnapshots int    `json:"max_snapshots,omitempty"`
 }
 

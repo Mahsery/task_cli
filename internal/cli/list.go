@@ -34,14 +34,15 @@ var (
 	listPosts     bool
 	listTasks     bool
 	listBranch    string
+	listIDsOnly   bool
 )
 
 var listCmd = &cobra.Command{
 	Use:     "list [@topic] [flags]",
 	Aliases: []string{"ls"},
-	Short:   "List tasks and posts (formatted table, one-liners, or JSON)",
+	Short:   "List tasks and posts (formatted table, one-liners, IDs, or JSON)",
 	Long: `List tasks and posts matching the specified topic, status, priority, assignee, reviewer, or text query.
-Renders an aligned tabular view by default, or single-line summaries with --short.
+Renders an aligned tabular view by default, single-line summaries with --short, or bare IDs with --ids.
 A positional @topic (or --topic) limits the list to one topic; add -r to include sub-topics.`,
 	Example: `  tk list
   tk ls @hero-system
@@ -52,6 +53,7 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
   tk list -s open,in_progress
   tk list @backend -q "jwt"
   tk ls @backend --short
+  tk ls -s open --ids
   tk list -a alice
   tk list -R bob
   tk ls --orphaned
@@ -139,6 +141,13 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
 			return err
 		}
 
+		if listIDsOnly {
+			for _, t := range tasks {
+				fmt.Println(t.ID)
+			}
+			return nil
+		}
+
 		if jsonFlag {
 			if tasks == nil {
 				tasks = []*domain.Task{}
@@ -219,6 +228,7 @@ func init() {
 	listCmd.Flags().StringVarP(&listSearch, "search", "q", "", "Search query DSL (supports AND, OR, NOT, tags, qualifiers)")
 	listCmd.Flags().StringVar(&listSort, "sort", "", "Sort order: 'status,priority,id' (default), 'id', 'recent', 'created', 'updated'")
 	listCmd.Flags().BoolVar(&listShort, "short", false, "Output simple one-line list")
+	listCmd.Flags().BoolVar(&listIDsOnly, "ids", false, "Output only item IDs (one per line)")
 	listCmd.Flags().IntVar(&listLimit, "limit", 0, "Limit number of results")
 	listCmd.Flags().BoolVar(&listTree, "tree", false, "Display tasks in a hierarchical dependency tree view")
 	listCmd.Flags().BoolVar(&listReady, "ready", false, "Show only actionable tasks whose prerequisites are complete")

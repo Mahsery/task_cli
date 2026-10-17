@@ -142,6 +142,9 @@ func TestRenderTopicTree(t *testing.T) {
 
 func TestTagDeprecationFlags(t *testing.T) {
 	defer func() {
+		newTags = ""
+		editTags = ""
+		listTag = ""
 		if f := newCmd.Flags().Lookup("tags"); f != nil {
 			f.Changed = false
 		}

@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"task_cli/internal/termutil"
 
@@ -54,6 +58,74 @@ func IsInteractiveTerminal() bool {
 	}
 
 	return true
+}
+
+// ReadPipedStdin reads piped or file-redirected stdin without hanging when invoked inside
+// a non-interactive shell whose ambient stdin is an unclosed, idle pipe (e.g. an AI agent
+// tool runner, SSH command without </dev/null, or CI subprocess).
+//
+// Returns (trimmedContent, true) when stdin was piped/redirected and either yielded data or
+// reached immediate EOF; returns ("", false) when stdin is a character device (TTY or /dev/null)
+// or an idle open pipe with no incoming data.
+func ReadPipedStdin(hasExplicitFlags bool) (string, bool) {
+	if term.IsTerminal(os.Stdin.Fd()) {
+		return "", false
+	}
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return "", false
+	}
+	// Character devices (TTYs, /dev/null, NUL) are not pipes or redirected files.
+	if (stat.Mode() & os.ModeCharDevice) != 0 {
+		return "", false
+	}
+	// Redirected regular files (< file.txt or <<EOF) never block on ReadAll.
+	if stat.Mode().IsRegular() {
+		b, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return "", false
+		}
+		return strings.TrimSpace(string(b)), true
+	}
+
+	// For pipes/FIFOs/sockets, probe the first read with a short timeout so an open,
+	// idle ambient stdin pipe from a non-interactive shell runner never blocks forever.
+	timeout := 100 * time.Millisecond
+	if hasExplicitFlags {
+		timeout = 50 * time.Millisecond
+	}
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan readResult, 1)
+	go func(r io.Reader) {
+		var first [4096]byte
+		n, rErr := r.Read(first[:])
+		if n == 0 && rErr != nil {
+			ch <- readResult{nil, rErr}
+			return
+		}
+		var buf bytes.Buffer
+		if n > 0 {
+			buf.Write(first[:n])
+		}
+		if rErr == nil {
+			_, rErr = io.Copy(&buf, r)
+		}
+		ch <- readResult{buf.Bytes(), rErr}
+	}(os.Stdin)
+
+	select {
+	case res := <-ch:
+		if res.err != nil && !errors.Is(res.err, io.EOF) && len(res.data) == 0 {
+			return "", false
+		}
+		return strings.TrimSpace(string(res.data)), true
+	case <-time.After(timeout):
+		return "", false
+	}
 }
 
 // IsASCIIOnly returns true if the current locale is strictly 7-bit ASCII (e.g. C or POSIX) or TERM=dumb.

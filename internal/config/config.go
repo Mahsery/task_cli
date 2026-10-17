@@ -14,11 +14,13 @@ import (
 )
 
 type Config struct {
-	SocketPath string
-	TCPAddr    string
-	GlobalDir  string
-	Editor     string
-	Actor      string
+	SocketPath     string
+	ExplicitSocket bool
+	TCPAddr        string
+	GlobalDir      string
+	DBPath         string
+	Editor         string
+	Actor          string
 }
 
 func Load() *Config {
@@ -35,7 +37,8 @@ func Load() *Config {
 	appDir := filepath.Join(dataHome, "task_cli")
 	_ = os.MkdirAll(appDir, 0o755) //nolint:gosec // G703: data dir is derived from the user's own XDG_DATA_HOME/HOME by design
 
-	socketPath := os.Getenv("TK_SOCKET")
+	socketPath := strings.TrimSpace(os.Getenv("TK_SOCKET"))
+	explicitSocket := socketPath != ""
 	if socketPath == "" {
 		// Use /run/user/<uid>/tk.sock if available on Unix, otherwise appDir/tk.sock
 		if uid := os.Getuid(); uid >= 0 {
@@ -49,7 +52,14 @@ func Load() *Config {
 		}
 	}
 
-	tcpAddr := os.Getenv("TK_ADDR") // e.g. "127.0.0.1:4567"
+	tcpAddr := strings.TrimSpace(os.Getenv("TK_ADDR")) // e.g. "127.0.0.1:4567"
+
+	dbPath := strings.TrimSpace(os.Getenv("TK_DB"))
+	if dbPath != "" && !filepath.IsAbs(dbPath) {
+		if abs, err := filepath.Abs(dbPath); err == nil {
+			dbPath = abs
+		}
+	}
 
 	editor := os.Getenv("VISUAL")
 	if editor == "" {
@@ -77,11 +87,13 @@ func Load() *Config {
 	}
 
 	return &Config{
-		SocketPath: socketPath,
-		TCPAddr:    tcpAddr,
-		GlobalDir:  appDir,
-		Editor:     editor,
-		Actor:      actor,
+		SocketPath:     socketPath,
+		ExplicitSocket: explicitSocket,
+		TCPAddr:        tcpAddr,
+		GlobalDir:      appDir,
+		DBPath:         dbPath,
+		Editor:         editor,
+		Actor:          actor,
 	}
 }
 
@@ -92,14 +104,25 @@ func defaultEditor() string {
 		}
 		return "notepad"
 	}
+	for _, ed := range []string{"nvim", "vim", "vi", "nano"} {
+		if _, err := exec.LookPath(ed); err == nil {
+			return ed
+		}
+	}
 	return "nvim"
 }
 
 func (c *Config) GlobalDBPath() string {
+	if c.DBPath != "" {
+		return c.DBPath
+	}
 	return filepath.Join(c.GlobalDir, "global.db")
 }
 
 func (c *Config) LocalDBPath(repoRoot string) string {
+	if c.DBPath != "" {
+		return c.DBPath
+	}
 	return filepath.Join(repoRoot, ".tasks", "tasks.db")
 }
 

@@ -42,7 +42,31 @@ func NewServer(cfg *config.Config) *Server {
 	}
 }
 
-func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
+func (s *Server) resolveDBTarget(scope, repoPath, reqDBPath string) (dbPath, resolvedScope, resolvedRepo, backupKey string) {
+	customDB := strings.TrimSpace(reqDBPath)
+	if customDB == "" && s.cfg != nil {
+		customDB = strings.TrimSpace(s.cfg.DBPath)
+	}
+	if customDB != "" {
+		if scope == domain.ScopeGlobal {
+			return customDB, domain.ScopeGlobal, "", customDB
+		}
+		if repoPath == "" {
+			repoPath = filepath.Dir(customDB)
+		}
+		return customDB, domain.ScopeLocal, repoPath, customDB
+	}
+	if scope == "global" || repoPath == "" {
+		return s.cfg.GlobalDBPath(), "global", "", ""
+	}
+	return s.cfg.LocalDBPath(repoPath), scope, repoPath, repoPath
+}
+
+func (s *Server) getDBForReq(req protocol.Request) (*sqlite.DB, error) {
+	return s.getDBWithCustomPath(req.Scope, req.RepoPath, req.DBPath)
+}
+
+func (s *Server) getDBWithCustomPath(scope, repoPath, customDBPath string) (*sqlite.DB, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -50,14 +74,7 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 		return nil, errors.New("server is shutting down")
 	}
 
-	var dbPath string
-	if scope == "global" || repoPath == "" {
-		scope = "global"
-		repoPath = ""
-		dbPath = s.cfg.GlobalDBPath()
-	} else {
-		dbPath = s.cfg.LocalDBPath(repoPath)
-	}
+	dbPath, scope, repoPath, backupKey := s.resolveDBTarget(scope, repoPath, customDBPath)
 
 	if db, exists := s.dbs[dbPath]; exists {
 		// Check if file was unlinked/deleted on disk while held open in memory
@@ -67,7 +84,7 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 				log.Printf("[tkd] Failed to resurrect %s: %v", dbPath, rErr)
 			} else {
 				log.Printf("[tkd] Successfully resurrected %s on disk", dbPath)
-				go s.syncCentralBackup(db, repoPath)
+				go s.syncCentralBackup(db, backupKey)
 			}
 		}
 		return db, nil
@@ -75,7 +92,7 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 
 	// Database is not currently in memory. Check if missing on disk.
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		centralDir := s.cfg.CentralBackupDir(repoPath)
+		centralDir := s.cfg.CentralBackupDir(backupKey)
 		latestBackup := findLatestBackupInDir(centralDir)
 		if latestBackup != "" {
 			log.Printf("[tkd] Database %s missing on disk, found central backup %s; auto-restoring...", dbPath, latestBackup)
@@ -94,7 +111,7 @@ func (s *Server) getDB(scope, repoPath string) (*sqlite.DB, error) {
 	}
 
 	s.dbs[dbPath] = db
-	go s.syncCentralBackup(db, repoPath)
+	go s.syncCentralBackup(db, backupKey)
 	return db, nil
 }
 
@@ -142,35 +159,45 @@ func (s *Server) ensureCentralRepoMeta(centralDir, repoPath string) {
 }
 
 func (s *Server) Start() error {
-	// 1. Prepare unix socket
-	_ = os.MkdirAll(filepath.Dir(s.cfg.SocketPath), 0o755)
+	// 1. Prepare unix socket unless running in TCP-only mode (when --tcp is given without an explicit --socket)
+	bindUnix := s.cfg.SocketPath != "" && (s.cfg.TCPAddr == "" || s.cfg.ExplicitSocket)
+	if bindUnix {
+		_ = os.MkdirAll(filepath.Dir(s.cfg.SocketPath), 0o755)
 
-	// Test if existing socket is active
-	if conn, err := net.Dial("unix", s.cfg.SocketPath); err == nil {
-		_ = conn.Close()
-		return fmt.Errorf("daemon is already running on %s", s.cfg.SocketPath)
+		// Test if existing socket is active
+		if conn, err := net.Dial("unix", s.cfg.SocketPath); err == nil {
+			_ = conn.Close()
+			return fmt.Errorf("daemon is already running on %s", s.cfg.SocketPath)
+		}
+		_ = os.Remove(s.cfg.SocketPath)
+
+		unixLn, err := net.Listen("unix", s.cfg.SocketPath)
+		if err != nil {
+			return fmt.Errorf("failed to listen on unix socket %s: %w", s.cfg.SocketPath, err)
+		}
+		s.unixLn = unixLn
+		_ = os.Chmod(s.cfg.SocketPath, 0o600)
+
+		log.Printf("[tkd] Listening on unix socket %s", s.cfg.SocketPath)
 	}
-	_ = os.Remove(s.cfg.SocketPath)
 
-	unixLn, err := net.Listen("unix", s.cfg.SocketPath)
-	if err != nil {
-		return fmt.Errorf("failed to listen on unix socket %s: %w", s.cfg.SocketPath, err)
-	}
-	s.unixLn = unixLn
-	_ = os.Chmod(s.cfg.SocketPath, 0o600)
-
-	log.Printf("[tkd] Listening on unix socket %s", s.cfg.SocketPath)
-
-	// 2. Optional TCP socket (e.g. for remote SSH forwarding)
+	// 2. Optional TCP socket (e.g. for isolated testing or remote SSH forwarding)
 	if s.cfg.TCPAddr != "" {
 		tcpLn, err := net.Listen("tcp", s.cfg.TCPAddr)
 		if err != nil {
-			log.Printf("[tkd] Warning: failed to listen on TCP %s: %v", s.cfg.TCPAddr, err)
-		} else {
-			s.tcpLn = tcpLn
-			log.Printf("[tkd] Listening on TCP %s", s.cfg.TCPAddr)
-			go s.acceptLoop(tcpLn)
+			if s.unixLn != nil {
+				_ = s.unixLn.Close()
+				_ = os.Remove(s.cfg.SocketPath)
+				s.unixLn = nil
+			}
+			return fmt.Errorf("failed to listen on TCP %s: %w", s.cfg.TCPAddr, err)
 		}
+		s.tcpLn = tcpLn
+		log.Printf("[tkd] Listening on TCP %s", s.cfg.TCPAddr)
+	}
+
+	if s.unixLn == nil && s.tcpLn == nil {
+		return errors.New("no unix socket or TCP address configured for daemon")
 	}
 
 	// 3. Graceful signal handling
@@ -185,7 +212,14 @@ func (s *Server) Start() error {
 	// 4. Background maintenance (idle WAL checkpoints to minimize disk footprint and SSD churn)
 	go s.maintenanceLoop()
 
-	s.acceptLoop(unixLn)
+	if s.unixLn != nil && s.tcpLn != nil {
+		go s.acceptLoop(s.tcpLn)
+		s.acceptLoop(s.unixLn)
+	} else if s.unixLn != nil {
+		s.acceptLoop(s.unixLn)
+	} else {
+		s.acceptLoop(s.tcpLn)
+	}
 	return nil
 }
 
@@ -233,11 +267,11 @@ func (s *Server) Stop() {
 	close(s.stopCh)
 	if s.unixLn != nil {
 		_ = s.unixLn.Close()
+		_ = os.Remove(s.cfg.SocketPath)
 	}
 	if s.tcpLn != nil {
 		_ = s.tcpLn.Close()
 	}
-	_ = os.Remove(s.cfg.SocketPath)
 
 	s.mu.Lock()
 	for path, db := range s.dbs {
@@ -310,9 +344,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 }
 
 func (s *Server) dispatch(req protocol.Request) protocol.Response {
-	if req.Scope == domain.ScopeGlobal || req.RepoPath == "" {
+	if req.DBPath == "" && s.cfg != nil && s.cfg.DBPath != "" {
+		req.DBPath = s.cfg.DBPath
+	}
+	if req.Scope == domain.ScopeGlobal || (req.RepoPath == "" && req.DBPath == "") {
 		req.Scope = domain.ScopeGlobal
 		req.RepoPath = ""
+	} else if req.RepoPath == "" && req.DBPath != "" {
+		req.Scope = domain.ScopeLocal
+		req.RepoPath = filepath.Dir(req.DBPath)
 	}
 	resp := s.executeDispatch(req)
 	if resp.Success {
@@ -323,8 +363,9 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 			protocol.ActionReapStaleTasks, protocol.ActionTransferTask, protocol.ActionArchiveTask,
 			protocol.ActionUnarchiveTask, protocol.ActionCreateTopic, protocol.ActionUpdateTopic,
 			protocol.ActionMoveTopic, protocol.ActionDeleteTopic, protocol.ActionMoveItems, protocol.ActionPromotePost:
-			if db, err := s.getDB(req.Scope, req.RepoPath); err == nil {
-				go s.syncCentralBackup(db, req.RepoPath)
+			if db, err := s.getDBForReq(req); err == nil {
+				_, _, _, backupKey := s.resolveDBTarget(req.Scope, req.RepoPath, req.DBPath)
+				go s.syncCentralBackup(db, backupKey)
 			}
 		}
 	}
@@ -511,12 +552,16 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.ListTasksPayload) ([]*domain.Task, error) {
 			if (p.Scope != "" && p.Scope != req.Scope) || (p.RepoPath != "" && p.RepoPath != req.RepoPath) {
 				var err error
-				db, err = s.getDB(p.Scope, p.RepoPath)
+				db, err = s.getDBWithCustomPath(p.Scope, p.RepoPath, req.DBPath)
 				if err != nil {
 					return nil, err
 				}
 			}
-			return db.ListTasks(p.ToFilter())
+			filter := p.ToFilter()
+			if filter.RepoPath == "" && req.RepoPath != "" && filter.Scope != domain.ScopeGlobal {
+				filter.RepoPath = req.RepoPath
+			}
+			return db.ListTasks(filter)
 		})
 
 	case protocol.ActionDeleteTask:
@@ -831,7 +876,7 @@ func handleWithDB[P any, R any](s *Server, req protocol.Request, fn func(db *sql
 			return errorResp(req.ID, "invalid payload: "+err.Error())
 		}
 	}
-	db, err := s.getDB(req.Scope, req.RepoPath)
+	db, err := s.getDBForReq(req)
 	if err != nil {
 		return errorResp(req.ID, err.Error())
 	}
@@ -860,15 +905,27 @@ func handleWithDB[P any, R any](s *Server, req protocol.Request, fn func(db *sql
 
 func (s *Server) handleBackupCreate(req protocol.Request) protocol.Response {
 	return handleWithDB(s, req, func(db *sqlite.DB, p protocol.BackupCreatePayload) (map[string]string, error) {
+		if strings.TrimSpace(p.TargetPath) != "" {
+			targetPath := strings.TrimSpace(p.TargetPath)
+			if err := db.Backup(targetPath); err != nil {
+				return nil, fmt.Errorf("failed to write snapshot: %w", err)
+			}
+			return map[string]string{
+				"path":    targetPath,
+				"message": fmt.Sprintf("✓ Wrote portable database snapshot: %s", targetPath),
+			}, nil
+		}
+
 		targetPath, err := db.CreateRollingBackup(p.Name, p.MaxSnapshots)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create backup: %w", err)
 		}
 
 		// Also mirror to central backup vault
-		centralDir := s.cfg.CentralBackupDir(req.RepoPath)
+		_, _, _, backupKey := s.resolveDBTarget(req.Scope, req.RepoPath, req.DBPath)
+		centralDir := s.cfg.CentralBackupDir(backupKey)
 		_ = os.MkdirAll(centralDir, 0o755)
-		s.ensureCentralRepoMeta(centralDir, req.RepoPath)
+		s.ensureCentralRepoMeta(centralDir, backupKey)
 		_, cErr := db.CreateRollingBackupInDir(centralDir, p.Name, p.MaxSnapshots)
 		if cErr != nil {
 			log.Printf("[tkd] Warning: failed to create central backup in %s: %v", centralDir, cErr)
@@ -885,7 +942,8 @@ func (s *Server) handleBackupList(req protocol.Request) protocol.Response {
 	return handleWithDB(s, req, func(db *sqlite.DB, _ struct{}) ([]protocol.BackupInfo, error) {
 		localBackups, _ := db.ListBackups()
 
-		centralDir := s.cfg.CentralBackupDir(req.RepoPath)
+		_, _, _, backupKey := s.resolveDBTarget(req.Scope, req.RepoPath, req.DBPath)
+		centralDir := s.cfg.CentralBackupDir(backupKey)
 		centralBackups, _ := sqlite.ListBackupsInDir(centralDir, "central")
 
 		all := append([]sqlite.BackupMeta{}, localBackups...)
@@ -926,7 +984,7 @@ func (s *Server) handleBackupVerify(req protocol.Request) protocol.Response {
 		return protocol.Response{ID: req.ID, Success: true, Data: data}
 	}
 
-	db, err := s.getDB(req.Scope, req.RepoPath)
+	db, err := s.getDBForReq(req)
 	if err != nil {
 		return errorResp(req.ID, err.Error())
 	}
@@ -949,15 +1007,17 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 		}
 	}
 
+	dbPath, scope, repoPath, backupKey := s.resolveDBTarget(req.Scope, req.RepoPath, req.DBPath)
+
 	targetBackup := strings.TrimSpace(p.BackupPath)
 	if targetBackup == "" || strings.EqualFold(targetBackup, "latest") {
 		// Find latest across local and central
-		db, err := s.getDB(req.Scope, req.RepoPath)
+		db, err := s.getDBForReq(req)
 		if err != nil {
 			return errorResp(req.ID, err.Error())
 		}
 		localBackups, _ := db.ListBackups()
-		centralDir := s.cfg.CentralBackupDir(req.RepoPath)
+		centralDir := s.cfg.CentralBackupDir(backupKey)
 		centralBackups, _ := sqlite.ListBackupsInDir(centralDir, "central")
 		all := append([]sqlite.BackupMeta{}, localBackups...)
 		all = append(all, centralBackups...)
@@ -970,17 +1030,12 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 		targetBackup = all[0].Path
 	} else if !filepath.IsAbs(targetBackup) {
 		if _, err := os.Stat(targetBackup); err != nil {
-			var localDir string
-			if req.Scope == "global" || req.RepoPath == "" {
-				localDir = filepath.Join(s.cfg.GlobalDir, "backups")
-			} else {
-				localDir = filepath.Join(req.RepoPath, ".tasks", "backups")
-			}
+			localDir := filepath.Join(filepath.Dir(dbPath), "backups")
 			localCand := filepath.Join(localDir, targetBackup)
 			if _, err := os.Stat(localCand); err == nil {
 				targetBackup = localCand
 			} else {
-				centralCand := filepath.Join(s.cfg.CentralBackupDir(req.RepoPath), targetBackup)
+				centralCand := filepath.Join(s.cfg.CentralBackupDir(backupKey), targetBackup)
 				if _, err := os.Stat(centralCand); err == nil {
 					targetBackup = centralCand
 				}
@@ -996,13 +1051,6 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	// 2. Lock server and close active database connection
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	var dbPath string
-	if req.Scope == "global" || req.RepoPath == "" {
-		dbPath = s.cfg.GlobalDBPath()
-	} else {
-		dbPath = s.cfg.LocalDBPath(req.RepoPath)
-	}
 
 	if activeDB, exists := s.dbs[dbPath]; exists {
 		_ = activeDB.Close()
@@ -1049,13 +1097,13 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	}
 
 	// 6. Reopen DB to verify and cache
-	newDB, err := openDatabase(dbPath, req.Scope, req.RepoPath)
+	newDB, err := openDatabase(dbPath, scope, repoPath)
 	if err != nil {
 		return errorResp(req.ID, "restored database failed to open: "+err.Error())
 	}
 	s.dbs[dbPath] = newDB
 
-	go s.syncCentralBackup(newDB, req.RepoPath)
+	go s.syncCentralBackup(newDB, backupKey)
 
 	data, _ := json.Marshal(map[string]string{
 		"status":  "ok",
