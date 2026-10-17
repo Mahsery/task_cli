@@ -19,6 +19,7 @@ var (
 	newPriority    string
 	newTags        string
 	newAssignee    string
+	newReviewer    string
 	newMessage     string
 	newDescription string
 	newDependsOn   string
@@ -33,7 +34,7 @@ If no flags are provided and input is not piped, opens $EDITOR with a template.
 Supports piped input from stdin, where the first line becomes the title
 and subsequent lines form the description.`,
 	Example: `  tk new -t "Fix auth crash" -p high -T bugs
-  tk new -t "Refactor storage" -m "Migrate to WAL mode"
+  tk new -t "Refactor storage" -m "Migrate to WAL mode" -R alice
   echo -e "Update docs\nInclude quickstart" | tk new
   tk new -t "Ultimate ability" -T hero-system --after T-12
   tk new              # Opens interactive editor ($EDITOR)`,
@@ -46,6 +47,7 @@ and subsequent lines form the description.`,
 		var prio = domain.PriorityNormal
 		var tags []string
 		var assignee string
+		var reviewer string
 		var desc string
 
 		// Check if input is piped through stdin
@@ -59,6 +61,7 @@ and subsequent lines form the description.`,
 		hasFlags := cmd.Flags().Changed("title") ||
 			cmd.Flags().Changed("priority") ||
 			cmd.Flags().Changed("assignee") ||
+			cmd.Flags().Changed("reviewer") ||
 			cmd.Flags().Changed("message") ||
 			cmd.Flags().Changed("desc")
 
@@ -75,6 +78,7 @@ and subsequent lines form the description.`,
 				tags = splitCommaList(newTags)
 			}
 			assignee = newAssignee
+			reviewer = newReviewer
 			desc = newMessage
 			if desc == "" {
 				desc = newDescription
@@ -113,6 +117,7 @@ and subsequent lines form the description.`,
 			prio = parsed.Priority
 			tags = parsed.Tags
 			assignee = parsed.Assignee
+			reviewer = parsed.Reviewer
 			desc = parsed.Description
 		}
 
@@ -154,6 +159,7 @@ and subsequent lines form the description.`,
 			Tags:        tags,
 			Author:      author,
 			Assignee:    assignee,
+			Reviewer:    reviewer,
 			DependsOn:   dependsOn,
 			Topic:       topic,
 		})
@@ -183,6 +189,7 @@ func init() {
 	newCmd.Flags().StringVarP(&newPriority, "priority", "p", "normal", "Priority (low, normal, high, urgent)")
 	newCmd.Flags().StringVarP(&newTags, "tags", "l", "", "Comma-separated tags (e.g. bug,backend)")
 	newCmd.Flags().StringVarP(&newAssignee, "assignee", "a", "", "Task assignee")
+	newCmd.Flags().StringVarP(&newReviewer, "reviewer", "R", "", "Task reviewer")
 	newCmd.Flags().StringVarP(&newMessage, "message", "m", "", "Task description")
 	newCmd.Flags().StringVarP(&newDescription, "desc", "d", "", "Task description")
 	newCmd.Flags().StringVar(&newDependsOn, "after", "", "Comma-separated list of prerequisite task IDs that this task depends on")

@@ -39,6 +39,7 @@ type CreateItemParams struct {
 	Tags        []string
 	Author      string
 	Assignee    string
+	Reviewer    string
 	DependsOn   []string
 	Branch      string
 	ExternalRef string
@@ -158,12 +159,12 @@ func (d *DB) createItemInTxLocked(tx *sqlx.Tx, p CreateItemParams) (string, erro
 
 	insertSQL := `
 	INSERT INTO tasks (
-		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at, archived_at, kind, topic_id, branch, external_ref, pr_url
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, reviewer, created_at, updated_at, closed_at, archived_at, kind, topic_id, branch, external_ref, pr_url
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err = tx.Exec(insertSQL,
-		taskID, scope, repoPath, nextSeq, title, p.Description, string(p.Status), string(p.Priority), string(tagsJSON), p.Author, p.Assignee, now, now, closedAt, archivedAt, string(p.Kind), topicID, strings.TrimSpace(p.Branch), strings.TrimSpace(p.ExternalRef), strings.TrimSpace(p.PRURL),
+		taskID, scope, repoPath, nextSeq, title, p.Description, string(p.Status), string(p.Priority), string(tagsJSON), p.Author, p.Assignee, strings.TrimSpace(p.Reviewer), now, now, closedAt, archivedAt, string(p.Kind), topicID, strings.TrimSpace(p.Branch), strings.TrimSpace(p.ExternalRef), strings.TrimSpace(p.PRURL),
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to insert %s: %w", p.Kind, err)
@@ -202,16 +203,16 @@ type rowScanner interface {
 }
 
 const (
-	taskColumns = `id, scope, repo_path, title, description, status, priority, tags, author, assignee,
+	taskColumns = `id, scope, repo_path, title, description, status, priority, tags, author, assignee, reviewer,
 	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id, orphaned_at, branch, external_ref, pr_url`
 
-	taskColumnsSummary = `id, scope, repo_path, title, description, status, priority, tags, author, assignee,
+	taskColumnsSummary = `id, scope, repo_path, title, description, status, priority, tags, author, assignee, reviewer,
 	       created_at, updated_at, closed_at, archived_at, commit_sha, commit_msg, diff_stat, '' AS diff_content, kind, topic_id, orphaned_at, branch, external_ref, pr_url`
 )
 
 func taskColumnsPrefixed(prefix string) string {
 	cols := []string{
-		"id", "scope", "repo_path", "title", "description", "status", "priority", "tags", "author", "assignee",
+		"id", "scope", "repo_path", "title", "description", "status", "priority", "tags", "author", "assignee", "reviewer",
 		"created_at", "updated_at", "closed_at", "archived_at", "commit_sha", "commit_msg", "diff_stat", "diff_content",
 		"kind", "topic_id", "orphaned_at", "branch", "external_ref", "pr_url",
 	}
@@ -231,7 +232,7 @@ func scanTask(s rowScanner, task *domain.Task) error {
 
 	err := s.Scan(
 		&task.ID, &task.Scope, &task.RepoPath, &task.Title, &task.Description,
-		&statusStr, &priorityStr, &tagsJSON, &task.Author, &task.Assignee,
+		&statusStr, &priorityStr, &tagsJSON, &task.Author, &task.Assignee, &task.Reviewer,
 		&task.CreatedAt, &task.UpdatedAt, &closedAt, &archivedAt,
 		&task.CommitSHA, &task.CommitMsg, &task.DiffStat, &task.DiffContent,
 		&kindStr, &topicID, &orphanedAt,
@@ -283,6 +284,9 @@ func (d *DB) hydrateTaskRelations(q sqlx.Queryer, tasks []*domain.Task, includeN
 		if t.Notes == nil {
 			t.Notes = []domain.TaskNote{}
 		}
+		if t.ReviewerNotes == nil {
+			t.ReviewerNotes = []domain.TaskNote{}
+		}
 		t.Commits = nil
 		t.DependsOn = []string{}
 		t.BlockedBy = []string{}
@@ -291,6 +295,24 @@ func (d *DB) hydrateTaskRelations(q sqlx.Queryer, tasks []*domain.Task, includeN
 		t.Backlinks = nil
 		taskMap[t.ID] = t
 		taskIDs = append(taskIDs, t.ID)
+	}
+
+	// Always batch load reviewer notes so IsReviewed() / NeedsReview() are accurate everywhere
+	rNotesQuery, rArgs, err := sqlx.In("SELECT id, task_id, author, content, created_at FROM task_reviewer_notes WHERE task_id IN (?) ORDER BY created_at ASC", taskIDs)
+	if err != nil {
+		return fmt.Errorf("failed to build task reviewer notes query: %w", err)
+	}
+	var rNotes []struct {
+		domain.TaskNote
+		TaskID string `db:"task_id"`
+	}
+	if err := sqlx.Select(q, &rNotes, rNotesQuery, rArgs...); err != nil {
+		return fmt.Errorf("failed to query task reviewer notes: %w", err)
+	}
+	for _, rn := range rNotes {
+		if t, ok := taskMap[rn.TaskID]; ok {
+			t.ReviewerNotes = append(t.ReviewerNotes, rn.TaskNote)
+		}
 	}
 
 	// Batch load notes & commits
@@ -404,6 +426,7 @@ func (d *DB) getTaskLocked(q sqlx.Queryer, id string) (*domain.Task, error) {
 	}
 
 	task.Notes = []domain.TaskNote{}
+	task.ReviewerNotes = []domain.TaskNote{}
 	if err := d.hydrateTaskRelations(q, []*domain.Task{&task}, true); err != nil {
 		return nil, err
 	}
@@ -417,20 +440,22 @@ func (d *DB) GetTask(id string) (*domain.Task, error) {
 }
 
 type UpdateTaskOpts struct {
-	ID          string
-	Title       *string
-	Description *string
-	Status      *domain.Status
-	Priority    *domain.Priority
-	Tags        *[]string
-	AddTags     []string
-	RemoveTags  []string
-	Assignee    *string
-	AddNote     *string
-	Author      string
-	Branch      *string
-	ExternalRef *string
-	PRURL       *string
+	ID            string
+	Title         *string
+	Description   *string
+	Status        *domain.Status
+	Priority      *domain.Priority
+	Tags          *[]string
+	AddTags       []string
+	RemoveTags    []string
+	Assignee      *string
+	Reviewer      *string
+	AddNote       *string
+	AddReviewNote *string
+	Author        string
+	Branch        *string
+	ExternalRef   *string
+	PRURL         *string
 }
 
 func (d *DB) UpdateTask(id string, title, description *string, status *domain.Status, priority *domain.Priority, tags *[]string, addTags, removeTags []string, assignee, addNote *string, author string) (*domain.Task, error) {
@@ -452,8 +477,8 @@ func (d *DB) UpdateTaskExtended(opts UpdateTaskOpts) (*domain.Task, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	// Verify task exists and load current state in transaction
-	var currentTagsJSON, currentTitle string
-	err = tx.QueryRow("SELECT tags, title FROM tasks WHERE id = ?", id).Scan(&currentTagsJSON, &currentTitle)
+	var currentTagsJSON, currentTitle, currentReviewer string
+	err = tx.QueryRow("SELECT tags, title, reviewer FROM tasks WHERE id = ?", id).Scan(&currentTagsJSON, &currentTitle, &currentReviewer)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("task %s not found", id)
@@ -553,6 +578,16 @@ func (d *DB) UpdateTaskExtended(opts UpdateTaskOpts) (*domain.Task, error) {
 		updates = append(updates, "assignee = ?")
 		args = append(args, *opts.Assignee)
 	}
+	effectiveReviewer := strings.TrimSpace(currentReviewer)
+	if opts.Reviewer != nil {
+		effectiveReviewer = strings.TrimSpace(*opts.Reviewer)
+		updates = append(updates, "reviewer = ?")
+		args = append(args, effectiveReviewer)
+	} else if opts.AddReviewNote != nil && strings.TrimSpace(*opts.AddReviewNote) != "" && effectiveReviewer == "" && strings.TrimSpace(opts.Author) != "" {
+		effectiveReviewer = strings.TrimSpace(opts.Author)
+		updates = append(updates, "reviewer = ?")
+		args = append(args, effectiveReviewer)
+	}
 	if opts.Branch != nil {
 		updates = append(updates, "branch = ?")
 		args = append(args, strings.TrimSpace(*opts.Branch))
@@ -581,7 +616,19 @@ func (d *DB) UpdateTaskExtended(opts UpdateTaskOpts) (*domain.Task, error) {
 		}
 	}
 
-	if opts.Description != nil || opts.AddNote != nil {
+	if opts.AddReviewNote != nil && strings.TrimSpace(*opts.AddReviewNote) != "" {
+		noteID := uuid.New().String()
+		noteAuthor := strings.TrimSpace(opts.Author)
+		if noteAuthor == "" {
+			noteAuthor = effectiveReviewer
+		}
+		noteSQL := `INSERT INTO task_reviewer_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`
+		if _, err := tx.Exec(noteSQL, noteID, id, noteAuthor, strings.TrimSpace(*opts.AddReviewNote), now); err != nil {
+			return nil, fmt.Errorf("failed to insert reviewer note: %w", err)
+		}
+	}
+
+	if opts.Description != nil || opts.AddNote != nil || opts.AddReviewNote != nil {
 		if err := reindexLinksTx(tx, id); err != nil {
 			return nil, err
 		}
@@ -589,6 +636,75 @@ func (d *DB) UpdateTaskExtended(opts UpdateTaskOpts) (*domain.Task, error) {
 
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit update: %w", err)
+	}
+	d.invalidateTopicCacheLocked()
+
+	return d.getTaskLocked(d.conn, id)
+}
+
+func (d *DB) ReviewTask(id, reviewer, note, author string) (*domain.Task, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	reviewer = strings.TrimSpace(reviewer)
+	note = strings.TrimSpace(note)
+	author = strings.TrimSpace(author)
+
+	if reviewer == "" && note == "" {
+		return nil, fmt.Errorf("review requires a reviewer and/or a review note")
+	}
+
+	tx, err := d.conn.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var currentReviewer, kind string
+	if err := tx.QueryRow("SELECT reviewer, kind FROM tasks WHERE id = ?", id).Scan(&currentReviewer, &kind); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("task %s not found", id)
+		}
+		return nil, fmt.Errorf("failed to query task: %w", err)
+	}
+	if kind == string(domain.KindPost) {
+		return nil, fmt.Errorf("%s is a post; posts do not use reviews (promote it to a task first)", id)
+	}
+
+	effectiveReviewer := strings.TrimSpace(currentReviewer)
+	if reviewer != "" {
+		effectiveReviewer = reviewer
+	} else if effectiveReviewer == "" && author != "" {
+		effectiveReviewer = author
+	}
+
+	now := time.Now().UTC()
+	if _, err := tx.Exec("UPDATE tasks SET reviewer = ?, updated_at = ? WHERE id = ?", effectiveReviewer, now, id); err != nil {
+		return nil, fmt.Errorf("failed to update task reviewer: %w", err)
+	}
+
+	if note != "" {
+		noteAuthor := author
+		if noteAuthor == "" {
+			noteAuthor = effectiveReviewer
+		}
+		if noteAuthor == "" {
+			noteAuthor = "reviewer"
+		}
+		noteID := uuid.New().String()
+		if _, err := tx.Exec(
+			"INSERT INTO task_reviewer_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)",
+			noteID, id, noteAuthor, note, now,
+		); err != nil {
+			return nil, fmt.Errorf("failed to insert reviewer note: %w", err)
+		}
+		if err := reindexLinksTx(tx, id); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit review: %w", err)
 	}
 	d.invalidateTopicCacheLocked()
 
@@ -1216,6 +1332,10 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 		conditions = append(conditions, "assignee = ?")
 		args = append(args, filter.Assignee)
 	}
+	if filter.Reviewer != "" {
+		conditions = append(conditions, "reviewer = ?")
+		args = append(args, filter.Reviewer)
+	}
 	if filter.Kind != "" {
 		conditions = append(conditions, "kind = ?")
 		args = append(args, string(filter.Kind))
@@ -1332,6 +1452,7 @@ func (d *DB) ListTasks(filter domain.TaskFilter) ([]*domain.Task, error) {
 			return nil, err
 		}
 		task.Notes = []domain.TaskNote{}
+		task.ReviewerNotes = []domain.TaskNote{}
 		tasks = append(tasks, &task)
 	}
 
@@ -1453,9 +1574,12 @@ func (d *DB) DeleteTask(id string) error {
 		) AND scope = ? AND repo_path = ?
 	`, task.Scope, task.RepoPath, task.Scope, task.RepoPath)
 
-	// 4. Delete notes
+	// 4. Delete notes & reviewer notes
 	if _, err := tx.Exec("DELETE FROM task_notes WHERE task_id = ?", id); err != nil {
 		return fmt.Errorf("failed to delete task notes: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM task_reviewer_notes WHERE task_id = ?", id); err != nil {
+		return fmt.Errorf("failed to delete task reviewer notes: %w", err)
 	}
 
 	// 5. Delete task
@@ -1605,9 +1729,12 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		seqNum, _ = strconv.Atoi(parts[1])
 	}
 
-	// Clean up any stale notes and commits before restoring to prevent PRIMARY KEY collisions
+	// Clean up any stale notes, reviewer notes, and commits before restoring to prevent PRIMARY KEY collisions
 	if _, err := tx.Exec("DELETE FROM task_notes WHERE task_id = ?", task.ID); err != nil {
 		return fmt.Errorf("failed to clean existing notes: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM task_reviewer_notes WHERE task_id = ?", task.ID); err != nil {
+		return fmt.Errorf("failed to clean existing reviewer notes: %w", err)
 	}
 	if _, err := tx.Exec("DELETE FROM task_commits WHERE task_id = ?", task.ID); err != nil {
 		return fmt.Errorf("failed to clean existing commits: %w", err)
@@ -1632,9 +1759,9 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 
 	insertSQL := `
 	INSERT INTO tasks (
-		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, created_at, updated_at, closed_at, archived_at,
+		id, scope, repo_path, seq_num, title, description, status, priority, tags, author, assignee, reviewer, created_at, updated_at, closed_at, archived_at,
 		commit_sha, commit_msg, diff_stat, diff_content, kind, topic_id, orphaned_at, branch, external_ref, pr_url
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		scope = excluded.scope,
 		repo_path = excluded.repo_path,
@@ -1646,6 +1773,7 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		tags = excluded.tags,
 		author = excluded.author,
 		assignee = excluded.assignee,
+		reviewer = excluded.reviewer,
 		created_at = excluded.created_at,
 		updated_at = excluded.updated_at,
 		closed_at = excluded.closed_at,
@@ -1663,7 +1791,7 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 	`
 	_, err = tx.Exec(insertSQL,
 		task.ID, task.Scope, task.RepoPath, seqNum, task.Title, task.Description,
-		string(task.Status), string(task.Priority), string(tagsJSON), task.Author, task.Assignee,
+		string(task.Status), string(task.Priority), string(tagsJSON), task.Author, task.Assignee, task.Reviewer,
 		task.CreatedAt, task.UpdatedAt, closedAt, archivedAt,
 		task.CommitSHA, task.CommitMsg, task.DiffStat, task.DiffContent, string(kind), topicID, orphanedAt,
 		task.Branch, task.ExternalRef, task.PRURL,
@@ -1682,6 +1810,19 @@ func (d *DB) restoreTaskTx(tx *sql.Tx, task *domain.Task) error {
 		)
 		if err != nil {
 			return fmt.Errorf("failed to restore note: %w", err)
+		}
+	}
+
+	for _, rn := range task.ReviewerNotes {
+		noteID := rn.ID
+		if noteID == "" {
+			noteID = uuid.New().String()
+		}
+		_, err = tx.Exec(`INSERT INTO task_reviewer_notes (id, task_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)`,
+			noteID, task.ID, rn.Author, rn.Content, rn.CreatedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to restore reviewer note: %w", err)
 		}
 	}
 
@@ -1930,6 +2071,10 @@ func (d *DB) CheckBlocked(taskID string) (blocked bool, unfinishedPrereqs []*dom
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	return d.checkBlockedLocked(taskID)
+}
+
+func (d *DB) checkBlockedLocked(taskID string) (blocked bool, unfinishedPrereqs []*domain.Task, err error) {
 	query := fmt.Sprintf(`
 	SELECT %s
 	FROM task_dependencies td
@@ -1953,4 +2098,117 @@ func (d *DB) CheckBlocked(taskID string) (blocked bool, unfinishedPrereqs []*dom
 	}
 
 	return len(prereqs) > 0, prereqs, nil
+}
+
+// CheckCanClose verifies that taskID can be closed (transitioned to done or closed):
+//  1. If taskID is a task (not a post), it must have a non-empty Reviewer and at least one ReviewerNote.
+//  2. Unless forcePrereqs is true, all explicit prerequisites must already be done/closed.
+//  3. Unless forcePrereqs is true, no earlier unclosed task in the same scope/repo (that does not depend on taskID) may be open/in_progress.
+func (d *DB) CheckCanClose(taskID string, pendingReviewer, pendingReviewNote *string, forcePrereqs bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var scope, repoPath, kind, status, currentReviewer string
+	var seqNum int
+	var reviewNoteCount int
+	err := d.conn.QueryRow(`
+		SELECT scope, repo_path, seq_num, kind, status, reviewer,
+		       (SELECT COUNT(*) FROM task_reviewer_notes rn WHERE rn.task_id = tasks.id)
+		FROM tasks WHERE id = ?
+	`, taskID).Scan(&scope, &repoPath, &seqNum, &kind, &status, &currentReviewer, &reviewNoteCount)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("task %s not found", taskID)
+		}
+		return fmt.Errorf("failed to query task %s: %w", taskID, err)
+	}
+
+	// Posts do not require a review gate
+	if kind == string(domain.KindPost) {
+		return nil
+	}
+
+	// 1. Target task review gate (always enforced for tasks)
+	effectiveReviewer := strings.TrimSpace(currentReviewer)
+	if pendingReviewer != nil {
+		effectiveReviewer = strings.TrimSpace(*pendingReviewer)
+	}
+	effectiveReviewNotes := reviewNoteCount
+	if pendingReviewNote != nil && strings.TrimSpace(*pendingReviewNote) != "" {
+		effectiveReviewNotes++
+	}
+	if effectiveReviewer == "" {
+		return fmt.Errorf("cannot close task %s: task has no assigned reviewer (assign a reviewer and add a review note via 'tk review %s -m \"...\"')", taskID, taskID)
+	}
+	if effectiveReviewNotes == 0 {
+		return fmt.Errorf("cannot close task %s: reviewer %q has not added any reviewer notes yet (run 'tk review %s -m \"...\"')", taskID, effectiveReviewer, taskID)
+	}
+
+	if forcePrereqs {
+		return nil
+	}
+
+	// 2. Explicit prerequisite gate
+	blocked, prereqs, err := d.checkBlockedLocked(taskID)
+	if err != nil {
+		return fmt.Errorf("failed to check dependencies: %w", err)
+	}
+	if blocked {
+		var b strings.Builder
+		for i, pr := range prereqs {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, "%s (%q [%s])", pr.ID, pr.Title, pr.Status)
+		}
+		return fmt.Errorf("cannot mark %s as done: blocked by unfinished prerequisite task(s): %s (close them first or use --force)", taskID, b.String())
+	}
+
+	// 3. Cross-task gate: earlier unclosed tasks in the same scope/repo that do not depend on taskID must be reviewed & closed first
+	precedingQuery := `
+	WITH RECURSIVE dependents_of_target(id) AS (
+		SELECT task_id FROM task_dependencies WHERE depends_on_id = ?
+		UNION
+		SELECT d.task_id FROM task_dependencies d
+		JOIN dependents_of_target dt ON d.depends_on_id = dt.id
+	)
+	SELECT t.id, t.title, t.status, t.reviewer,
+	       (SELECT COUNT(*) FROM task_reviewer_notes rn WHERE rn.task_id = t.id) AS rnotes
+	FROM tasks t
+	WHERE t.scope = ? AND t.repo_path = ? AND t.kind = 'task'
+	  AND t.id != ?
+	  AND t.seq_num < ?
+	  AND t.status NOT IN ('done', 'closed', 'archived')
+	  AND t.archived_at IS NULL
+	  AND t.id NOT IN (SELECT id FROM dependents_of_target)
+	ORDER BY t.seq_num ASC;
+	`
+	rows, err := d.conn.Query(precedingQuery, taskID, scope, repoPath, taskID, seqNum)
+	if err != nil {
+		return fmt.Errorf("failed to check preceding tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var precedingDescs []string
+	for rows.Next() {
+		var pID, pTitle, pStatus, pReviewer string
+		var pRNotes int
+		if err := rows.Scan(&pID, &pTitle, &pStatus, &pReviewer, &pRNotes); err != nil {
+			return fmt.Errorf("failed to scan preceding task: %w", err)
+		}
+		reviewState := "reviewed"
+		if strings.TrimSpace(pReviewer) == "" || pRNotes == 0 {
+			reviewState = "needs review"
+		}
+		precedingDescs = append(precedingDescs, fmt.Sprintf("%s (%q [%s, %s])", pID, pTitle, pStatus, reviewState))
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to iterate preceding tasks: %w", err)
+	}
+
+	if len(precedingDescs) > 0 {
+		return fmt.Errorf("cannot close task %s: earlier task(s) must be reviewed and closed first: %s (review and close them first or use --force)", taskID, strings.Join(precedingDescs, ", "))
+	}
+
+	return nil
 }

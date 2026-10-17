@@ -318,7 +318,7 @@ func (s *Server) dispatch(req protocol.Request) protocol.Response {
 	if resp.Success {
 		switch req.Action {
 		case protocol.ActionCreateTask, protocol.ActionUpdateTask, protocol.ActionClaimTask,
-			protocol.ActionDeleteTask, protocol.ActionRestoreTask, protocol.ActionAttachGit,
+			protocol.ActionReviewTask, protocol.ActionDeleteTask, protocol.ActionRestoreTask, protocol.ActionAttachGit,
 			protocol.ActionAddDependency, protocol.ActionRemoveDependency, protocol.ActionOrphanTask,
 			protocol.ActionReapStaleTasks, protocol.ActionTransferTask, protocol.ActionArchiveTask,
 			protocol.ActionUnarchiveTask, protocol.ActionCreateTopic, protocol.ActionUpdateTopic,
@@ -345,7 +345,7 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 			task, err := db.CreateItem(sqlite.CreateItemParams{
 				Scope: req.Scope, RepoPath: req.RepoPath, Kind: p.Kind, Topic: p.Topic,
 				Title: p.Title, Description: p.Description, Status: p.Status, Priority: p.Priority,
-				Tags: p.Tags, Author: p.Author, Assignee: p.Assignee, DependsOn: p.DependsOn,
+				Tags: p.Tags, Author: p.Author, Assignee: p.Assignee, Reviewer: p.Reviewer, DependsOn: p.DependsOn,
 				Branch: p.Branch, ExternalRef: p.ExternalRef, PRURL: p.PRURL,
 			})
 			if err != nil {
@@ -367,21 +367,17 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 
 	case protocol.ActionUpdateTask:
 		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.UpdateTaskPayload) (*domain.Task, error) {
-			// Hard completion enforcement: cannot mark done/closed if unfinished dependencies exist
-			if p.Status != nil && (*p.Status == domain.StatusDone || *p.Status == domain.StatusClosed) && !p.Force {
-				if blocked, prereqs, err := db.CheckBlocked(p.ID); err == nil && blocked {
-					var titles []string
-					for _, pr := range prereqs {
-						titles = append(titles, fmt.Sprintf("%s [%s] %q", pr.ID, pr.Status, pr.Title))
-					}
-					return nil, fmt.Errorf("cannot mark %s as %s: blocked by %d unfinished task(s):\n  • %s\n(use --force to override)", p.ID, *p.Status, len(prereqs), strings.Join(titles, "\n  • "))
+			// Hard completion enforcement: cannot mark done/closed without review or when prerequisites/earlier tasks are open
+			if p.Status != nil && (*p.Status == domain.StatusDone || *p.Status == domain.StatusClosed) {
+				if err := db.CheckCanClose(p.ID, p.Reviewer, p.AddReviewNote, p.Force); err != nil {
+					return nil, err
 				}
 			}
 
 			task, err := db.UpdateTaskExtended(sqlite.UpdateTaskOpts{
 				ID: p.ID, Title: p.Title, Description: p.Description, Status: p.Status,
 				Priority: p.Priority, Tags: p.Tags, AddTags: p.AddTags, RemoveTags: p.RemoveTags,
-				Assignee: p.Assignee, AddNote: p.AddNote, Author: p.Author,
+				Assignee: p.Assignee, Reviewer: p.Reviewer, AddNote: p.AddNote, AddReviewNote: p.AddReviewNote, Author: p.Author,
 				Branch: p.Branch, ExternalRef: p.ExternalRef, PRURL: p.PRURL,
 			})
 			if err != nil {
@@ -393,6 +389,21 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 				Timestamp: time.Now(),
 				Task:      task,
 				Message:   fmt.Sprintf("~ %s updated (status: %s)", task.ID, task.Status),
+			})
+			return task, nil
+		})
+
+	case protocol.ActionReviewTask:
+		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.ReviewTaskPayload) (*domain.Task, error) {
+			task, err := db.ReviewTask(p.ID, p.Reviewer, p.Note, p.Author)
+			if err != nil {
+				return nil, err
+			}
+			s.pubsub.Publish(protocol.Event{
+				Type:      protocol.EventTaskUpdated,
+				Timestamp: time.Now(),
+				Task:      task,
+				Message:   fmt.Sprintf("★ %s reviewed by %q", task.ID, task.Reviewer),
 			})
 			return task, nil
 		})
@@ -606,13 +617,9 @@ func (s *Server) executeDispatch(req protocol.Request) protocol.Response {
 
 	case protocol.ActionAttachGit:
 		return handleWithDB(s, req, func(db *sqlite.DB, p protocol.AttachGitPayload) (*domain.Task, error) {
-			if p.MarkDone && !p.Force {
-				if blocked, prereqs, err := db.CheckBlocked(p.TaskID); err == nil && blocked {
-					var titles []string
-					for _, pr := range prereqs {
-						titles = append(titles, fmt.Sprintf("%s [%s] %q", pr.ID, pr.Status, pr.Title))
-					}
-					return nil, fmt.Errorf("cannot mark %s as DONE: blocked by %d unfinished task(s):\n  • %s\n(use --force to override)", p.TaskID, len(prereqs), strings.Join(titles, "\n  • "))
+			if p.MarkDone {
+				if err := db.CheckCanClose(p.TaskID, nil, nil, p.Force); err != nil {
+					return nil, err
 				}
 			}
 

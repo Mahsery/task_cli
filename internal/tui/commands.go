@@ -352,6 +352,46 @@ func (m Model) replyTaskCmd(taskID, note string) tea.Cmd {
 	}
 }
 
+func (m Model) reviewTaskCmd(taskID, note string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		actor := m.resolveActor()
+		if _, err := m.client.ReviewTask(taskID, actor, note, actor); err != nil {
+			return errMsg(err)
+		}
+		return m.reloadAfter(nil)
+	}
+}
+
+func (m Model) assignReviewerCmd(taskID, reviewer string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		actor := m.resolveActor()
+		if _, err := m.client.ReviewTask(taskID, reviewer, "", actor); err != nil {
+			return errMsg(err)
+		}
+		return m.reloadAfter(nil)
+	}
+}
+
+func (m Model) batchAssignReviewerCmd(ids []string, reviewer string) tea.Cmd {
+	return func() tea.Msg {
+		if m.client == nil {
+			return nil
+		}
+		actor := m.resolveActor()
+		err := runBatch("assign reviewer", ids, func(id string) error {
+			_, err := m.client.ReviewTask(id, reviewer, "", actor)
+			return err
+		})
+		return m.reloadAfter(err)
+	}
+}
+
 func (m Model) subscribeEventsCmd() tea.Cmd {
 	if m.client == nil {
 		return nil

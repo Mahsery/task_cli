@@ -19,6 +19,7 @@ type ParsedNewTask struct {
 	// in favour of topics and new templates no longer emit the header.
 	Tags        []string
 	Assignee    string
+	Reviewer    string
 	Description string
 }
 
@@ -29,23 +30,27 @@ type ParsedEditTask struct {
 	// Topic is the item's topic path after editing ("" or "unfiled" = no topic).
 	Topic string
 	// Tags mirrors the original tags unless a legacy "# Tags:" header is present.
-	Tags        []string
-	Assignee    string
-	Description string
-	NewNote     string
+	Tags          []string
+	Assignee      string
+	Reviewer      string
+	Description   string
+	NewNote       string
+	NewReviewNote string
 }
 
 // EditChanges lists the fields an editor session actually modified relative to
 // the snapshot it was opened with. Nil pointers mean "unchanged", so a save
 // never overwrites concurrent updates to fields the user did not touch.
 type EditChanges struct {
-	Title       *string
-	Description *string
-	Status      *domain.Status
-	Priority    *domain.Priority
-	Tags        *[]string
-	Assignee    *string
-	AddNote     *string
+	Title         *string
+	Description   *string
+	Status        *domain.Status
+	Priority      *domain.Priority
+	Tags          *[]string
+	Assignee      *string
+	Reviewer      *string
+	AddNote       *string
+	AddReviewNote *string
 	// Topic is the new topic ("unfiled" = clear), or "" when unchanged.
 	Topic string
 }
@@ -53,7 +58,7 @@ type EditChanges struct {
 // Empty reports whether the session changed nothing at all.
 func (c EditChanges) Empty() bool {
 	return c.Title == nil && c.Description == nil && c.Status == nil && c.Priority == nil &&
-		c.Tags == nil && c.Assignee == nil && c.AddNote == nil && c.Topic == ""
+		c.Tags == nil && c.Assignee == nil && c.Reviewer == nil && c.AddNote == nil && c.AddReviewNote == nil && c.Topic == ""
 }
 
 // Changes diffs p against orig, the task the edit template was generated from.
@@ -77,8 +82,14 @@ func (p *ParsedEditTask) Changes(orig *domain.Task) EditChanges {
 	if p.Assignee != orig.Assignee {
 		c.Assignee = &p.Assignee
 	}
+	if p.Reviewer != orig.Reviewer {
+		c.Reviewer = &p.Reviewer
+	}
 	if p.NewNote != "" {
 		c.AddNote = &p.NewNote
+	}
+	if p.NewReviewNote != "" {
+		c.AddReviewNote = &p.NewReviewNote
 	}
 	if p.Topic != "" && p.Topic != editTopicValue(orig) {
 		c.Topic = p.Topic
@@ -116,6 +127,7 @@ func CreateNewTaskFileInTopic(initialTitle, topic string) (string, error) {
 # Priority: normal (low | normal | high | urgent)
 # Topic: %s
 # Assignee: 
+# Reviewer: 
 
 Write task description here...
 `, initialTitle, topic)
@@ -140,12 +152,14 @@ func CreateEditTaskFile(task *domain.Task) (string, error) {
 	fmt.Fprintf(&sb, "# Priority: %s (low | normal | high | urgent)\n", task.Priority)
 	fmt.Fprintf(&sb, "# Topic: %s\n", editTopicValue(task))
 	if task.IsOrphaned() && task.Assignee != "" {
-		fmt.Fprintf(&sb, "# Assignee: %s [STALE / TIMED OUT]\n\n", task.Assignee)
+		fmt.Fprintf(&sb, "# Assignee: %s [STALE / TIMED OUT]\n", task.Assignee)
 	} else {
-		fmt.Fprintf(&sb, "# Assignee: %s\n\n", task.Assignee)
+		fmt.Fprintf(&sb, "# Assignee: %s\n", task.Assignee)
 	}
+	fmt.Fprintf(&sb, "# Reviewer: %s\n\n", task.Reviewer)
 	sb.WriteString(task.Description)
-	sb.WriteString("\n\n# --- Add new notes/comments below (optional) ---\n")
+	sb.WriteString("\n\n# --- Add new notes/comments below (optional) ---\n\n")
+	sb.WriteString("# --- Add new reviewer notes below (optional) ---\n")
 
 	return writeTempFile(fmt.Sprintf("tk-edit-%s-*.md", task.ID), sb.String())
 }
@@ -282,6 +296,8 @@ func ParseNewTaskContent(content string) (*ParsedNewTask, error) {
 					}
 				case "# assignee":
 					res.Assignee = val
+				case "# reviewer":
+					res.Reviewer = val
 				}
 				continue
 			}
@@ -319,21 +335,34 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 		Topic:    editTopicValue(orig),
 		Tags:     orig.Tags,
 		Assignee: orig.Assignee,
+		Reviewer: orig.Reviewer,
 	}
 
 	var bodyLines []string
 	var noteLines []string
+	var reviewNoteLines []string
 	inHeader := true
 	inNotes := false
+	inReviewNotes := false
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
+		if strings.HasPrefix(trimmed, "# --- Add new reviewer notes below") {
+			inReviewNotes = true
+			inNotes = false
+			continue
+		}
 		if strings.HasPrefix(trimmed, "# --- Add new notes/comments below") {
 			inNotes = true
+			inReviewNotes = false
 			continue
 		}
 
+		if inReviewNotes {
+			reviewNoteLines = append(reviewNoteLines, line)
+			continue
+		}
 		if inNotes {
 			noteLines = append(noteLines, line)
 			continue
@@ -393,6 +422,11 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 						val = strings.TrimSpace(val[:idx])
 					}
 					res.Assignee = val
+				case "# reviewer":
+					if idx := strings.Index(val, "["); idx != -1 {
+						val = strings.TrimSpace(val[:idx])
+					}
+					res.Reviewer = val
 				}
 				continue
 			}
@@ -406,6 +440,7 @@ func ParseEditTaskContent(content string, orig *domain.Task) (*ParsedEditTask, e
 
 	res.Description = strings.TrimSpace(strings.Join(bodyLines, "\n"))
 	res.NewNote = strings.TrimSpace(strings.Join(noteLines, "\n"))
+	res.NewReviewNote = strings.TrimSpace(strings.Join(reviewNoteLines, "\n"))
 
 	if res.Title != orig.Title {
 		title, err := domain.NormalizeTitle(res.Title)

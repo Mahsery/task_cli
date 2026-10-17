@@ -15,6 +15,7 @@ type TaskClient interface {
 	CreateTask(p protocol.CreateTaskPayload) (*domain.Task, error)
 	GetTask(id string) (*domain.Task, error)
 	UpdateTask(p protocol.UpdateTaskPayload) (*domain.Task, error)
+	ReviewTask(id, reviewer, note, author string) (*domain.Task, error)
 	ClaimTask(id, assignee string, force bool) (*domain.Task, error)
 	ClaimTaskWithBranch(id, assignee, branch string, force bool) (*domain.Task, error)
 	Actor() string

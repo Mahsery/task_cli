@@ -19,8 +19,10 @@ var (
 	editAddTag      string
 	editRemoveTag   string
 	editAssignee    string
+	editReviewer    string
 	editNote        string
 	editNoteAlias   string
+	editReviewNote  string
 	editDescription string
 	editBranch      string
 	editClaim       bool
@@ -35,6 +37,7 @@ opens an interactive buffer with existing values pre-populated.
 When [id] is omitted, infers the active task from the current git branch.`,
 	Example: `  tk edit T-1 -s in_progress -p urgent
   tk edit T-1 --claim
+  tk edit T-1 -R alice --review-note "LGTM"
   tk edit T-1 -m "Patch sent to mailing list"
   tk edit -m "Progress on current branch task"
   tk edit T-1          # Opens full task buffer in $EDITOR`,
@@ -69,8 +72,10 @@ When [id] is omitted, infers the active task from the current git branch.`,
 			cmd.Flags().Changed("add-tag") ||
 			cmd.Flags().Changed("remove-tag") ||
 			(cmd.Flags().Changed("assignee") && !editClaim) ||
+			cmd.Flags().Changed("reviewer") ||
 			cmd.Flags().Changed("note") ||
 			cmd.Flags().Changed("comment") ||
+			cmd.Flags().Changed("review-note") ||
 			cmd.Flags().Changed("desc") ||
 			cmd.Flags().Changed("branch")
 
@@ -111,10 +116,16 @@ When [id] is omitted, infers the active task from the current git branch.`,
 			if cmd.Flags().Changed("assignee") && !editClaim {
 				payload.Assignee = &editAssignee
 			}
+			if cmd.Flags().Changed("reviewer") {
+				payload.Reviewer = &editReviewer
+			}
 			if cmd.Flags().Changed("note") {
 				payload.AddNote = &editNote
 			} else if cmd.Flags().Changed("comment") {
 				payload.AddNote = &editNoteAlias
+			}
+			if cmd.Flags().Changed("review-note") {
+				payload.AddReviewNote = &editReviewNote
 			}
 			if cmd.Flags().Changed("desc") {
 				payload.Description = &editDescription
@@ -141,8 +152,10 @@ When [id] is omitted, infers the active task from the current git branch.`,
 			payload.Priority = ch.Priority
 			payload.Tags = ch.Tags
 			payload.Assignee = ch.Assignee
+			payload.Reviewer = ch.Reviewer
 			payload.Description = ch.Description
 			payload.AddNote = ch.AddNote
+			payload.AddReviewNote = ch.AddReviewNote
 			if ch.Topic != "" {
 				if _, err := taskClient.MoveItems([]string{task.ID}, ch.Topic, resolveAuthor("")); err != nil {
 					return fmt.Errorf("failed to move %s to @%s: %w", task.ID, ch.Topic, err)
@@ -179,8 +192,10 @@ func init() {
 	editCmd.Flags().StringVar(&editRemoveTag, "remove-tag", "", "Remove a single tag atomically")
 	editCmd.Flags().BoolVar(&editClaim, "claim", false, "Claim the task for the current actor")
 	editCmd.Flags().StringVarP(&editAssignee, "assignee", "a", "", "Update assignee")
+	editCmd.Flags().StringVarP(&editReviewer, "reviewer", "R", "", "Update reviewer")
 	editCmd.Flags().StringVarP(&editNote, "note", "m", "", "Append a note/comment")
 	editCmd.Flags().StringVarP(&editNoteAlias, "comment", "n", "", "Append a note/comment (alias for -m, --note)")
+	editCmd.Flags().StringVar(&editReviewNote, "review-note", "", "Append a reviewer note")
 	editCmd.Flags().StringVarP(&editDescription, "desc", "d", "", "Update description")
 	editCmd.Flags().StringVarP(&editBranch, "branch", "b", "", "Update bound git branch name")
 	_ = editCmd.Flags().MarkHidden("tags")
@@ -192,5 +207,6 @@ func init() {
 func payloadIsEmpty(p protocol.UpdateTaskPayload) bool {
 	return p.Title == nil && p.Description == nil && p.Status == nil && p.Priority == nil &&
 		p.Tags == nil && len(p.AddTags) == 0 && len(p.RemoveTags) == 0 && p.Assignee == nil &&
-		p.AddNote == nil && p.Branch == nil && p.ExternalRef == nil && p.PRURL == nil
+		p.Reviewer == nil && p.AddNote == nil && p.AddReviewNote == nil &&
+		p.Branch == nil && p.ExternalRef == nil && p.PRURL == nil
 }

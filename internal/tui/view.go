@@ -62,6 +62,9 @@ func (m Model) View() string {
 	if m.isReplying {
 		return m.overlayModalString(rawView, m.renderReplyModal(l.width, l.height))
 	}
+	if m.isReviewing {
+		return m.overlayModalString(rawView, m.renderReviewModal(l.width, l.height))
+	}
 	if m.topicForm != nil {
 		return m.overlayModalString(rawView, m.renderTopicForm(l.width))
 	}

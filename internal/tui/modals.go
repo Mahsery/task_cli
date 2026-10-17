@@ -179,6 +179,40 @@ func (m Model) renderReplyModal(termWidth, _ int) string {
 	return theme.ModalBox.Width(boxWidth).Render(strings.Join(lines, "\n"))
 }
 
+func (m Model) renderReviewModal(termWidth, _ int) string {
+	theme := m.theme
+	boxWidth := 64
+	if termWidth > 0 && termWidth-6 < boxWidth {
+		boxWidth = termWidth - 6
+	}
+	if boxWidth < 36 {
+		boxWidth = 36
+	}
+	contentWidth := boxWidth - 4
+
+	reviewer := m.resolveActor()
+	if cur := m.lookupItem(m.reviewTaskID); cur != nil && cur.Reviewer != "" {
+		reviewer = cur.Reviewer
+	}
+
+	lines := []string{
+		theme.ModalTitle.Render(fmt.Sprintf(" SUBMIT REVIEW / REVIEWER NOTE FOR %s ", m.reviewTaskID)),
+		"",
+		theme.ModalDesc.Render(fmt.Sprintf("  Reviewer: %s", reviewer)),
+		theme.SearchPrompt.Render(fmt.Sprintf("  Review Note > %s", m.inputViewOrText(m.reviewInput))),
+		"",
+	}
+	hint := "Recorded in the separate Reviewer Notes section. Tasks require a reviewer and at least one reviewer note before closing."
+	for _, hw := range wrapText(hint, contentWidth, "") {
+		lines = append(lines, theme.ModalDesc.Render(hw))
+	}
+	lines = append(lines, "")
+	confirmKey := theme.ModalKey.Render("[Enter]") + " " + theme.ModalPrompt.Render("Submit Review")
+	cancelKey := theme.ModalCancel.Render("[Esc]") + " " + theme.ModalPrompt.Render("Cancel")
+	lines = append(lines, fmt.Sprintf("%s    %s", confirmKey, cancelKey))
+	return theme.ModalBox.Width(boxWidth).Render(strings.Join(lines, "\n"))
+}
+
 func (m Model) renderHelpModal(termWidth, termHeight int) string {
 	theme := m.theme
 	boxWidth := min(max(termWidth-6, 44), 76)
@@ -196,10 +230,11 @@ func (m Model) renderHelpModal(termWidth, termHeight int) string {
 		"  B                  Toggle Topics sidebar / narrow-screen drawer",
 		"  < / > / =          Resize or reset split pane divider",
 		"",
-		theme.DetailLabel.Render("Task & Post Actions"),
+		theme.DetailLabel.Render("Task, Review & Post Actions"),
 		"  n / e              Create new item / Edit item in $EDITOR",
 		"  R / C              Inline reply / comment modal (with [[wikilinks]])",
-		"  d                  Mark DONE / Resolve (or reopen completed item)",
+		"  w / W              Claim reviewer / Submit review note (required to close)",
+		"  d                  Mark DONE / Resolve (requires review & closed prereqs)",
 		"  s / a              Toggle In-Progress / Claim task",
 		"  L / U              Link prerequisite (fuzzy) / Unlink prerequisite",
 		"  M / p              Move item(s) to topic / Promote post to task",
@@ -207,7 +242,7 @@ func (m Model) renderHelpModal(termWidth, termHeight int) string {
 		"  Space / v / V      Multi-select item / Toggle all / u to Undo",
 		"",
 		theme.DetailLabel.Render("Topics, Search & Wikilinks"),
-		"  /                  Search & DSL filter (branch:, ext:, pr:, topic:, s:)",
+		"  /                  Search & DSL filter (reviewer:, branch:, ext:, topic:)",
 		"  O / S              Cycle kind (All/Tasks/Posts) / Toggle Local/Global",
 		"  gt / ]t / [t       Fuzzy jump to topic / Next or previous topic",
 		"  gl / ]l / [l / gf  Insert [[link]] / Cycle links / Follow link (gb back)",

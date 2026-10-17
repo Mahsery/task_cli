@@ -32,6 +32,9 @@ func collectLinks(t *domain.Task) []resolvedLink {
 	for i, n := range t.Notes {
 		sources = append(sources, src{fmt.Sprintf("note %d", i+1), n.Content})
 	}
+	for i, n := range t.ReviewerNotes {
+		sources = append(sources, src{fmt.Sprintf("review note %d", i+1), n.Content})
+	}
 
 	items := map[string]*domain.Task{}
 	topics := map[string]*domain.Topic{}

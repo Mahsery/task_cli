@@ -67,6 +67,9 @@ func cloneTaskSnapshot(t, fullTask *domain.Task) TaskUndoSnapshot {
 		if t.Notes != nil {
 			clone.Notes = append([]domain.TaskNote(nil), t.Notes...)
 		}
+		if t.ReviewerNotes != nil {
+			clone.ReviewerNotes = append([]domain.TaskNote(nil), t.ReviewerNotes...)
+		}
 		fullTask = &clone
 	}
 	var prevClosed *time.Time
@@ -83,6 +86,7 @@ func cloneTaskSnapshot(t, fullTask *domain.Task) TaskUndoSnapshot {
 		Task:               fullTask,
 		PreviousStatus:     t.Status,
 		PreviousAssignee:   t.Assignee,
+		PreviousReviewer:   t.Reviewer,
 		PreviousClosedAt:   prevClosed,
 		PreviousArchivedAt: prevArchived,
 	}

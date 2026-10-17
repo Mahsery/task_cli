@@ -124,6 +124,7 @@ type Task struct {
 	Tags        []string   `json:"tags"`
 	Author      string     `json:"author"`
 	Assignee    string     `json:"assignee,omitempty"`
+	Reviewer    string     `json:"reviewer,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	ClosedAt    *time.Time `json:"closed_at,omitempty"`
@@ -146,7 +147,8 @@ type Task struct {
 	Blocks    []string `json:"blocks,omitempty"`     // Downstream task IDs that depend on this task
 	IsBlocked bool     `json:"is_blocked,omitempty"` // True if any prerequisite task is not done/closed
 
-	Notes []TaskNote `json:"notes,omitempty"`
+	Notes         []TaskNote `json:"notes,omitempty"`
+	ReviewerNotes []TaskNote `json:"reviewer_notes,omitempty"`
 
 	// Organisation: item kind and topic membership (TopicID 0 = unfiled)
 	Kind      ItemKind `json:"kind,omitempty"`
@@ -163,7 +165,27 @@ func (t *Task) IsPost() bool {
 	return t != nil && t.Kind == KindPost
 }
 
-// LinkText returns all text that may contain wiki links: the description followed by each note.
+// IsReviewed reports whether the task has completed review (an assigned reviewer and at least one reviewer note).
+// Board posts do not require a review.
+func (t *Task) IsReviewed() bool {
+	if t == nil || t.IsPost() {
+		return true
+	}
+	return strings.TrimSpace(t.Reviewer) != "" && len(t.ReviewerNotes) > 0
+}
+
+// NeedsReview reports whether a task is active/open and still requires a review before it can be closed.
+func (t *Task) NeedsReview() bool {
+	if t == nil || t.IsPost() || t.IsArchived() {
+		return false
+	}
+	if t.Status == StatusDone || t.Status == StatusClosed {
+		return false
+	}
+	return !t.IsReviewed()
+}
+
+// LinkText returns all text that may contain wiki links: the description followed by each note and reviewer note.
 func (t *Task) LinkText() string {
 	if t == nil {
 		return ""
@@ -173,6 +195,10 @@ func (t *Task) LinkText() string {
 	for _, n := range t.Notes {
 		b.WriteString("\n")
 		b.WriteString(n.Content)
+	}
+	for _, rn := range t.ReviewerNotes {
+		b.WriteString("\n")
+		b.WriteString(rn.Content)
 	}
 	return b.String()
 }
@@ -203,6 +229,11 @@ func (t *Task) LastActivityTime() time.Time {
 	for _, n := range t.Notes {
 		if n.CreatedAt.After(latest) {
 			latest = n.CreatedAt
+		}
+	}
+	for _, rn := range t.ReviewerNotes {
+		if rn.CreatedAt.After(latest) {
+			latest = rn.CreatedAt
 		}
 	}
 	if t.ClosedAt != nil && t.ClosedAt.After(latest) {
@@ -266,6 +297,7 @@ type TaskFilter struct {
 	Priority        *Priority
 	Tag             string
 	Assignee        string
+	Reviewer        string
 	Search          string
 	Sort            string
 	Limit           int

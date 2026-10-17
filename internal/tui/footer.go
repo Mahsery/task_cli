@@ -174,6 +174,7 @@ func (m Model) renderFooter(width int) string {
 		candidateKeys = append(candidateKeys,
 			key("Enter", "Follow/Diff"),
 			key("R", "Reply"),
+			key("W", "Review"),
 			key("[]l", "Link"),
 			key("gf", "Follow"),
 			key("gl", "Insert"),
@@ -247,7 +248,7 @@ func (m Model) renderFooter(width int) string {
 			if isPost {
 				candidateKeys = append(candidateKeys, key("p", "Promote"))
 			} else {
-				candidateKeys = append(candidateKeys, key("a", "Claim"))
+				candidateKeys = append(candidateKeys, key("a", "Claim"), key("W", "Review"))
 			}
 			candidateKeys = append(candidateKeys, doneLabel)
 			if !isPost {

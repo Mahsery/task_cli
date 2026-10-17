@@ -230,6 +230,9 @@ func (n *termNode) Eval(task *domain.Task) bool {
 	case "assignee", "a":
 		return strings.Contains(strings.ToLower(task.Assignee), target)
 
+	case "reviewer", "rev":
+		return strings.Contains(strings.ToLower(task.Reviewer), target)
+
 	case "author":
 		return strings.Contains(strings.ToLower(task.Author), target)
 
@@ -272,7 +275,7 @@ func (n *termNode) Eval(task *domain.Task) bool {
 		return strings.Contains(strings.ToLower(task.PRURL), target)
 
 	default:
-		// General match: ID, Title, Description, Tags, Assignee, Author, Branch, ExternalRef, PRURL, Notes, Orphaned state
+		// General match: ID, Title, Description, Tags, Assignee, Reviewer, Author, Branch, ExternalRef, PRURL, Notes, ReviewerNotes, Orphaned state
 		if (target == "orphan" || target == "orphaned") && task.IsOrphaned() {
 			return true
 		}
@@ -297,6 +300,9 @@ func (n *termNode) Eval(task *domain.Task) bool {
 		if strings.Contains(strings.ToLower(task.Assignee), target) {
 			return true
 		}
+		if strings.Contains(strings.ToLower(task.Reviewer), target) {
+			return true
+		}
 		if strings.Contains(strings.ToLower(task.Author), target) {
 			return true
 		}
@@ -310,6 +316,11 @@ func (n *termNode) Eval(task *domain.Task) bool {
 			return true
 		}
 		for _, note := range task.Notes {
+			if strings.Contains(strings.ToLower(note.Content), target) {
+				return true
+			}
+		}
+		for _, note := range task.ReviewerNotes {
 			if strings.Contains(strings.ToLower(note.Content), target) {
 				return true
 			}
@@ -432,7 +443,7 @@ func (p *parser) parsePrimary() Node {
 			field := strings.ToLower(val[:idx])
 			termVal := val[idx+1:]
 			switch field {
-			case "tag", "t", "status", "s", "priority", "pri", "p", "assignee", "a", "author", "id",
+			case "tag", "t", "status", "s", "priority", "pri", "p", "assignee", "a", "reviewer", "rev", "author", "id",
 				"topic", "in", "kind", "type", "links", "linksto", "link", "linkedfrom", "backlink", "backlinks",
 				"branch", "b", "ext", "external", "pr":
 				return &termNode{field: field, val: termVal}

@@ -17,6 +17,7 @@ var (
 	listTag       string
 	listTagLabel  string
 	listAssignee  string
+	listReviewer  string
 	listSearch    string
 	listShort     bool
 	listLimit     int
@@ -39,7 +40,7 @@ var listCmd = &cobra.Command{
 	Use:     "list [@topic] [flags]",
 	Aliases: []string{"ls"},
 	Short:   "List tasks and posts (formatted table, one-liners, or JSON)",
-	Long: `List tasks and posts matching the specified topic, status, priority, assignee, or text query.
+	Long: `List tasks and posts matching the specified topic, status, priority, assignee, reviewer, or text query.
 Renders an aligned tabular view by default, or single-line summaries with --short.
 A positional @topic (or --topic) limits the list to one topic; add -r to include sub-topics.`,
 	Example: `  tk list
@@ -52,6 +53,7 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
   tk list @backend -q "jwt"
   tk ls @backend --short
   tk list -a alice
+  tk list -R bob
   tk ls --orphaned
   tk ls --short --limit 10
   tk -g list --json`,
@@ -104,6 +106,7 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
 			RepoPath:        repoRoot,
 			Tag:             tagFilter,
 			Assignee:        listAssignee,
+			Reviewer:        listReviewer,
 			Search:          listSearch,
 			Sort:            listSort,
 			Limit:           listLimit,
@@ -212,6 +215,7 @@ func init() {
 	listCmd.Flags().StringVarP(&listTag, "tag", "t", "", "Filter by tag")
 	listCmd.Flags().StringVarP(&listTagLabel, "label", "l", "", "Filter by tag (alias for -t, --tag)")
 	listCmd.Flags().StringVarP(&listAssignee, "assignee", "a", "", "Filter by assignee")
+	listCmd.Flags().StringVarP(&listReviewer, "reviewer", "R", "", "Filter by reviewer")
 	listCmd.Flags().StringVarP(&listSearch, "search", "q", "", "Search query DSL (supports AND, OR, NOT, tags, qualifiers)")
 	listCmd.Flags().StringVar(&listSort, "sort", "", "Sort order: 'status,priority,id' (default), 'id', 'recent', 'created', 'updated'")
 	listCmd.Flags().BoolVar(&listShort, "short", false, "Output simple one-line list")

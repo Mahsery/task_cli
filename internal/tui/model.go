@@ -60,6 +60,7 @@ type TaskUndoSnapshot struct {
 	Task               *domain.Task
 	PreviousStatus     domain.Status
 	PreviousAssignee   string
+	PreviousReviewer   string
 	PreviousClosedAt   *time.Time
 	PreviousArchivedAt *time.Time
 }
@@ -105,6 +106,9 @@ type Model struct {
 	isReplying         bool
 	replyInput         string
 	replyTaskID        string
+	isReviewing        bool
+	reviewInput        string
+	reviewTaskID       string
 	showHelp           bool
 	narrowSidebarOpen  bool
 	eventCh            <-chan protocol.Event

@@ -564,6 +564,18 @@ func (m Model) detailDoc(detailWidth int) detailDoc {
 		}
 		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Assignee:"), theme.NoteHeader.Render(assigneeDisplay)))
 	}
+	if !t.IsPost() {
+		var reviewerDisplay string
+		switch {
+		case t.IsReviewed():
+			reviewerDisplay = theme.CountDone.Render(fmt.Sprintf("%s ✓ (%d note(s))", t.Reviewer, len(t.ReviewerNotes)))
+		case t.Reviewer != "":
+			reviewerDisplay = theme.CountProg.Render(t.Reviewer + " (pending review note)")
+		default:
+			reviewerDisplay = theme.DiffSub.Render("unassigned (needs review)")
+		}
+		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Reviewer:"), reviewerDisplay))
+	}
 	if t.Branch != "" {
 		metaParts = append(metaParts, fmt.Sprintf("%s %s", theme.DetailLabel.Render("Branch:"), theme.ModalKey.Render(t.Branch)))
 	}
@@ -705,6 +717,39 @@ func (m Model) detailDoc(detailWidth int) detailDoc {
 				currLinkIdx++
 			}
 			doc.lines = append(doc.lines, renderedNote...)
+		}
+	}
+
+	// Separate Reviewer Notes section (with links)
+	if !t.IsPost() || len(t.ReviewerNotes) > 0 || t.Reviewer != "" {
+		revHeader := fmt.Sprintf("  • Reviewer Notes (%d):", len(t.ReviewerNotes))
+		if t.Reviewer != "" {
+			revHeader = fmt.Sprintf("  • Reviewer Notes (%d) — Reviewer: %s:", len(t.ReviewerNotes), t.Reviewer)
+		}
+		doc.lines = append(doc.lines, strings.Repeat(" ", detailWidth), theme.NoteHeader.Width(detailWidth).Render(revHeader))
+		if len(t.ReviewerNotes) == 0 {
+			doc.lines = append(doc.lines, theme.DetailLabel.Render("    No reviewer notes yet (press 'W' to submit review note, 'w' to claim reviewer)."))
+		}
+		for i, rn := range t.ReviewerNotes {
+			rNum := i + 1
+			timeStr := theme.NoteTime.Render(timeAgo(rn.CreatedAt))
+			authorStr := ""
+			if rn.Author != "" {
+				availAuthor := detailWidth - 18
+				author := truncateToWidth(rn.Author, availAuthor)
+				authorStr = " by " + theme.NoteAuthor.Render(author)
+			}
+			anchorTag := " " + theme.DetailLabel.Render(fmt.Sprintf("#r%d", rNum))
+			doc.lines = append(doc.lines, fmt.Sprintf("    • %s%s%s:", timeStr, authorStr, anchorTag))
+			rnLinks := domain.ParseWikiLinks(rn.Content, m.scope)
+			renderedRNote := m.renderLinkedText(rn.Content, rnLinks, currLinkIdx, detailWidth-6, "      ", func(_ int) lipgloss.Style {
+				return theme.NoteContent
+			}, nil, linkLines)
+			for _, l := range rnLinks {
+				doc.links = append(doc.links, detailLink{Index: currLinkIdx, Link: l})
+				currLinkIdx++
+			}
+			doc.lines = append(doc.lines, renderedRNote...)
 		}
 	}
 

@@ -47,6 +47,25 @@ func reindexLinksTx(tx execQueryer, id string) error {
 	}
 	_ = rows.Close()
 
+	rrows, err := tx.Query("SELECT content FROM task_reviewer_notes WHERE task_id = ? ORDER BY created_at ASC", id)
+	if err != nil {
+		return fmt.Errorf("failed to load reviewer notes for link indexing: %w", err)
+	}
+	for rrows.Next() {
+		var c string
+		if err := rrows.Scan(&c); err != nil {
+			_ = rrows.Close()
+			return fmt.Errorf("failed to scan reviewer note for link indexing: %w", err)
+		}
+		sb.WriteByte('\n')
+		sb.WriteString(c)
+	}
+	if err := rrows.Err(); err != nil {
+		_ = rrows.Close()
+		return fmt.Errorf("failed to iterate reviewer notes for link indexing: %w", err)
+	}
+	_ = rrows.Close()
+
 	if _, err := tx.Exec("DELETE FROM task_links WHERE from_id = ?", id); err != nil {
 		return fmt.Errorf("failed to clear link index: %w", err)
 	}

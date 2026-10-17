@@ -1658,3 +1658,112 @@ func TestListTasks_OrphanFiltering(t *testing.T) {
 		t.Fatalf("expected 2 tasks for search status:orphaned, got %d", len(searchOrphanedTasks))
 	}
 }
+
+func TestReviewerAndCloseGateInvariants(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// 1. Create T-1 (with initial reviewer) and T-2 (without reviewer)
+	t1, err := db.CreateItem(CreateItemParams{
+		Scope:    "local",
+		RepoPath: "/repo/review",
+		Title:    "Task 1: Foundation",
+		Status:   domain.StatusOpen,
+		Priority: domain.PriorityHigh,
+		Author:   "alice",
+		Assignee: "bob",
+		Reviewer: "carol",
+	})
+	if err != nil {
+		t.Fatalf("CreateItem T-1 failed: %v", err)
+	}
+	if t1.Reviewer != "carol" {
+		t.Fatalf("expected T-1 reviewer 'carol', got %q", t1.Reviewer)
+	}
+	if !t1.NeedsReview() {
+		t.Fatalf("expected T-1 to still need review because it has no reviewer notes yet")
+	}
+
+	t2, err := db.CreateItem(CreateItemParams{
+		Scope:    "local",
+		RepoPath: "/repo/review",
+		Title:    "Task 2: Follow-up",
+		Status:   domain.StatusOpen,
+		Priority: domain.PriorityNormal,
+		Author:   "alice",
+	})
+	if err != nil {
+		t.Fatalf("CreateItem T-2 failed: %v", err)
+	}
+
+	// 2. CheckCanClose on T-1 must fail because carol hasn't added a reviewer note yet
+	if err := db.CheckCanClose(t1.ID, nil, nil, false); err == nil || !strings.Contains(err.Error(), "has not added any reviewer notes") {
+		t.Fatalf("expected CheckCanClose to fail for missing reviewer notes on T-1, got: %v", err)
+	}
+
+	// 3. CheckCanClose on T-2 must fail because no reviewer is assigned
+	if err := db.CheckCanClose(t2.ID, nil, nil, false); err == nil || !strings.Contains(err.Error(), "no assigned reviewer") {
+		t.Fatalf("expected CheckCanClose to fail for missing reviewer on T-2, got: %v", err)
+	}
+
+	// 4. Add a regular note to T-1 -> must NOT satisfy ReviewerNotes requirement!
+	regNote := "Regular implementation progress note"
+	if _, err := db.UpdateTaskExtended(UpdateTaskOpts{ID: t1.ID, AddNote: &regNote, Author: "bob"}); err != nil {
+		t.Fatalf("UpdateTaskExtended regular note failed: %v", err)
+	}
+	if err := db.CheckCanClose(t1.ID, nil, nil, false); err == nil {
+		t.Fatalf("regular note must NOT satisfy reviewer note requirement")
+	}
+
+	// 5. Submit review note on T-2 first, then try to close T-2 while T-1 is still open -> must fail due to cross-task close gate!
+	t2Reviewed, err := db.ReviewTask(t2.ID, "dave", "Reviewed T-2 implementation", "dave")
+	if err != nil {
+		t.Fatalf("ReviewTask T-2 failed: %v", err)
+	}
+	if !t2Reviewed.IsReviewed() || t2Reviewed.Reviewer != "dave" || len(t2Reviewed.ReviewerNotes) != 1 {
+		t.Fatalf("expected T-2 to be reviewed by dave with 1 reviewer note, got %+v", t2Reviewed)
+	}
+	if err := db.CheckCanClose(t2.ID, nil, nil, false); err == nil || !strings.Contains(err.Error(), "earlier task(s) must be reviewed and closed first: T-1") {
+		t.Fatalf("expected CheckCanClose on T-2 to be blocked by unclosed earlier task T-1, got: %v", err)
+	}
+
+	// 6. Now review T-1 and close T-1 -> succeeds! Then close T-2 -> succeeds!
+	t1Reviewed, err := db.ReviewTask(t1.ID, "", "LGTM, verified tests", "carol")
+	if err != nil {
+		t.Fatalf("ReviewTask T-1 failed: %v", err)
+	}
+	if !t1Reviewed.IsReviewed() || len(t1Reviewed.ReviewerNotes) != 1 || len(t1Reviewed.Notes) != 1 {
+		t.Fatalf("expected T-1 to have 1 regular note and 1 separate reviewer note, got notes=%d revNotes=%d", len(t1Reviewed.Notes), len(t1Reviewed.ReviewerNotes))
+	}
+	if err := db.CheckCanClose(t1.ID, nil, nil, false); err != nil {
+		t.Fatalf("expected CheckCanClose on reviewed T-1 to succeed, got: %v", err)
+	}
+	if _, err := db.AttachGit(t1.ID, "111aaaa", "feat: complete T-1", "1 file", "+1", true); err != nil {
+		t.Fatalf("AttachGit T-1 failed: %v", err)
+	}
+	if err := db.CheckCanClose(t2.ID, nil, nil, false); err != nil {
+		t.Fatalf("expected CheckCanClose on T-2 to succeed once T-1 is closed, got: %v", err)
+	}
+
+	// 7. Filter by Reviewer and DSL reviewer: query
+	carolTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/review", Reviewer: "carol"})
+	if err != nil || len(carolTasks) != 1 || carolTasks[0].ID != t1.ID {
+		t.Fatalf("expected ListTasks(Reviewer: carol) to return [T-1], got err=%v tasks=%+v", err, carolTasks)
+	}
+	daveTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/review", Search: "reviewer:dave"})
+	if err != nil || len(daveTasks) != 1 || daveTasks[0].ID != t2.ID {
+		t.Fatalf("expected ListTasks(Search: reviewer:dave) to return [T-2], got err=%v tasks=%+v", err, daveTasks)
+	}
+
+	// 8. Delete and restore preserves Reviewer and ReviewerNotes
+	if err := db.DeleteTask(t2.ID); err != nil {
+		t.Fatalf("DeleteTask T-2 failed: %v", err)
+	}
+	restoredT2, err := db.RestoreTaskByID(t2.ID)
+	if err != nil {
+		t.Fatalf("RestoreTaskByID T-2 failed: %v", err)
+	}
+	if restoredT2.Reviewer != "dave" || len(restoredT2.ReviewerNotes) != 1 || restoredT2.ReviewerNotes[0].Content != "Reviewed T-2 implementation" {
+		t.Fatalf("expected restored T-2 to preserve Reviewer and ReviewerNotes, got %+v", restoredT2)
+	}
+}

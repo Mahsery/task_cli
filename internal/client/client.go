@@ -236,6 +236,24 @@ func (c *Client) UpdateTask(p protocol.UpdateTaskPayload) (*domain.Task, error) 
 	return &task, nil
 }
 
+func (c *Client) ReviewTask(id, reviewer, note, author string) (*domain.Task, error) {
+	p := protocol.ReviewTaskPayload{
+		ID:       id,
+		Reviewer: reviewer,
+		Note:     note,
+		Author:   author,
+	}
+	resp, err := c.call(protocol.ActionReviewTask, p)
+	if err != nil {
+		return nil, err
+	}
+	var task domain.Task
+	if err := json.Unmarshal(resp.Data, &task); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
 func (c *Client) ClaimTask(id, assignee string, force bool) (*domain.Task, error) {
 	return c.ClaimTaskWithBranch(id, assignee, "", force)
 }
@@ -801,6 +819,9 @@ func (c *Client) normalizePayload(payload any) any {
 		p.ID = c.nid(p.ID)
 		return p
 	case protocol.UpdateTaskPayload:
+		p.ID = c.nid(p.ID)
+		return p
+	case protocol.ReviewTaskPayload:
 		p.ID = c.nid(p.ID)
 		return p
 	case protocol.ClaimTaskPayload:

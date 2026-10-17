@@ -87,6 +87,16 @@ When [id] is omitted, infers the active task from the current git branch.`,
 		if task.Assignee != "" {
 			fmt.Fprintf(&sb, "Assignee: %s\n", task.Assignee)
 		}
+		if !task.IsPost() || task.Reviewer != "" {
+			switch {
+			case task.Reviewer != "" && len(task.ReviewerNotes) > 0:
+				fmt.Fprintf(&sb, "Reviewer: %s ✓ [REVIEWED - %d note(s)]\n", task.Reviewer, len(task.ReviewerNotes))
+			case task.Reviewer != "":
+				fmt.Fprintf(&sb, "Reviewer: %s ⏳ [AWAITING REVIEW NOTE]\n", task.Reviewer)
+			default:
+				fmt.Fprintf(&sb, "Reviewer: (unassigned) ⚠️ [REVIEW REQUIRED BEFORE CLOSE]\n")
+			}
+		}
 		if task.Branch != "" {
 			fmt.Fprintf(&sb, "Branch:   %s\n", task.Branch)
 		}
@@ -139,6 +149,23 @@ When [id] is omitted, infers the active task from the current git branch.`,
 				content, n := annotateLinks(note.Content, linkN, task.Scope)
 				linkN = n
 				fmt.Fprintf(&sb, "#n%d [%s] %s:\n%s\n\n", i+1, note.CreatedAt.Format("2006-01-02 15:04"), note.Author, content)
+			}
+		}
+
+		if !task.IsPost() || len(task.ReviewerNotes) > 0 {
+			sb.WriteString("── Reviewer Notes " + strings.Repeat("─", 62) + "\n")
+			if len(task.ReviewerNotes) == 0 {
+				if task.Reviewer != "" {
+					fmt.Fprintf(&sb, "  (No reviewer notes recorded yet by %s — run 'tk review %s -m \"...\"' before closing)\n\n", task.Reviewer, task.ID)
+				} else {
+					fmt.Fprintf(&sb, "  (No reviewer assigned or notes recorded — run 'tk review %s -m \"...\"' before closing)\n\n", task.ID)
+				}
+			} else {
+				for i, note := range task.ReviewerNotes {
+					content, n := annotateLinks(note.Content, linkN, task.Scope)
+					linkN = n
+					fmt.Fprintf(&sb, "#r%d [%s] %s:\n%s\n\n", i+1, note.CreatedAt.Format("2006-01-02 15:04"), note.Author, content)
+				}
 			}
 		}
 

@@ -214,3 +214,27 @@ func TestEditChangesTopicMove(t *testing.T) {
 		t.Errorf("expected topic move to game/nav, got %q", ch.Topic)
 	}
 }
+
+func TestEditReviewerAndReviewNoteRoundTrip(t *testing.T) {
+	orig := &domain.Task{
+		ID:       "T-5",
+		Title:    "Verify Reviewer Template",
+		Status:   domain.StatusInProgress,
+		Priority: domain.PriorityHigh,
+		Assignee: "bob",
+	}
+	ch := editRoundTrip(t, orig, func(s string) string {
+		s = strings.Replace(s, "# Reviewer: ", "# Reviewer: alice", 1)
+		s += "\nReviewed architecture and error handling.\n"
+		return s
+	}).Changes(orig)
+	if ch.Reviewer == nil || *ch.Reviewer != "alice" {
+		t.Fatalf("expected Reviewer change to 'alice', got %+v", ch.Reviewer)
+	}
+	if ch.AddReviewNote == nil || *ch.AddReviewNote != "Reviewed architecture and error handling." {
+		t.Fatalf("expected AddReviewNote to be populated, got %+v", ch.AddReviewNote)
+	}
+	if ch.AddNote != nil {
+		t.Fatalf("expected regular AddNote to be nil when only reviewer note was added, got %q", *ch.AddNote)
+	}
+}

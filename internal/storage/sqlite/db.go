@@ -84,7 +84,7 @@ func (d *DB) Checkpoint(mode string) error {
 	return err
 }
 
-const CurrentSchemaVersion = 5
+const CurrentSchemaVersion = 6
 
 func (d *DB) migrate() error {
 	var userVersion int
@@ -118,7 +118,7 @@ func (d *DB) migrate() error {
 
 	// Schema v3 migration: ensure archived_at column and index exist for pre-existing databases before schema exec
 	if userVersion < 3 && tableCount > 0 {
-		hasArchivedAt, err := d.hasColumn("tasks", "archived_at")
+		hasArchivedAt, err := d.hasTaskColumn("archived_at")
 		if err != nil {
 			return fmt.Errorf("migration to v3 failed (inspect tasks): %w", err)
 		}
@@ -139,7 +139,7 @@ func (d *DB) migrate() error {
 			{"topic_id", "ALTER TABLE tasks ADD COLUMN topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL;"},
 			{"orphaned_at", "ALTER TABLE tasks ADD COLUMN orphaned_at DATETIME;"},
 		} {
-			has, err := d.hasColumn("tasks", col.name)
+			has, err := d.hasTaskColumn(col.name)
 			if err != nil {
 				return fmt.Errorf("migration to v4 failed (inspect tasks): %w", err)
 			}
@@ -158,7 +158,7 @@ func (d *DB) migrate() error {
 			{"external_ref", "ALTER TABLE tasks ADD COLUMN external_ref TEXT NOT NULL DEFAULT '';"},
 			{"pr_url", "ALTER TABLE tasks ADD COLUMN pr_url TEXT NOT NULL DEFAULT '';"},
 		} {
-			has, err := d.hasColumn("tasks", col.name)
+			has, err := d.hasTaskColumn(col.name)
 			if err != nil {
 				return fmt.Errorf("migration to v5 failed (inspect tasks): %w", err)
 			}
@@ -166,6 +166,19 @@ func (d *DB) migrate() error {
 				if _, err := d.conn.Exec(col.ddl); err != nil {
 					return fmt.Errorf("migration to v5 failed (add %s): %w", col.name, err)
 				}
+			}
+		}
+	}
+
+	// Schema v6 migration: reviewer column on tasks.
+	if userVersion < 6 && tableCount > 0 {
+		hasReviewer, err := d.hasTaskColumn("reviewer")
+		if err != nil {
+			return fmt.Errorf("migration to v6 failed (inspect tasks): %w", err)
+		}
+		if !hasReviewer {
+			if _, err := d.conn.Exec("ALTER TABLE tasks ADD COLUMN reviewer TEXT NOT NULL DEFAULT '';"); err != nil {
+				return fmt.Errorf("migration to v6 failed (add reviewer): %w", err)
 			}
 		}
 	}
@@ -198,6 +211,7 @@ func (d *DB) migrate() error {
 		tags TEXT NOT NULL DEFAULT '[]',
 		author TEXT NOT NULL DEFAULT '',
 		assignee TEXT NOT NULL DEFAULT '',
+		reviewer TEXT NOT NULL DEFAULT '',
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL,
 		closed_at DATETIME,
@@ -232,6 +246,16 @@ func (d *DB) migrate() error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_notes_task ON task_notes(task_id, created_at ASC);
+
+	CREATE TABLE IF NOT EXISTS task_reviewer_notes (
+		id TEXT PRIMARY KEY,
+		task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+		author TEXT NOT NULL DEFAULT '',
+		content TEXT NOT NULL DEFAULT '',
+		created_at DATETIME NOT NULL
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_reviewer_notes_task ON task_reviewer_notes(task_id, created_at ASC);
 
 	CREATE TABLE IF NOT EXISTS task_commits (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -335,9 +359,9 @@ func (d *DB) migrate() error {
 	return d.QuickCheck()
 }
 
-// hasColumn reports whether table has a column with the given name.
-func (d *DB) hasColumn(table, column string) (bool, error) {
-	rows, err := d.conn.Query(fmt.Sprintf("PRAGMA table_info(%s);", table))
+// hasTaskColumn reports whether the tasks table has a column with the given name.
+func (d *DB) hasTaskColumn(column string) (bool, error) {
+	rows, err := d.conn.Query("PRAGMA table_info(tasks);")
 	if err != nil {
 		return false, err
 	}

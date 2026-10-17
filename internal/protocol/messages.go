@@ -42,6 +42,7 @@ const (
 	ActionDeleteTopic      Action = "topic.delete"
 	ActionMoveItems        Action = "item.move"
 	ActionPromotePost      Action = "post.promote"
+	ActionReviewTask       Action = "review_task"
 )
 
 type Request struct {
@@ -67,6 +68,7 @@ type CreateTaskPayload struct {
 	Tags        []string        `json:"tags"`
 	Author      string          `json:"author"`
 	Assignee    string          `json:"assignee,omitempty"`
+	Reviewer    string          `json:"reviewer,omitempty"`
 	DependsOn   []string        `json:"depends_on,omitempty"`
 	Kind        domain.ItemKind `json:"kind,omitempty"`
 	Topic       string          `json:"topic,omitempty"`
@@ -76,21 +78,30 @@ type CreateTaskPayload struct {
 }
 
 type UpdateTaskPayload struct {
-	ID          string           `json:"id"`
-	Title       *string          `json:"title,omitempty"`
-	Description *string          `json:"description,omitempty"`
-	Status      *domain.Status   `json:"status,omitempty"`
-	Priority    *domain.Priority `json:"priority,omitempty"`
-	Tags        *[]string        `json:"tags,omitempty"`
-	AddTags     []string         `json:"add_tags,omitempty"`
-	RemoveTags  []string         `json:"remove_tags,omitempty"`
-	Assignee    *string          `json:"assignee,omitempty"`
-	AddNote     *string          `json:"add_note,omitempty"`
-	Author      string           `json:"author,omitempty"`
-	Force       bool             `json:"force,omitempty"`
-	Branch      *string          `json:"branch,omitempty"`
-	ExternalRef *string          `json:"external_ref,omitempty"`
-	PRURL       *string          `json:"pr_url,omitempty"`
+	ID            string           `json:"id"`
+	Title         *string          `json:"title,omitempty"`
+	Description   *string          `json:"description,omitempty"`
+	Status        *domain.Status   `json:"status,omitempty"`
+	Priority      *domain.Priority `json:"priority,omitempty"`
+	Tags          *[]string        `json:"tags,omitempty"`
+	AddTags       []string         `json:"add_tags,omitempty"`
+	RemoveTags    []string         `json:"remove_tags,omitempty"`
+	Assignee      *string          `json:"assignee,omitempty"`
+	Reviewer      *string          `json:"reviewer,omitempty"`
+	AddNote       *string          `json:"add_note,omitempty"`
+	AddReviewNote *string          `json:"add_review_note,omitempty"`
+	Author        string           `json:"author,omitempty"`
+	Force         bool             `json:"force,omitempty"`
+	Branch        *string          `json:"branch,omitempty"`
+	ExternalRef   *string          `json:"external_ref,omitempty"`
+	PRURL         *string          `json:"pr_url,omitempty"`
+}
+
+type ReviewTaskPayload struct {
+	ID       string `json:"id"`
+	Reviewer string `json:"reviewer,omitempty"`
+	Note     string `json:"note,omitempty"`
+	Author   string `json:"author,omitempty"`
 }
 
 type ClaimTaskPayload struct {
@@ -112,6 +123,7 @@ type ListTasksPayload struct {
 	Priority        *domain.Priority `json:"priority,omitempty"`
 	Tag             string           `json:"tag,omitempty"`
 	Assignee        string           `json:"assignee,omitempty"`
+	Reviewer        string           `json:"reviewer,omitempty"`
 	Search          string           `json:"search,omitempty"`
 	Sort            string           `json:"sort,omitempty"`
 	Limit           int              `json:"limit,omitempty"`
@@ -141,6 +153,7 @@ func (p ListTasksPayload) ToFilter() domain.TaskFilter {
 		Priority:        p.Priority,
 		Tag:             p.Tag,
 		Assignee:        p.Assignee,
+		Reviewer:        p.Reviewer,
 		Search:          p.Search,
 		Sort:            p.Sort,
 		Limit:           p.Limit,
@@ -171,6 +184,7 @@ func FilterToListTasksPayload(filter domain.TaskFilter) ListTasksPayload {
 		Priority:        filter.Priority,
 		Tag:             filter.Tag,
 		Assignee:        filter.Assignee,
+		Reviewer:        filter.Reviewer,
 		Search:          filter.Search,
 		Sort:            filter.Sort,
 		Limit:           filter.Limit,

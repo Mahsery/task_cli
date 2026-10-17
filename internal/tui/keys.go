@@ -163,6 +163,46 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.isReviewing {
+		switch msg.String() {
+		case "enter":
+			m.isReviewing = false
+			note := strings.TrimSpace(m.input.Value())
+			taskID := m.reviewTaskID
+			m.reviewInput = ""
+			m.input.Reset()
+			m.input.Blur()
+			if note == "" {
+				m.statusMsg = "Review cancelled (empty note)"
+				return m, nil
+			}
+			actor := m.resolveActor()
+			if cur := m.lookupItem(taskID); cur != nil {
+				if cur.Reviewer == "" {
+					cur.Reviewer = actor
+				}
+				cur.ReviewerNotes = append(cur.ReviewerNotes, domain.TaskNote{
+					Author:    actor,
+					Content:   note,
+					CreatedAt: time.Now(),
+				})
+			}
+			m.statusMsg = fmt.Sprintf("Submitted review note for %s", taskID)
+			return m, m.reviewTaskCmd(taskID, note)
+		case "esc":
+			m.isReviewing = false
+			m.reviewInput = ""
+			m.input.Reset()
+			m.input.Blur()
+			m.statusMsg = "Review cancelled"
+			return m, nil
+		default:
+			cmd := m.updateInput(msg)
+			m.reviewInput = m.input.Value()
+			return m, cmd
+		}
+	}
+
 	if m.topicForm != nil {
 		return m.handleTopicFormKey(msg)
 	}
@@ -265,7 +305,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return updated, cmd
 		}
 		switch kStr {
-		case "d", "s", "a", "e", "v", "V", "x", "A", "L", "p", "M":
+		case "d", "s", "a", "e", "v", "V", "x", "A", "L", "p", "M", "w", "W":
 			m.statusMsg = "Tab to Tasks to interact with items"
 			return m, nil
 		}
@@ -319,6 +359,49 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.replyTaskID = cur.ID
 			m.focusInput()
 			m.statusMsg = fmt.Sprintf("Replying to %s", cur.ID)
+		}
+		return m, nil
+
+	case "w":
+		if m.activePane == PaneSidebar {
+			return m, nil
+		}
+		actor := m.resolveActor()
+		if m.activePane == PaneList && len(m.selected) > 0 {
+			ids := m.getSelectedIDs()
+			for _, id := range ids {
+				if t := m.lookupItem(id); t != nil && !t.IsPost() {
+					t.Reviewer = actor
+				}
+			}
+			m.statusMsg = fmt.Sprintf("Assigned %s as reviewer on %d task(s)", actor, len(ids))
+			return m, m.batchAssignReviewerCmd(ids, actor)
+		}
+		if cur := m.currentTask(); cur != nil {
+			if cur.IsPost() {
+				m.statusMsg = "Board posts do not require a reviewer"
+				return m, nil
+			}
+			cur.Reviewer = actor
+			m.statusMsg = fmt.Sprintf("Assigned %s as reviewer on %s (press 'W' to add review note)", actor, cur.ID)
+			return m, m.assignReviewerCmd(cur.ID, actor)
+		}
+		return m, nil
+
+	case "W":
+		if m.activePane == PaneSidebar {
+			return m, nil
+		}
+		if cur := m.currentTask(); cur != nil {
+			if cur.IsPost() {
+				m.statusMsg = "Board posts do not have reviewer notes (use 'R' to reply)"
+				return m, nil
+			}
+			m.isReviewing = true
+			m.reviewInput = ""
+			m.reviewTaskID = cur.ID
+			m.focusInput()
+			m.statusMsg = fmt.Sprintf("Reviewing %s", cur.ID)
 		}
 		return m, nil
 
@@ -851,6 +934,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.confirmDialog = dlg
 				return m, nil
 			}
+			for _, id := range ids {
+				if task := m.lookupItem(id); task != nil && task.NeedsReview() {
+					err := fmt.Errorf("task %s cannot be closed without a review (press 'w' to claim reviewer and 'W' to submit review note)", task.ID)
+					m.err = err
+					m.statusMsg = fmt.Sprintf("Error: %v", err)
+					return m, nil
+				}
+			}
 			dlg := m.newBatchConfirmDialog(ConfirmDone, "CONFIRM BATCH DONE", fmt.Sprintf("Mark %d selected tasks as DONE?", len(ids)))
 			dlg.TargetStatus = domain.StatusDone
 			m.confirmDialog = dlg
@@ -868,6 +959,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				dlg := m.newSingleConfirmDialog(ConfirmForceDone, "FORCE MARK DONE", fmt.Sprintf("Task %s is blocked by unfinished prerequisite(s) (%s). Force mark DONE?", cur.ID, strings.Join(cur.BlockedBy, ", ")), cur)
 				dlg.TargetStatus = domain.StatusDone
 				m.confirmDialog = dlg
+				return m, nil
+			}
+			if err := m.checkCanCloseInTUI(cur); err != nil {
+				m.err = err
+				m.statusMsg = fmt.Sprintf("Error: %v", err)
 				return m, nil
 			}
 			m.pushUndo(UndoStatusChange, fmt.Sprintf("Marked %s as DONE", cur.ID), cloneTaskSnapshot(cur, nil))
@@ -1014,6 +1110,51 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// checkCanCloseInTUI validates that target has been reviewed and that no earlier
+// unclosed task in the visible task list is blocking closure.
+func (m Model) checkCanCloseInTUI(target *domain.Task) error {
+	if target == nil || target.IsPost() {
+		return nil
+	}
+	if target.NeedsReview() {
+		if strings.TrimSpace(target.Reviewer) == "" {
+			return fmt.Errorf("task %s cannot be closed without a review: no reviewer is assigned (press 'w' to claim reviewer or 'W' to review)", target.ID)
+		}
+		return fmt.Errorf("task %s cannot be closed without a review: reviewer %q has not added any reviewer notes yet (press 'W' to add review note)", target.ID, target.Reviewer)
+	}
+	_, targetSeq, targetOK := domain.ParseItemID(target.ID)
+	if !targetOK {
+		return nil
+	}
+	for _, other := range m.tasks {
+		if other == nil || other.ID == target.ID || other.IsPost() || other.IsArchived() {
+			continue
+		}
+		if other.Status == domain.StatusDone || other.Status == domain.StatusClosed {
+			continue
+		}
+		_, otherSeq, otherOK := domain.ParseItemID(other.ID)
+		if !otherOK || otherSeq >= targetSeq {
+			continue
+		}
+		dependsOnTarget := false
+		for _, dep := range other.DependsOn {
+			if dep == target.ID {
+				dependsOnTarget = true
+				break
+			}
+		}
+		if dependsOnTarget {
+			continue
+		}
+		if other.NeedsReview() {
+			return fmt.Errorf("cannot close %s while earlier task %s (%s) is still %s and unreviewed", target.ID, other.ID, other.Title, other.Status)
+		}
+		return fmt.Errorf("cannot close %s while earlier task %s (%s) is still %s: close %s first", target.ID, other.ID, other.Title, other.Status, other.ID)
+	}
+	return nil
+}
+
 // editTaskMsg carries the freshest copy of an item, ready to open in $EDITOR.
 type editTaskMsg struct{ task *domain.Task }
 
@@ -1059,17 +1200,19 @@ func (m Model) openEditTaskEditor(t *domain.Task) (tea.Model, tea.Cmd) {
 			return statusMsg(fmt.Sprintf("%s: no changes", t.ID))
 		}
 		if ch.Title != nil || ch.Description != nil || ch.Status != nil || ch.Priority != nil ||
-			ch.Tags != nil || ch.Assignee != nil || ch.AddNote != nil {
+			ch.Tags != nil || ch.Assignee != nil || ch.Reviewer != nil || ch.AddNote != nil || ch.AddReviewNote != nil {
 			if _, err := m.client.UpdateTask(protocol.UpdateTaskPayload{
-				ID:          t.ID,
-				Title:       ch.Title,
-				Description: ch.Description,
-				Status:      ch.Status,
-				Priority:    ch.Priority,
-				Tags:        ch.Tags,
-				Assignee:    ch.Assignee,
-				AddNote:     ch.AddNote,
-				Author:      m.resolveActor(),
+				ID:            t.ID,
+				Title:         ch.Title,
+				Description:   ch.Description,
+				Status:        ch.Status,
+				Priority:      ch.Priority,
+				Tags:          ch.Tags,
+				Assignee:      ch.Assignee,
+				Reviewer:      ch.Reviewer,
+				AddNote:       ch.AddNote,
+				AddReviewNote: ch.AddReviewNote,
+				Author:        m.resolveActor(),
 			}); err != nil {
 				return errMsg(fmt.Errorf("%w (draft preserved at: %s)", err, tmpPath))
 			}
@@ -1118,6 +1261,7 @@ func (m Model) openNewTaskEditor(top string) (tea.Model, tea.Cmd) {
 			Priority:    parsed.Priority,
 			Author:      m.resolveActor(),
 			Assignee:    parsed.Assignee,
+			Reviewer:    parsed.Reviewer,
 			Kind:        kind,
 			Topic:       destTopic,
 		})

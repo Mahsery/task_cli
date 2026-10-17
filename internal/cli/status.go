@@ -11,14 +11,15 @@ import (
 )
 
 type StatusSummary struct {
-	Total      int `json:"total"`
-	Open       int `json:"open"`
-	InProgress int `json:"in_progress"`
-	Done       int `json:"done"`
-	Orphaned   int `json:"orphaned"`
-	Archived   int `json:"archived"`
-	Ready      int `json:"ready"`
-	Blocked    int `json:"blocked"`
+	Total       int `json:"total"`
+	Open        int `json:"open"`
+	InProgress  int `json:"in_progress"`
+	Done        int `json:"done"`
+	Orphaned    int `json:"orphaned"`
+	Archived    int `json:"archived"`
+	Ready       int `json:"ready"`
+	Blocked     int `json:"blocked"`
+	NeedsReview int `json:"needs_review"`
 }
 
 type StatusReport struct {
@@ -67,13 +68,14 @@ var statusCmd = &cobra.Command{
 		}
 
 		var (
-			openCount       int
-			inProgressCount int
-			doneCount       int
-			orphanedCount   int
-			archivedCount   int
-			readyCount      int
-			blockedCount    int
+			openCount        int
+			inProgressCount  int
+			doneCount        int
+			orphanedCount    int
+			archivedCount    int
+			readyCount       int
+			blockedCount     int
+			needsReviewCount int
 
 			activeTasks   []*domain.Task
 			orphanedTasks []*domain.Task
@@ -91,6 +93,10 @@ var statusCmd = &cobra.Command{
 			if isTaskOrphaned(t) {
 				orphanedCount++
 				orphanedTasks = append(orphanedTasks, t)
+			}
+
+			if !t.IsPost() && t.Status != domain.StatusDone && t.Status != domain.StatusClosed && t.NeedsReview() {
+				needsReviewCount++
 			}
 
 			switch t.Status {
@@ -121,14 +127,15 @@ var statusCmd = &cobra.Command{
 			Branch:   branch,
 			Actor:    actor,
 			Summary: StatusSummary{
-				Total:      len(allTasks),
-				Open:       openCount,
-				InProgress: inProgressCount,
-				Done:       doneCount,
-				Orphaned:   orphanedCount,
-				Archived:   archivedCount,
-				Ready:      readyCount,
-				Blocked:    blockedCount,
+				Total:       len(allTasks),
+				Open:        openCount,
+				InProgress:  inProgressCount,
+				Done:        doneCount,
+				Orphaned:    orphanedCount,
+				Archived:    archivedCount,
+				Ready:       readyCount,
+				Blocked:     blockedCount,
+				NeedsReview: needsReviewCount,
 			},
 			ActiveTasks:   activeTasks,
 			OrphanedTasks: orphanedTasks,
@@ -213,7 +220,7 @@ func renderStatusText(r StatusReport) {
 	fmt.Printf("Summary:\n")
 	fmt.Printf("  Open: %d  •  Active: %d  •  Done: %d  •  Orphaned: %d  •  Archived: %d\n",
 		r.Summary.Open, r.Summary.InProgress, r.Summary.Done, r.Summary.Orphaned, r.Summary.Archived)
-	fmt.Printf("  Ready: %d  •  Blocked: %d\n", r.Summary.Ready, r.Summary.Blocked)
+	fmt.Printf("  Ready: %d  •  Blocked: %d  •  Needs Review: %d\n", r.Summary.Ready, r.Summary.Blocked, r.Summary.NeedsReview)
 	fmt.Println()
 
 	// Active Tasks
@@ -230,9 +237,17 @@ func renderStatusText(r StatusReport) {
 					assigneeDesc = fmt.Sprintf("assigned to %s", t.Assignee)
 				}
 			}
+			reviewDesc := "reviewer: unassigned"
+			if t.Reviewer != "" {
+				if len(t.ReviewerNotes) > 0 {
+					reviewDesc = fmt.Sprintf("reviewed by %s ✓", t.Reviewer)
+				} else {
+					reviewDesc = fmt.Sprintf("reviewer: %s (awaiting review note)", t.Reviewer)
+				}
+			}
 			age := formatAge(t.CreatedAt)
 			fmt.Printf("  • %-6s [%-6s] %s\n", t.ID, t.Priority, t.Title)
-			fmt.Printf("    └─ %s, started %s\n", assigneeDesc, age)
+			fmt.Printf("    └─ %s, %s, started %s\n", assigneeDesc, reviewDesc, age)
 		}
 	}
 	fmt.Println()

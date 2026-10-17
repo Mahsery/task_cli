@@ -51,7 +51,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				t.DiffContent = msg.DiffContent
 				t.Description = msg.Description
+				t.Reviewer = msg.Reviewer
 				t.Notes = msg.Notes
+				t.ReviewerNotes = msg.ReviewerNotes
 				t.Commits = msg.Commits
 				t.Branch = msg.Branch
 				t.ExternalRef = msg.ExternalRef

@@ -601,9 +601,9 @@ func TestTUIScrollBoundsInBothPanes(t *testing.T) {
 
 func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
 	tasks := []*domain.Task{
-		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal},
-		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress, Priority: domain.PriorityHigh},
-		{ID: "T-3", Title: "Task Three", Status: domain.StatusDone, Priority: domain.PriorityUrgent},
+		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal, Reviewer: "alice", ReviewerNotes: []domain.TaskNote{{Author: "alice", Content: "Approved"}}},
+		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress, Priority: domain.PriorityHigh, Reviewer: "alice", ReviewerNotes: []domain.TaskNote{{Author: "alice", Content: "Approved"}}},
+		{ID: "T-3", Title: "Task Three", Status: domain.StatusDone, Priority: domain.PriorityUrgent, Reviewer: "alice", ReviewerNotes: []domain.TaskNote{{Author: "alice", Content: "Approved"}}},
 	}
 
 	m := Model{
@@ -683,12 +683,13 @@ func TestTUIConfirmationDialogsAndCancellation(t *testing.T) {
 
 func TestTUIBatchConfirmationDialogs(t *testing.T) {
 	tasks := []*domain.Task{
-		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal},
-		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress, Priority: domain.PriorityHigh},
+		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal, Reviewer: "alice", ReviewerNotes: []domain.TaskNote{{Author: "alice", Content: "Approved"}}},
+		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress, Priority: domain.PriorityHigh, Reviewer: "alice", ReviewerNotes: []domain.TaskNote{{Author: "alice", Content: "Approved"}}},
 	}
 
 	m := Model{
 		tasks:    tasks,
+		taskByID: map[string]*domain.Task{"T-1": tasks[0], "T-2": tasks[1]},
 		cursor:   0,
 		width:    100,
 		height:   30,
@@ -1449,7 +1450,7 @@ func TestTUIVimMovementChords(t *testing.T) {
 
 func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 	tasks := []*domain.Task{
-		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal, Tags: []string{"backend"}},
+		{ID: "T-1", Title: "Task One", Status: domain.StatusOpen, Priority: domain.PriorityNormal, Tags: []string{"backend"}, Reviewer: "alice", ReviewerNotes: []domain.TaskNote{{Author: "alice", Content: "Approved"}}},
 		{ID: "T-2", Title: "Task Two", Status: domain.StatusInProgress, Priority: domain.PriorityHigh},
 	}
 
@@ -1522,6 +1523,103 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 	m = mustModel(t, updated)
 	if m.picker == nil || m.picker.kind != pickInsertLink {
 		t.Fatalf("Expected picker to be pickInsertLink after pressing 'gl'")
+	}
+}
+
+func TestTUIReviewerAndCloseGate(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "First Task", Status: domain.StatusOpen, Priority: domain.PriorityNormal},
+		{ID: "T-2", Title: "Second Task", Status: domain.StatusOpen, Priority: domain.PriorityHigh},
+	}
+
+	m := Model{
+		tasks:     tasks,
+		taskByID:  map[string]*domain.Task{"T-1": tasks[0], "T-2": tasks[1]},
+		cursor:    0,
+		width:     120,
+		height:    30,
+		theme:     NewKanagawaTheme(),
+		undoStack: make([]UndoAction, 0),
+	}
+
+	// 1. Pressing 'd' on unreviewed T-1 must fail with review gate error
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = mustModel(t, updated)
+	if m.tasks[0].Status != domain.StatusOpen {
+		t.Fatalf("expected T-1 to remain open when unreviewed, got %s", m.tasks[0].Status)
+	}
+	if !strings.Contains(m.statusMsg, "cannot be closed without a review") {
+		t.Fatalf("expected review gate error in statusMsg, got %q", m.statusMsg)
+	}
+
+	// 2. Pressing 'w' assigns reviewer, but 'd' still fails until a reviewer note is added
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = mustModel(t, updated)
+	if m.tasks[0].Reviewer == "" {
+		t.Fatalf("expected reviewer to be assigned after pressing 'w'")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = mustModel(t, updated)
+	if m.tasks[0].Status != domain.StatusOpen {
+		t.Fatalf("expected T-1 to remain open without reviewer note, got %s", m.tasks[0].Status)
+	}
+	if !strings.Contains(m.statusMsg, "has not added any reviewer notes") {
+		t.Fatalf("expected missing reviewer note error, got %q", m.statusMsg)
+	}
+
+	// 3. Pressing 'W' opens review modal; submitting a review note records it in ReviewerNotes (not Notes)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'W'}})
+	m = mustModel(t, updated)
+	if !m.isReviewing {
+		t.Fatalf("expected isReviewing modal to be open after pressing 'W'")
+	}
+	for _, r := range "LGTM, all edge cases covered" {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = mustModel(t, updated)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mustModel(t, updated)
+	if m.isReviewing {
+		t.Fatalf("expected review modal to close after Enter")
+	}
+	if len(m.tasks[0].ReviewerNotes) != 1 || m.tasks[0].ReviewerNotes[0].Content != "LGTM, all edge cases covered" {
+		t.Fatalf("expected 1 reviewer note on T-1, got %+v", m.tasks[0].ReviewerNotes)
+	}
+	if len(m.tasks[0].Notes) != 0 {
+		t.Fatalf("expected regular Notes to remain separate and empty, got %+v", m.tasks[0].Notes)
+	}
+
+	// 4. Also review T-2, then try to close T-2 BEFORE closing T-1 -> must fail due to cross-task close gate!
+	m.tasks[1].Reviewer = "alice"
+	m.tasks[1].ReviewerNotes = []domain.TaskNote{{Author: "alice", Content: "Reviewed T-2"}}
+	m.cursor = 1
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = mustModel(t, updated)
+	if m.tasks[1].Status != domain.StatusOpen {
+		t.Fatalf("expected T-2 to be blocked from closing while earlier task T-1 is open, got %s", m.tasks[1].Status)
+	}
+	if !strings.Contains(m.statusMsg, "while earlier task T-1") {
+		t.Fatalf("expected cross-task gate error mentioning T-1, got %q", m.statusMsg)
+	}
+
+	// 5. Close T-1 first -> succeeds! Then close T-2 -> succeeds!
+	m.cursor = 0
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = mustModel(t, updated)
+	if m.tasks[0].Status != domain.StatusDone {
+		t.Fatalf("expected reviewed T-1 to close on 'd', got %s", m.tasks[0].Status)
+	}
+	m.cursor = 1
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = mustModel(t, updated)
+	if m.tasks[1].Status != domain.StatusDone {
+		t.Fatalf("expected T-2 to close after T-1 is closed, got %s", m.tasks[1].Status)
+	}
+
+	// 6. Verify detail pane renders Reviewer badge and separate Reviewer Notes section
+	view := m.View()
+	if !strings.Contains(view, "Reviewer:") || !strings.Contains(view, "Reviewer Notes") {
+		t.Errorf("expected detail pane to render Reviewer and Reviewer Notes sections, got:\n%s", view)
 	}
 }
 
