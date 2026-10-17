@@ -1529,12 +1529,13 @@ func TestTUISingleKeyActionsAndUndo(t *testing.T) {
 func TestTUIReviewerAndCloseGate(t *testing.T) {
 	tasks := []*domain.Task{
 		{ID: "T-1", Title: "First Task", Status: domain.StatusOpen, Priority: domain.PriorityNormal},
-		{ID: "T-2", Title: "Second Task", Status: domain.StatusOpen, Priority: domain.PriorityHigh},
+		{ID: "T-2", Title: "Second Task (Unrelated)", Status: domain.StatusOpen, Priority: domain.PriorityHigh},
+		{ID: "T-3", Title: "Third Task (Depends on T-1)", Status: domain.StatusOpen, Priority: domain.PriorityNormal, DependsOn: []string{"T-1"}},
 	}
 
 	m := Model{
 		tasks:     tasks,
-		taskByID:  map[string]*domain.Task{"T-1": tasks[0], "T-2": tasks[1]},
+		taskByID:  map[string]*domain.Task{"T-1": tasks[0], "T-2": tasks[1], "T-3": tasks[2]},
 		cursor:    0,
 		width:     120,
 		height:    30,
@@ -1552,22 +1553,34 @@ func TestTUIReviewerAndCloseGate(t *testing.T) {
 		t.Fatalf("expected review gate error in statusMsg, got %q", m.statusMsg)
 	}
 
-	// 2. Pressing 'w' assigns reviewer, but 'd' still fails until a reviewer note is added
+	// 2. Move to T-2 (unrelated to T-1), press 'w' to review without note -> stamps reviewed-by tag and 'd' closes T-2 even while T-1 is open!
+	m.cursor = 1
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 	m = mustModel(t, updated)
-	if m.tasks[0].Reviewer == "" {
-		t.Fatalf("expected reviewer to be assigned after pressing 'w'")
+	if !m.tasks[1].IsReviewed() || m.tasks[1].ReviewedBy() == "" {
+		t.Fatalf("expected T-2 to be marked reviewed with reviewed-by tag after pressing 'w', got tags=%v", m.tasks[1].Tags)
 	}
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = mustModel(t, updated)
-	if m.tasks[0].Status != domain.StatusOpen {
-		t.Fatalf("expected T-1 to remain open without reviewer note, got %s", m.tasks[0].Status)
-	}
-	if !strings.Contains(m.statusMsg, "has not added any reviewer notes") {
-		t.Fatalf("expected missing reviewer note error, got %q", m.statusMsg)
+	if m.tasks[1].Status != domain.StatusDone {
+		t.Fatalf("expected unrelated reviewed T-2 to close on 'd' even while T-1 is open, got %s (msg: %s)", m.tasks[1].Status, m.statusMsg)
 	}
 
-	// 3. Pressing 'W' opens review modal; submitting a review note records it in ReviewerNotes (not Notes)
+	// 3. Move to T-3 (depends on T-1), review it via 'w', then press 'd' while prerequisite T-1 is open -> must fail!
+	m.cursor = 2
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
+	m = mustModel(t, updated)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = mustModel(t, updated)
+	if m.tasks[2].Status != domain.StatusOpen {
+		t.Fatalf("expected connected T-3 to be blocked from closing while prerequisite T-1 is open, got %s", m.tasks[2].Status)
+	}
+	if !strings.Contains(m.statusMsg, "while prerequisite task T-1") {
+		t.Fatalf("expected prerequisite gate error mentioning T-1, got %q", m.statusMsg)
+	}
+
+	// 4. Move back to T-1, press 'W' to open review modal and submit an optional review note
+	m.cursor = 0
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'W'}})
 	m = mustModel(t, updated)
 	if !m.isReviewing {
@@ -1582,41 +1595,28 @@ func TestTUIReviewerAndCloseGate(t *testing.T) {
 	if m.isReviewing {
 		t.Fatalf("expected review modal to close after Enter")
 	}
-	if len(m.tasks[0].ReviewerNotes) != 1 || m.tasks[0].ReviewerNotes[0].Content != "LGTM, all edge cases covered" {
+	if !m.tasks[0].IsReviewed() || len(m.tasks[0].ReviewerNotes) != 1 || m.tasks[0].ReviewerNotes[0].Content != "LGTM, all edge cases covered" {
 		t.Fatalf("expected 1 reviewer note on T-1, got %+v", m.tasks[0].ReviewerNotes)
 	}
 	if len(m.tasks[0].Notes) != 0 {
 		t.Fatalf("expected regular Notes to remain separate and empty, got %+v", m.tasks[0].Notes)
 	}
 
-	// 4. Also review T-2, then try to close T-2 BEFORE closing T-1 -> must fail due to cross-task close gate!
-	m.tasks[1].Reviewer = "alice"
-	m.tasks[1].ReviewerNotes = []domain.TaskNote{{Author: "alice", Content: "Reviewed T-2"}}
-	m.cursor = 1
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	m = mustModel(t, updated)
-	if m.tasks[1].Status != domain.StatusOpen {
-		t.Fatalf("expected T-2 to be blocked from closing while earlier task T-1 is open, got %s", m.tasks[1].Status)
-	}
-	if !strings.Contains(m.statusMsg, "while earlier task T-1") {
-		t.Fatalf("expected cross-task gate error mentioning T-1, got %q", m.statusMsg)
-	}
-
-	// 5. Close T-1 first -> succeeds! Then close T-2 -> succeeds!
-	m.cursor = 0
+	// 5. Close T-1 first -> succeeds! Then close connected T-3 -> succeeds!
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = mustModel(t, updated)
 	if m.tasks[0].Status != domain.StatusDone {
 		t.Fatalf("expected reviewed T-1 to close on 'd', got %s", m.tasks[0].Status)
 	}
-	m.cursor = 1
+	m.cursor = 2
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = mustModel(t, updated)
-	if m.tasks[1].Status != domain.StatusDone {
-		t.Fatalf("expected T-2 to close after T-1 is closed, got %s", m.tasks[1].Status)
+	if m.tasks[2].Status != domain.StatusDone {
+		t.Fatalf("expected connected T-3 to close after prerequisite T-1 is closed, got %s", m.tasks[2].Status)
 	}
 
 	// 6. Verify detail pane renders Reviewer badge and separate Reviewer Notes section
+	m.cursor = 0
 	view := m.View()
 	if !strings.Contains(view, "Reviewer:") || !strings.Contains(view, "Reviewer Notes") {
 		t.Errorf("expected detail pane to render Reviewer and Reviewer Notes sections, got:\n%s", view)

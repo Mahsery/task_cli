@@ -89,10 +89,20 @@ When [id] is omitted, infers the active task from the current git branch.`,
 		}
 		if !task.IsPost() || task.Reviewer != "" {
 			switch {
-			case task.Reviewer != "" && len(task.ReviewerNotes) > 0:
-				fmt.Fprintf(&sb, "Reviewer: %s ✓ [REVIEWED - %d note(s)]\n", task.Reviewer, len(task.ReviewerNotes))
+			case task.IsReviewed() && len(task.ReviewerNotes) > 0:
+				revName := task.Reviewer
+				if revName == "" {
+					revName = task.ReviewedBy()
+				}
+				fmt.Fprintf(&sb, "Reviewer: %s ✓ [REVIEWED - %d note(s)]\n", revName, len(task.ReviewerNotes))
+			case task.IsReviewed():
+				revName := task.Reviewer
+				if revName == "" {
+					revName = task.ReviewedBy()
+				}
+				fmt.Fprintf(&sb, "Reviewer: %s ✓ [REVIEWED]\n", revName)
 			case task.Reviewer != "":
-				fmt.Fprintf(&sb, "Reviewer: %s ⏳ [AWAITING REVIEW NOTE]\n", task.Reviewer)
+				fmt.Fprintf(&sb, "Reviewer: %s ⏳ [ASSIGNED - AWAITING REVIEW]\n", task.Reviewer)
 			default:
 				fmt.Fprintf(&sb, "Reviewer: (unassigned) ⚠️ [REVIEW REQUIRED BEFORE CLOSE]\n")
 			}
@@ -155,10 +165,16 @@ When [id] is omitted, infers the active task from the current git branch.`,
 		if !task.IsPost() || len(task.ReviewerNotes) > 0 {
 			sb.WriteString("── Reviewer Notes " + strings.Repeat("─", 62) + "\n")
 			if len(task.ReviewerNotes) == 0 {
-				if task.Reviewer != "" {
-					fmt.Fprintf(&sb, "  (No reviewer notes recorded yet by %s — run 'tk review %s -m \"...\"' before closing)\n\n", task.Reviewer, task.ID)
+				if task.IsReviewed() {
+					revName := task.Reviewer
+					if revName == "" {
+						revName = task.ReviewedBy()
+					}
+					fmt.Fprintf(&sb, "  (Reviewed by %s — no optional reviewer notes recorded)\n\n", revName)
+				} else if task.Reviewer != "" {
+					fmt.Fprintf(&sb, "  (Assigned to %s — awaiting 'tk review %s')\n\n", task.Reviewer, task.ID)
 				} else {
-					fmt.Fprintf(&sb, "  (No reviewer assigned or notes recorded — run 'tk review %s -m \"...\"' before closing)\n\n", task.ID)
+					fmt.Fprintf(&sb, "  (Not reviewed yet — run 'tk review %s' before closing)\n\n", task.ID)
 				}
 			} else {
 				for i, note := range task.ReviewerNotes {

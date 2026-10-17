@@ -1663,7 +1663,7 @@ func TestReviewerAndCloseGateInvariants(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	// 1. Create T-1 (with initial reviewer) and T-2 (without reviewer)
+	// 1. Create T-1 (with pre-assigned reviewer), T-2 (unrelated task), and T-3 (depends on T-1)
 	t1, err := db.CreateItem(CreateItemParams{
 		Scope:    "local",
 		RepoPath: "/repo/review",
@@ -1681,13 +1681,13 @@ func TestReviewerAndCloseGateInvariants(t *testing.T) {
 		t.Fatalf("expected T-1 reviewer 'carol', got %q", t1.Reviewer)
 	}
 	if !t1.NeedsReview() {
-		t.Fatalf("expected T-1 to still need review because it has no reviewer notes yet")
+		t.Fatalf("expected T-1 to still need review because carol was only pre-assigned and has not reviewed it yet")
 	}
 
 	t2, err := db.CreateItem(CreateItemParams{
 		Scope:    "local",
 		RepoPath: "/repo/review",
-		Title:    "Task 2: Follow-up",
+		Title:    "Task 2: Unrelated Task",
 		Status:   domain.StatusOpen,
 		Priority: domain.PriorityNormal,
 		Author:   "alice",
@@ -1696,43 +1696,71 @@ func TestReviewerAndCloseGateInvariants(t *testing.T) {
 		t.Fatalf("CreateItem T-2 failed: %v", err)
 	}
 
-	// 2. CheckCanClose on T-1 must fail because carol hasn't added a reviewer note yet
-	if err := db.CheckCanClose(t1.ID, nil, nil, false); err == nil || !strings.Contains(err.Error(), "has not added any reviewer notes") {
-		t.Fatalf("expected CheckCanClose to fail for missing reviewer notes on T-1, got: %v", err)
+	t3, err := db.CreateItem(CreateItemParams{
+		Scope:     "local",
+		RepoPath:  "/repo/review",
+		Title:     "Task 3: Depends on T-1",
+		Status:    domain.StatusOpen,
+		Priority:  domain.PriorityNormal,
+		Author:    "alice",
+		DependsOn: []string{t1.ID},
+	})
+	if err != nil {
+		t.Fatalf("CreateItem T-3 failed: %v", err)
 	}
 
-	// 3. CheckCanClose on T-2 must fail because no reviewer is assigned
-	if err := db.CheckCanClose(t2.ID, nil, nil, false); err == nil || !strings.Contains(err.Error(), "no assigned reviewer") {
+	// 2. CheckCanClose on T-1 must fail because carol hasn't reviewed it yet
+	if err := db.CheckCanClose(t1.ID, nil, nil, false); err == nil || !strings.Contains(err.Error(), "has not reviewed the task yet") {
+		t.Fatalf("expected CheckCanClose to fail for unreviewed T-1, got: %v", err)
+	}
+
+	// 3. CheckCanClose on T-2 must fail because it hasn't been reviewed
+	if err := db.CheckCanClose(t2.ID, nil, nil, false); err == nil || !strings.Contains(err.Error(), "task has not been reviewed yet") {
 		t.Fatalf("expected CheckCanClose to fail for missing reviewer on T-2, got: %v", err)
 	}
 
-	// 4. Add a regular note to T-1 -> must NOT satisfy ReviewerNotes requirement!
+	// 4. Add a regular note to T-1 -> must NOT satisfy review requirement!
 	regNote := "Regular implementation progress note"
 	if _, err := db.UpdateTaskExtended(UpdateTaskOpts{ID: t1.ID, AddNote: &regNote, Author: "bob"}); err != nil {
 		t.Fatalf("UpdateTaskExtended regular note failed: %v", err)
 	}
 	if err := db.CheckCanClose(t1.ID, nil, nil, false); err == nil {
-		t.Fatalf("regular note must NOT satisfy reviewer note requirement")
+		t.Fatalf("regular note must NOT satisfy review requirement")
 	}
 
-	// 5. Submit review note on T-2 first, then try to close T-2 while T-1 is still open -> must fail due to cross-task close gate!
-	t2Reviewed, err := db.ReviewTask(t2.ID, "dave", "Reviewed T-2 implementation", "dave")
+	// 5. Review T-2 WITHOUT a reviewer note (optional note!) -> stamps reviewed-by:dave and CAN close immediately even though T-1 is open!
+	t2Reviewed, err := db.ReviewTask(t2.ID, "dave", "", "dave")
 	if err != nil {
-		t.Fatalf("ReviewTask T-2 failed: %v", err)
+		t.Fatalf("ReviewTask T-2 without note failed: %v", err)
 	}
-	if !t2Reviewed.IsReviewed() || t2Reviewed.Reviewer != "dave" || len(t2Reviewed.ReviewerNotes) != 1 {
-		t.Fatalf("expected T-2 to be reviewed by dave with 1 reviewer note, got %+v", t2Reviewed)
+	if !t2Reviewed.IsReviewed() || t2Reviewed.ReviewedBy() != "dave" || len(t2Reviewed.ReviewerNotes) != 0 {
+		t.Fatalf("expected T-2 to be reviewed by dave (via reviewed-by:dave tag) with 0 reviewer notes, got %+v", t2Reviewed)
 	}
-	if err := db.CheckCanClose(t2.ID, nil, nil, false); err == nil || !strings.Contains(err.Error(), "earlier task(s) must be reviewed and closed first: T-1") {
-		t.Fatalf("expected CheckCanClose on T-2 to be blocked by unclosed earlier task T-1, got: %v", err)
+	if err := db.CheckCanClose(t2.ID, nil, nil, false); err != nil {
+		t.Fatalf("expected unrelated reviewed T-2 to close even while T-1 is open, got: %v", err)
+	}
+	if _, err := db.AttachGit(t2.ID, "222bbbb", "feat: complete T-2", "1 file", "+1", true); err != nil {
+		t.Fatalf("AttachGit T-2 failed: %v", err)
 	}
 
-	// 6. Now review T-1 and close T-1 -> succeeds! Then close T-2 -> succeeds!
+	// 6. Review T-3 (which depends on T-1) -> trying to close T-3 while prerequisite T-1 is open MUST fail!
+	t3Reviewed, err := db.ReviewTask(t3.ID, "eve", "Reviewed T-3 implementation", "eve")
+	if err != nil {
+		t.Fatalf("ReviewTask T-3 failed: %v", err)
+	}
+	if !t3Reviewed.IsReviewed() || t3Reviewed.ReviewedBy() != "eve" || len(t3Reviewed.ReviewerNotes) != 1 {
+		t.Fatalf("expected T-3 to be reviewed by eve with 1 reviewer note, got %+v", t3Reviewed)
+	}
+	if err := db.CheckCanClose(t3.ID, nil, nil, false); err == nil || !strings.Contains(err.Error(), "blocked by unfinished prerequisite task(s): T-1") {
+		t.Fatalf("expected CheckCanClose on connected task T-3 to be blocked by open prerequisite T-1, got: %v", err)
+	}
+
+	// 7. Now review T-1 (with optional reviewer note) and close T-1 -> succeeds! Then close connected T-3 -> succeeds!
 	t1Reviewed, err := db.ReviewTask(t1.ID, "", "LGTM, verified tests", "carol")
 	if err != nil {
 		t.Fatalf("ReviewTask T-1 failed: %v", err)
 	}
-	if !t1Reviewed.IsReviewed() || len(t1Reviewed.ReviewerNotes) != 1 || len(t1Reviewed.Notes) != 1 {
+	if !t1Reviewed.IsReviewed() || t1Reviewed.ReviewedBy() != "carol" || len(t1Reviewed.ReviewerNotes) != 1 || len(t1Reviewed.Notes) != 1 {
 		t.Fatalf("expected T-1 to have 1 regular note and 1 separate reviewer note, got notes=%d revNotes=%d", len(t1Reviewed.Notes), len(t1Reviewed.ReviewerNotes))
 	}
 	if err := db.CheckCanClose(t1.ID, nil, nil, false); err != nil {
@@ -1741,11 +1769,11 @@ func TestReviewerAndCloseGateInvariants(t *testing.T) {
 	if _, err := db.AttachGit(t1.ID, "111aaaa", "feat: complete T-1", "1 file", "+1", true); err != nil {
 		t.Fatalf("AttachGit T-1 failed: %v", err)
 	}
-	if err := db.CheckCanClose(t2.ID, nil, nil, false); err != nil {
-		t.Fatalf("expected CheckCanClose on T-2 to succeed once T-1 is closed, got: %v", err)
+	if err := db.CheckCanClose(t3.ID, nil, nil, false); err != nil {
+		t.Fatalf("expected CheckCanClose on connected T-3 to succeed once prerequisite T-1 is closed, got: %v", err)
 	}
 
-	// 7. Filter by Reviewer and DSL reviewer: query
+	// 8. Filter by Reviewer and DSL reviewer: query
 	carolTasks, err := db.ListTasks(domain.TaskFilter{Scope: "local", RepoPath: "/repo/review", Reviewer: "carol"})
 	if err != nil || len(carolTasks) != 1 || carolTasks[0].ID != t1.ID {
 		t.Fatalf("expected ListTasks(Reviewer: carol) to return [T-1], got err=%v tasks=%+v", err, carolTasks)
@@ -1755,15 +1783,15 @@ func TestReviewerAndCloseGateInvariants(t *testing.T) {
 		t.Fatalf("expected ListTasks(Search: reviewer:dave) to return [T-2], got err=%v tasks=%+v", err, daveTasks)
 	}
 
-	// 8. Delete and restore preserves Reviewer and ReviewerNotes
-	if err := db.DeleteTask(t2.ID); err != nil {
-		t.Fatalf("DeleteTask T-2 failed: %v", err)
+	// 9. Delete and restore preserves Reviewer, reviewed-by tag, and ReviewerNotes
+	if err := db.DeleteTask(t3.ID); err != nil {
+		t.Fatalf("DeleteTask T-3 failed: %v", err)
 	}
-	restoredT2, err := db.RestoreTaskByID(t2.ID)
+	restoredT3, err := db.RestoreTaskByID(t3.ID)
 	if err != nil {
-		t.Fatalf("RestoreTaskByID T-2 failed: %v", err)
+		t.Fatalf("RestoreTaskByID T-3 failed: %v", err)
 	}
-	if restoredT2.Reviewer != "dave" || len(restoredT2.ReviewerNotes) != 1 || restoredT2.ReviewerNotes[0].Content != "Reviewed T-2 implementation" {
-		t.Fatalf("expected restored T-2 to preserve Reviewer and ReviewerNotes, got %+v", restoredT2)
+	if restoredT3.Reviewer != "eve" || restoredT3.ReviewedBy() != "eve" || len(restoredT3.ReviewerNotes) != 1 || restoredT3.ReviewerNotes[0].Content != "Reviewed T-3 implementation" {
+		t.Fatalf("expected restored T-3 to preserve Reviewer, reviewed-by tag, and ReviewerNotes, got %+v", restoredT3)
 	}
 }

@@ -172,22 +172,25 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.reviewInput = ""
 			m.input.Reset()
 			m.input.Blur()
-			if note == "" {
-				m.statusMsg = "Review cancelled (empty note)"
-				return m, nil
-			}
 			actor := m.resolveActor()
 			if cur := m.lookupItem(taskID); cur != nil {
 				if cur.Reviewer == "" {
 					cur.Reviewer = actor
 				}
-				cur.ReviewerNotes = append(cur.ReviewerNotes, domain.TaskNote{
-					Author:    actor,
-					Content:   note,
-					CreatedAt: time.Now(),
-				})
+				cur.Tags = domain.WithReviewedByTag(cur.Tags, cur.Reviewer)
+				if note != "" {
+					cur.ReviewerNotes = append(cur.ReviewerNotes, domain.TaskNote{
+						Author:    actor,
+						Content:   note,
+						CreatedAt: time.Now(),
+					})
+				}
 			}
-			m.statusMsg = fmt.Sprintf("Submitted review note for %s", taskID)
+			if note != "" {
+				m.statusMsg = fmt.Sprintf("Reviewed %s with note", taskID)
+			} else {
+				m.statusMsg = fmt.Sprintf("Reviewed %s", taskID)
+			}
 			return m, m.reviewTaskCmd(taskID, note)
 		case "esc":
 			m.isReviewing = false
@@ -372,18 +375,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for _, id := range ids {
 				if t := m.lookupItem(id); t != nil && !t.IsPost() {
 					t.Reviewer = actor
+					t.Tags = domain.WithReviewedByTag(t.Tags, actor)
 				}
 			}
-			m.statusMsg = fmt.Sprintf("Assigned %s as reviewer on %d task(s)", actor, len(ids))
+			m.statusMsg = fmt.Sprintf("Reviewed %d task(s) [reviewed-by:%s]", len(ids), actor)
 			return m, m.batchAssignReviewerCmd(ids, actor)
 		}
 		if cur := m.currentTask(); cur != nil {
 			if cur.IsPost() {
-				m.statusMsg = "Board posts do not require a reviewer"
+				m.statusMsg = "Board posts do not require a review"
 				return m, nil
 			}
 			cur.Reviewer = actor
-			m.statusMsg = fmt.Sprintf("Assigned %s as reviewer on %s (press 'W' to add review note)", actor, cur.ID)
+			cur.Tags = domain.WithReviewedByTag(cur.Tags, actor)
+			m.statusMsg = fmt.Sprintf("Reviewed %s [reviewed-by:%s]", cur.ID, actor)
 			return m, m.assignReviewerCmd(cur.ID, actor)
 		}
 		return m, nil
@@ -1110,47 +1115,29 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// checkCanCloseInTUI validates that target has been reviewed and that no earlier
-// unclosed task in the visible task list is blocking closure.
+// checkCanCloseInTUI validates that target has been reviewed and that no connected
+// prerequisite dependency (DependsOn) is still open or unreviewed.
 func (m Model) checkCanCloseInTUI(target *domain.Task) error {
 	if target == nil || target.IsPost() {
 		return nil
 	}
 	if target.NeedsReview() {
-		if strings.TrimSpace(target.Reviewer) == "" {
-			return fmt.Errorf("task %s cannot be closed without a review: no reviewer is assigned (press 'w' to claim reviewer or 'W' to review)", target.ID)
+		if strings.TrimSpace(target.Reviewer) != "" {
+			return fmt.Errorf("task %s cannot be closed without a review: assigned reviewer %q has not reviewed it yet (press 'w' to review or 'W' to review with a note)", target.ID, target.Reviewer)
 		}
-		return fmt.Errorf("task %s cannot be closed without a review: reviewer %q has not added any reviewer notes yet (press 'W' to add review note)", target.ID, target.Reviewer)
+		return fmt.Errorf("task %s cannot be closed without a review: press 'w' to review or 'W' to review with an optional note", target.ID)
 	}
-	_, targetSeq, targetOK := domain.ParseItemID(target.ID)
-	if !targetOK {
-		return nil
-	}
-	for _, other := range m.tasks {
-		if other == nil || other.ID == target.ID || other.IsPost() || other.IsArchived() {
+	for _, depID := range target.DependsOn {
+		dep := m.lookupItem(depID)
+		if dep == nil {
 			continue
 		}
-		if other.Status == domain.StatusDone || other.Status == domain.StatusClosed {
-			continue
-		}
-		_, otherSeq, otherOK := domain.ParseItemID(other.ID)
-		if !otherOK || otherSeq >= targetSeq {
-			continue
-		}
-		dependsOnTarget := false
-		for _, dep := range other.DependsOn {
-			if dep == target.ID {
-				dependsOnTarget = true
-				break
+		if dep.Status != domain.StatusDone && dep.Status != domain.StatusClosed {
+			if dep.NeedsReview() {
+				return fmt.Errorf("cannot close %s while prerequisite task %s (%s) is still %s and unreviewed", target.ID, dep.ID, dep.Title, dep.Status)
 			}
+			return fmt.Errorf("cannot close %s while prerequisite task %s (%s) is still %s: close %s first", target.ID, dep.ID, dep.Title, dep.Status, dep.ID)
 		}
-		if dependsOnTarget {
-			continue
-		}
-		if other.NeedsReview() {
-			return fmt.Errorf("cannot close %s while earlier task %s (%s) is still %s and unreviewed", target.ID, other.ID, other.Title, other.Status)
-		}
-		return fmt.Errorf("cannot close %s while earlier task %s (%s) is still %s: close %s first", target.ID, other.ID, other.Title, other.Status, other.ID)
 	}
 	return nil
 }

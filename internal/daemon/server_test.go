@@ -612,7 +612,7 @@ func TestDaemonDependencies_PubSubEventIntegrity(t *testing.T) {
 func TestDaemonReviewAndCloseGate(t *testing.T) {
 	srv, repoPath := setupTestServer(t)
 
-	// 1. Create T-1 and T-2
+	// 1. Create T-1, T-2 (unrelated), and T-3 (depends on T-1)
 	c1 := srv.dispatch(protocol.Request{
 		ID:       "c1",
 		Action:   protocol.ActionCreateTask,
@@ -629,7 +629,7 @@ func TestDaemonReviewAndCloseGate(t *testing.T) {
 	c2 := srv.dispatch(protocol.Request{
 		ID:       "c2",
 		Action:   protocol.ActionCreateTask,
-		Payload:  json.RawMessage(`{"title":"Task 2"}`),
+		Payload:  json.RawMessage(`{"title":"Task 2 (Unrelated)"}`),
 		Scope:    "local",
 		RepoPath: repoPath,
 	})
@@ -639,7 +639,20 @@ func TestDaemonReviewAndCloseGate(t *testing.T) {
 	var t2 domain.Task
 	_ = json.Unmarshal(c2.Data, &t2)
 
-	// 2. Attempting to mark T-1 done via ActionAttachGit without reviewer notes must fail
+	c3 := srv.dispatch(protocol.Request{
+		ID:       "c3",
+		Action:   protocol.ActionCreateTask,
+		Payload:  json.RawMessage(fmt.Sprintf(`{"title":"Task 3 (Depends on T-1)","depends_on":[%q]}`, t1.ID)),
+		Scope:    "local",
+		RepoPath: repoPath,
+	})
+	if !c3.Success {
+		t.Fatalf("create T-3 failed: %s", c3.Error)
+	}
+	var t3 domain.Task
+	_ = json.Unmarshal(c3.Data, &t3)
+
+	// 2. Attempting to mark T-1 done via ActionAttachGit without review must fail
 	doneResp1 := srv.dispatch(protocol.Request{
 		ID:       "done-1",
 		Action:   protocol.ActionAttachGit,
@@ -651,29 +664,51 @@ func TestDaemonReviewAndCloseGate(t *testing.T) {
 		t.Fatalf("expected ActionAttachGit mark_done on unreviewed T-1 to fail")
 	}
 
-	// 3. Review T-2 via ActionReviewTask, then try to close T-2 while T-1 is still open -> must fail!
+	// 3. Review unrelated T-2 without a note (optional note!), then close T-2 while T-1 is open -> MUST SUCCEED!
 	revResp2 := srv.dispatch(protocol.Request{
 		ID:       "rev-2",
 		Action:   protocol.ActionReviewTask,
-		Payload:  json.RawMessage(fmt.Sprintf(`{"id":%q,"reviewer":"bob","note":"LGTM T-2","author":"bob"}`, t2.ID)),
+		Payload:  json.RawMessage(fmt.Sprintf(`{"id":%q,"reviewer":"bob","author":"bob"}`, t2.ID)),
 		Scope:    "local",
 		RepoPath: repoPath,
 	})
 	if !revResp2.Success {
 		t.Fatalf("ActionReviewTask T-2 failed: %s", revResp2.Error)
 	}
-	doneResp2Early := srv.dispatch(protocol.Request{
-		ID:       "done-2-early",
+	doneResp2OK := srv.dispatch(protocol.Request{
+		ID:       "done-2-ok",
 		Action:   protocol.ActionAttachGit,
 		Payload:  json.RawMessage(fmt.Sprintf(`{"task_id":%q,"mark_done":true}`, t2.ID)),
 		Scope:    "local",
 		RepoPath: repoPath,
 	})
-	if doneResp2Early.Success || !strings.Contains(doneResp2Early.Error, "earlier task(s) must be reviewed and closed first: T-1") {
-		t.Fatalf("expected closing T-2 before T-1 to fail with earlier-task gate error, got success=%v err=%q", doneResp2Early.Success, doneResp2Early.Error)
+	if !doneResp2OK.Success {
+		t.Fatalf("expected closing reviewed unrelated T-2 while T-1 is open to succeed, got: %s", doneResp2OK.Error)
 	}
 
-	// 4. Review T-1, close T-1, then close T-2 -> both succeed!
+	// 4. Review connected T-3, then try to close T-3 while prerequisite T-1 is open -> must fail!
+	revResp3 := srv.dispatch(protocol.Request{
+		ID:       "rev-3",
+		Action:   protocol.ActionReviewTask,
+		Payload:  json.RawMessage(fmt.Sprintf(`{"id":%q,"reviewer":"carol","note":"LGTM T-3","author":"carol"}`, t3.ID)),
+		Scope:    "local",
+		RepoPath: repoPath,
+	})
+	if !revResp3.Success {
+		t.Fatalf("ActionReviewTask T-3 failed: %s", revResp3.Error)
+	}
+	doneResp3Early := srv.dispatch(protocol.Request{
+		ID:       "done-3-early",
+		Action:   protocol.ActionAttachGit,
+		Payload:  json.RawMessage(fmt.Sprintf(`{"task_id":%q,"mark_done":true}`, t3.ID)),
+		Scope:    "local",
+		RepoPath: repoPath,
+	})
+	if doneResp3Early.Success || !strings.Contains(doneResp3Early.Error, "blocked by unfinished prerequisite task(s): T-1") {
+		t.Fatalf("expected closing connected T-3 before prerequisite T-1 to fail, got success=%v err=%q", doneResp3Early.Success, doneResp3Early.Error)
+	}
+
+	// 5. Review T-1, close T-1, then close T-3 -> both succeed!
 	revResp1 := srv.dispatch(protocol.Request{
 		ID:       "rev-1",
 		Action:   protocol.ActionReviewTask,
@@ -694,14 +729,14 @@ func TestDaemonReviewAndCloseGate(t *testing.T) {
 	if !doneResp1OK.Success {
 		t.Fatalf("expected closing reviewed T-1 to succeed, got: %s", doneResp1OK.Error)
 	}
-	doneResp2OK := srv.dispatch(protocol.Request{
-		ID:       "done-2-ok",
+	doneResp3OK := srv.dispatch(protocol.Request{
+		ID:       "done-3-ok",
 		Action:   protocol.ActionAttachGit,
-		Payload:  json.RawMessage(fmt.Sprintf(`{"task_id":%q,"mark_done":true}`, t2.ID)),
+		Payload:  json.RawMessage(fmt.Sprintf(`{"task_id":%q,"mark_done":true}`, t3.ID)),
 		Scope:    "local",
 		RepoPath: repoPath,
 	})
-	if !doneResp2OK.Success {
-		t.Fatalf("expected closing reviewed T-2 after T-1 is closed to succeed, got: %s", doneResp2OK.Error)
+	if !doneResp3OK.Success {
+		t.Fatalf("expected closing reviewed T-3 after T-1 is closed to succeed, got: %s", doneResp3OK.Error)
 	}
 }

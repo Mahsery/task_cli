@@ -196,13 +196,13 @@ func (m Model) renderReviewModal(termWidth, _ int) string {
 	}
 
 	lines := []string{
-		theme.ModalTitle.Render(fmt.Sprintf(" SUBMIT REVIEW / REVIEWER NOTE FOR %s ", m.reviewTaskID)),
+		theme.ModalTitle.Render(fmt.Sprintf(" REVIEW TASK %s ", m.reviewTaskID)),
 		"",
-		theme.ModalDesc.Render(fmt.Sprintf("  Reviewer: %s", reviewer)),
-		theme.SearchPrompt.Render(fmt.Sprintf("  Review Note > %s", m.inputViewOrText(m.reviewInput))),
+		theme.ModalDesc.Render(fmt.Sprintf("  Reviewed By: %s", reviewer)),
+		theme.SearchPrompt.Render(fmt.Sprintf("  Optional Note > %s", m.inputViewOrText(m.reviewInput))),
 		"",
 	}
-	hint := "Recorded in the separate Reviewer Notes section. Tasks require a reviewer and at least one reviewer note before closing."
+	hint := "Stamps 'reviewed-by:" + reviewer + "' and records any note in the separate Reviewer Notes section (leave blank to review without a note)."
 	for _, hw := range wrapText(hint, contentWidth, "") {
 		lines = append(lines, theme.ModalDesc.Render(hw))
 	}

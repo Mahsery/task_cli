@@ -165,10 +165,54 @@ func (t *Task) IsPost() bool {
 	return t != nil && t.Kind == KindPost
 }
 
-// IsReviewed reports whether the task has completed review (an assigned reviewer and at least one reviewer note).
+// ReviewedByPrefix is the tag prefix added to Task.Tags when a task has been reviewed.
+const ReviewedByPrefix = "reviewed-by:"
+
+// ReviewedBy returns the reviewer identifier from a "reviewed-by:<tag>" tag on the task, or "".
+func (t *Task) ReviewedBy() string {
+	if t == nil {
+		return ""
+	}
+	for _, tag := range t.Tags {
+		trimmed := strings.TrimSpace(tag)
+		if strings.HasPrefix(strings.ToLower(trimmed), ReviewedByPrefix) {
+			val := strings.TrimSpace(trimmed[len(ReviewedByPrefix):])
+			if val != "" {
+				return val
+			}
+		}
+	}
+	return ""
+}
+
+// WithReviewedByTag returns tags with any previous "reviewed-by:*" tag replaced by "reviewed-by:<reviewer>".
+// If reviewer is empty, any "reviewed-by:*" tag is removed.
+func WithReviewedByTag(tags []string, reviewer string) []string {
+	reviewer = strings.TrimSpace(reviewer)
+	out := make([]string, 0, len(tags)+1)
+	for _, tag := range tags {
+		trimmed := strings.TrimSpace(tag)
+		if strings.HasPrefix(strings.ToLower(trimmed), ReviewedByPrefix) {
+			continue
+		}
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	if reviewer != "" {
+		out = append(out, ReviewedByPrefix+reviewer)
+	}
+	return out
+}
+
+// IsReviewed reports whether the task has completed review (stamped with a "reviewed-by:<tag>" tag,
+// or has an assigned reviewer with reviewer notes). Reviewer notes are optional.
 // Board posts do not require a review.
 func (t *Task) IsReviewed() bool {
 	if t == nil || t.IsPost() {
+		return true
+	}
+	if t.ReviewedBy() != "" {
 		return true
 	}
 	return strings.TrimSpace(t.Reviewer) != "" && len(t.ReviewerNotes) > 0

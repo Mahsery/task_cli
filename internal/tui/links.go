@@ -566,11 +566,17 @@ func (m Model) detailDoc(detailWidth int) detailDoc {
 	}
 	if !t.IsPost() {
 		var reviewerDisplay string
+		revName := t.Reviewer
+		if revName == "" {
+			revName = t.ReviewedBy()
+		}
 		switch {
+		case t.IsReviewed() && len(t.ReviewerNotes) > 0:
+			reviewerDisplay = theme.CountDone.Render(fmt.Sprintf("%s ✓ (%d note(s))", revName, len(t.ReviewerNotes)))
 		case t.IsReviewed():
-			reviewerDisplay = theme.CountDone.Render(fmt.Sprintf("%s ✓ (%d note(s))", t.Reviewer, len(t.ReviewerNotes)))
+			reviewerDisplay = theme.CountDone.Render(fmt.Sprintf("%s ✓ (reviewed)", revName))
 		case t.Reviewer != "":
-			reviewerDisplay = theme.CountProg.Render(t.Reviewer + " (pending review note)")
+			reviewerDisplay = theme.CountProg.Render(t.Reviewer + " (assigned, awaiting review)")
 		default:
 			reviewerDisplay = theme.DiffSub.Render("unassigned (needs review)")
 		}
@@ -728,7 +734,11 @@ func (m Model) detailDoc(detailWidth int) detailDoc {
 		}
 		doc.lines = append(doc.lines, strings.Repeat(" ", detailWidth), theme.NoteHeader.Width(detailWidth).Render(revHeader))
 		if len(t.ReviewerNotes) == 0 {
-			doc.lines = append(doc.lines, theme.DetailLabel.Render("    No reviewer notes yet (press 'W' to submit review note, 'w' to claim reviewer)."))
+			if t.IsReviewed() {
+				doc.lines = append(doc.lines, theme.DetailLabel.Render("    Reviewed (no optional reviewer notes added — press 'W' to add one)."))
+			} else {
+				doc.lines = append(doc.lines, theme.DetailLabel.Render("    Not reviewed yet (press 'w' to review or 'W' to review with a note)."))
+			}
 		}
 		for i, rn := range t.ReviewerNotes {
 			rNum := i + 1

@@ -527,8 +527,21 @@ func (d *DB) UpdateTaskExtended(opts UpdateTaskOpts) (*domain.Task, error) {
 		args = append(args, string(*opts.Priority))
 	}
 
+	effectiveReviewer := strings.TrimSpace(currentReviewer)
+	if opts.Reviewer != nil {
+		effectiveReviewer = strings.TrimSpace(*opts.Reviewer)
+		updates = append(updates, "reviewer = ?")
+		args = append(args, effectiveReviewer)
+	} else if opts.AddReviewNote != nil && strings.TrimSpace(*opts.AddReviewNote) != "" && effectiveReviewer == "" && strings.TrimSpace(opts.Author) != "" {
+		effectiveReviewer = strings.TrimSpace(opts.Author)
+		updates = append(updates, "reviewer = ?")
+		args = append(args, effectiveReviewer)
+	}
+
 	// Atomic tag mutations inside the transaction
-	if opts.Tags != nil || len(opts.AddTags) > 0 || len(opts.RemoveTags) > 0 {
+	clearingReviewer := opts.Reviewer != nil && strings.TrimSpace(*opts.Reviewer) == ""
+	addingReviewNote := opts.AddReviewNote != nil && strings.TrimSpace(*opts.AddReviewNote) != "" && effectiveReviewer != ""
+	if opts.Tags != nil || len(opts.AddTags) > 0 || len(opts.RemoveTags) > 0 || clearingReviewer || addingReviewNote {
 		var currentTags []string
 		if currentTagsJSON != "" && currentTagsJSON != "[]" {
 			_ = json.Unmarshal([]byte(currentTagsJSON), &currentTags)
@@ -563,6 +576,11 @@ func (d *DB) UpdateTaskExtended(opts UpdateTaskOpts) (*domain.Task, error) {
 			}
 			currentTags = filtered
 		}
+		if clearingReviewer {
+			currentTags = domain.WithReviewedByTag(currentTags, "")
+		} else if addingReviewNote {
+			currentTags = domain.WithReviewedByTag(currentTags, effectiveReviewer)
+		}
 		if currentTags == nil {
 			currentTags = []string{}
 		}
@@ -577,16 +595,6 @@ func (d *DB) UpdateTaskExtended(opts UpdateTaskOpts) (*domain.Task, error) {
 	if opts.Assignee != nil {
 		updates = append(updates, "assignee = ?")
 		args = append(args, *opts.Assignee)
-	}
-	effectiveReviewer := strings.TrimSpace(currentReviewer)
-	if opts.Reviewer != nil {
-		effectiveReviewer = strings.TrimSpace(*opts.Reviewer)
-		updates = append(updates, "reviewer = ?")
-		args = append(args, effectiveReviewer)
-	} else if opts.AddReviewNote != nil && strings.TrimSpace(*opts.AddReviewNote) != "" && effectiveReviewer == "" && strings.TrimSpace(opts.Author) != "" {
-		effectiveReviewer = strings.TrimSpace(opts.Author)
-		updates = append(updates, "reviewer = ?")
-		args = append(args, effectiveReviewer)
 	}
 	if opts.Branch != nil {
 		updates = append(updates, "branch = ?")
@@ -650,18 +658,14 @@ func (d *DB) ReviewTask(id, reviewer, note, author string) (*domain.Task, error)
 	note = strings.TrimSpace(note)
 	author = strings.TrimSpace(author)
 
-	if reviewer == "" && note == "" {
-		return nil, fmt.Errorf("review requires a reviewer and/or a review note")
-	}
-
 	tx, err := d.conn.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var currentReviewer, kind string
-	if err := tx.QueryRow("SELECT reviewer, kind FROM tasks WHERE id = ?", id).Scan(&currentReviewer, &kind); err != nil {
+	var currentReviewer, currentTagsJSON, kind string
+	if err := tx.QueryRow("SELECT reviewer, tags, kind FROM tasks WHERE id = ?", id).Scan(&currentReviewer, &currentTagsJSON, &kind); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("task %s not found", id)
 		}
@@ -674,12 +678,25 @@ func (d *DB) ReviewTask(id, reviewer, note, author string) (*domain.Task, error)
 	effectiveReviewer := strings.TrimSpace(currentReviewer)
 	if reviewer != "" {
 		effectiveReviewer = reviewer
-	} else if effectiveReviewer == "" && author != "" {
+	} else if author != "" {
 		effectiveReviewer = author
+	}
+	if effectiveReviewer == "" {
+		return nil, fmt.Errorf("reviewer identification is required")
+	}
+
+	var currentTags []string
+	if currentTagsJSON != "" && currentTagsJSON != "[]" {
+		_ = json.Unmarshal([]byte(currentTagsJSON), &currentTags)
+	}
+	updatedTags := domain.WithReviewedByTag(currentTags, effectiveReviewer)
+	tagsBytes, err := json.Marshal(updatedTags)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal tags: %w", err)
 	}
 
 	now := time.Now().UTC()
-	if _, err := tx.Exec("UPDATE tasks SET reviewer = ?, updated_at = ? WHERE id = ?", effectiveReviewer, now, id); err != nil {
+	if _, err := tx.Exec("UPDATE tasks SET reviewer = ?, tags = ?, updated_at = ? WHERE id = ?", effectiveReviewer, string(tagsBytes), now, id); err != nil {
 		return nil, fmt.Errorf("failed to update task reviewer: %w", err)
 	}
 
@@ -687,9 +704,6 @@ func (d *DB) ReviewTask(id, reviewer, note, author string) (*domain.Task, error)
 		noteAuthor := author
 		if noteAuthor == "" {
 			noteAuthor = effectiveReviewer
-		}
-		if noteAuthor == "" {
-			noteAuthor = "reviewer"
 		}
 		noteID := uuid.New().String()
 		if _, err := tx.Exec(
@@ -2101,21 +2115,19 @@ func (d *DB) checkBlockedLocked(taskID string) (blocked bool, unfinishedPrereqs 
 }
 
 // CheckCanClose verifies that taskID can be closed (transitioned to done or closed):
-//  1. If taskID is a task (not a post), it must have a non-empty Reviewer and at least one ReviewerNote.
-//  2. Unless forcePrereqs is true, all explicit prerequisites must already be done/closed.
-//  3. Unless forcePrereqs is true, no earlier unclosed task in the same scope/repo (that does not depend on taskID) may be open/in_progress.
+//  1. If taskID is a task (not a post), it must have been reviewed (stamped with a "reviewed-by:<tag>" tag, or have a reviewer + reviewer note). Reviewer notes are optional.
+//  2. Unless forcePrereqs is true, all connected prerequisite tasks (DependsOn) must already be done/closed.
 func (d *DB) CheckCanClose(taskID string, pendingReviewer, pendingReviewNote *string, forcePrereqs bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	var scope, repoPath, kind, status, currentReviewer string
-	var seqNum int
+	var kind, currentReviewer, currentTagsJSON string
 	var reviewNoteCount int
 	err := d.conn.QueryRow(`
-		SELECT scope, repo_path, seq_num, kind, status, reviewer,
+		SELECT kind, reviewer, tags,
 		       (SELECT COUNT(*) FROM task_reviewer_notes rn WHERE rn.task_id = tasks.id)
 		FROM tasks WHERE id = ?
-	`, taskID).Scan(&scope, &repoPath, &seqNum, &kind, &status, &currentReviewer, &reviewNoteCount)
+	`, taskID).Scan(&kind, &currentReviewer, &currentTagsJSON, &reviewNoteCount)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("task %s not found", taskID)
@@ -2128,7 +2140,7 @@ func (d *DB) CheckCanClose(taskID string, pendingReviewer, pendingReviewNote *st
 		return nil
 	}
 
-	// 1. Target task review gate (always enforced for tasks)
+	// 1. Target task review gate (always enforced for tasks; reviewer note is optional)
 	effectiveReviewer := strings.TrimSpace(currentReviewer)
 	if pendingReviewer != nil {
 		effectiveReviewer = strings.TrimSpace(*pendingReviewer)
@@ -2137,18 +2149,31 @@ func (d *DB) CheckCanClose(taskID string, pendingReviewer, pendingReviewNote *st
 	if pendingReviewNote != nil && strings.TrimSpace(*pendingReviewNote) != "" {
 		effectiveReviewNotes++
 	}
-	if effectiveReviewer == "" {
-		return fmt.Errorf("cannot close task %s: task has no assigned reviewer (assign a reviewer and add a review note via 'tk review %s -m \"...\"')", taskID, taskID)
+
+	var currentTags []string
+	if currentTagsJSON != "" && currentTagsJSON != "[]" {
+		_ = json.Unmarshal([]byte(currentTagsJSON), &currentTags)
 	}
-	if effectiveReviewNotes == 0 {
-		return fmt.Errorf("cannot close task %s: reviewer %q has not added any reviewer notes yet (run 'tk review %s -m \"...\"')", taskID, effectiveReviewer, taskID)
+	probe := &domain.Task{
+		Kind:     domain.ItemKind(kind),
+		Reviewer: effectiveReviewer,
+		Tags:     currentTags,
+	}
+	if effectiveReviewNotes > 0 {
+		probe.ReviewerNotes = []domain.TaskNote{{Content: "note"}}
+	}
+	if !probe.IsReviewed() {
+		if effectiveReviewer != "" {
+			return fmt.Errorf("cannot close task %s: assigned reviewer %q has not reviewed the task yet (run 'tk review %s --actor <tag>')", taskID, effectiveReviewer, taskID)
+		}
+		return fmt.Errorf("cannot close task %s: task has not been reviewed yet (run 'tk review %s --actor <tag>')", taskID, taskID)
 	}
 
 	if forcePrereqs {
 		return nil
 	}
 
-	// 2. Explicit prerequisite gate
+	// 2. Connected prerequisite dependency gate
 	blocked, prereqs, err := d.checkBlockedLocked(taskID)
 	if err != nil {
 		return fmt.Errorf("failed to check dependencies: %w", err)
@@ -2162,52 +2187,6 @@ func (d *DB) CheckCanClose(taskID string, pendingReviewer, pendingReviewNote *st
 			fmt.Fprintf(&b, "%s (%q [%s])", pr.ID, pr.Title, pr.Status)
 		}
 		return fmt.Errorf("cannot mark %s as done: blocked by unfinished prerequisite task(s): %s (close them first or use --force)", taskID, b.String())
-	}
-
-	// 3. Cross-task gate: earlier unclosed tasks in the same scope/repo that do not depend on taskID must be reviewed & closed first
-	precedingQuery := `
-	WITH RECURSIVE dependents_of_target(id) AS (
-		SELECT task_id FROM task_dependencies WHERE depends_on_id = ?
-		UNION
-		SELECT d.task_id FROM task_dependencies d
-		JOIN dependents_of_target dt ON d.depends_on_id = dt.id
-	)
-	SELECT t.id, t.title, t.status, t.reviewer,
-	       (SELECT COUNT(*) FROM task_reviewer_notes rn WHERE rn.task_id = t.id) AS rnotes
-	FROM tasks t
-	WHERE t.scope = ? AND t.repo_path = ? AND t.kind = 'task'
-	  AND t.id != ?
-	  AND t.seq_num < ?
-	  AND t.status NOT IN ('done', 'closed', 'archived')
-	  AND t.archived_at IS NULL
-	  AND t.id NOT IN (SELECT id FROM dependents_of_target)
-	ORDER BY t.seq_num ASC;
-	`
-	rows, err := d.conn.Query(precedingQuery, taskID, scope, repoPath, taskID, seqNum)
-	if err != nil {
-		return fmt.Errorf("failed to check preceding tasks: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var precedingDescs []string
-	for rows.Next() {
-		var pID, pTitle, pStatus, pReviewer string
-		var pRNotes int
-		if err := rows.Scan(&pID, &pTitle, &pStatus, &pReviewer, &pRNotes); err != nil {
-			return fmt.Errorf("failed to scan preceding task: %w", err)
-		}
-		reviewState := "reviewed"
-		if strings.TrimSpace(pReviewer) == "" || pRNotes == 0 {
-			reviewState = "needs review"
-		}
-		precedingDescs = append(precedingDescs, fmt.Sprintf("%s (%q [%s, %s])", pID, pTitle, pStatus, reviewState))
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("failed to iterate preceding tasks: %w", err)
-	}
-
-	if len(precedingDescs) > 0 {
-		return fmt.Errorf("cannot close task %s: earlier task(s) must be reviewed and closed first: %s (review and close them first or use --force)", taskID, strings.Join(precedingDescs, ", "))
 	}
 
 	return nil
