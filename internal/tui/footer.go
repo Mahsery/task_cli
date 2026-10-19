@@ -41,7 +41,7 @@ func (m Model) renderFooter(width int) string {
 	}
 
 	key := func(k, action string) string {
-		return theme.FooterKey.Render("["+k+"]") + " " + theme.FooterDesc.Render(action)
+		return theme.FooterKey.Render("["+k+"]") + theme.FooterDesc.Render(action)
 	}
 
 	chordBadge := ""
@@ -51,7 +51,7 @@ func (m Model) renderFooter(width int) string {
 
 	undoKey := ""
 	if len(m.undoStack) > 0 {
-		undoKey = theme.ModalKey.Render("[u] Undo")
+		undoKey = theme.ModalKey.Render("[u]Undo")
 	}
 
 	maxContentWidth := width - 2
@@ -79,7 +79,7 @@ func (m Model) renderFooter(width int) string {
 
 	prefix := ""
 	if len(prefixParts) > 0 {
-		prefix = strings.Join(prefixParts, " ") + "  "
+		prefix = strings.Join(prefixParts, " ") + " "
 	}
 
 	var candidateKeys []string
@@ -98,53 +98,53 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = append(candidateKeys, undoKey)
 		}
 		candidateKeys = append(candidateKeys,
-			theme.CountDone.Render(fmt.Sprintf("[d] Done(%d)", selCount)),
-			theme.CountProg.Render(fmt.Sprintf("[s] Prog(%d)", selCount)),
-			theme.CountOpen.Render(fmt.Sprintf("[a] Claim(%d)", selCount)),
-			theme.CountArchived.Render(fmt.Sprintf("[A] Arc(%d)", selCount)),
-			theme.DiffSub.Render(fmt.Sprintf("[x] Del(%d)", selCount)),
+			theme.CountDone.Render(fmt.Sprintf("[d]Done(%d)", selCount)),
+			theme.CountProg.Render(fmt.Sprintf("[s]Prog(%d)", selCount)),
+			theme.CountOpen.Render(fmt.Sprintf("[a]Claim(%d)", selCount)),
+			theme.CountArchived.Render(fmt.Sprintf("[A]Arc(%d)", selCount)),
+			theme.DiffSub.Render(fmt.Sprintf("[x]Del(%d)", selCount)),
 			key("M", fmt.Sprintf("Move(%d)", selCount)),
-			key("Space", "Sel"),
-			theme.FilterIndicator.Render("[Esc] Clear"),
-			theme.Age.Render("[q] Quit"),
+			key("Spc", "Sel"),
+			theme.FilterIndicator.Render("[Esc]Clear"),
+			theme.Age.Render("[q]Quit"),
 		)
 	} else if m.activePane == PaneSidebar {
 		sideBadge := theme.BatchBadge.Render("TOPICS")
 		candidateKeys = []string{
 			sideBadge,
 			key("j/k", "Nav"),
-			key("Enter", "Select"),
+			key("⏎", "Sel"),
 			key("Tab", "Tasks"),
 			key("O", "Kind"),
 			key("N", "New"),
 			key("R", "Rename"),
-			key("D", "Delete"),
+			key("D", "Del"),
 			key("M", "Move"),
-			key("Space", "Fold"),
-			theme.Age.Render("[q] Quit"),
+			key("Spc", "Fold"),
+			theme.Age.Render("[q]Quit"),
 		}
 	} else if m.activePane == PaneDetail {
 		curTask := m.currentTask()
-		doneLabel := theme.CountProg.Render("[d] Done")
-		statusLabel := theme.CountOpen.Render("[s] Prog")
-		archiveLabel := theme.CountArchived.Render("[A] Arc")
+		doneLabel := theme.CountProg.Render("[d]Done")
+		statusLabel := theme.CountOpen.Render("[s]Prog")
+		archiveLabel := theme.CountArchived.Render("[A]Arc")
 		if curTask != nil {
 			if curTask.IsPost() {
 				if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
-					doneLabel = theme.CountDone.Render("[d] Reopen")
+					doneLabel = theme.CountDone.Render("[d]Reopen")
 				} else {
-					doneLabel = theme.CountProg.Render("[d] Resolve")
+					doneLabel = theme.CountProg.Render("[d]Resolve")
 				}
 			} else {
 				if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
-					doneLabel = theme.CountDone.Render("[d] Reopen")
+					doneLabel = theme.CountDone.Render("[d]Reopen")
 				}
 				if curTask.Status == domain.StatusInProgress {
-					statusLabel = theme.CountOpen.Render("[s] Open")
+					statusLabel = theme.CountOpen.Render("[s]Open")
 				}
 			}
 			if curTask.IsArchived() {
-				archiveLabel = theme.CountArchived.Render("[A] Unarc")
+				archiveLabel = theme.CountArchived.Render("[A]Unarc")
 			}
 		}
 		detBadge := theme.BatchBadge.Render("DET")
@@ -172,7 +172,7 @@ func (m Model) renderFooter(width int) string {
 			candidateKeys = append(candidateKeys, key("p", "Promote"))
 		}
 		candidateKeys = append(candidateKeys,
-			key("Enter", "Follow/Diff"),
+			key("⏎", "Diff"),
 			key("R", "Reply"),
 			key("W", "Review"),
 			key("[]l", "Link"),
@@ -180,7 +180,7 @@ func (m Model) renderFooter(width int) string {
 			key("gl", "Insert"),
 			key("gb", "Back"),
 			archiveLabel,
-			theme.DiffSub.Render("[x] Del"),
+			theme.DiffSub.Render("[x]Del"),
 			key("L", "Dep"),
 		)
 		if curTask != nil && len(curTask.DependsOn) > 0 {
@@ -188,41 +188,41 @@ func (m Model) renderFooter(width int) string {
 		}
 		candidateKeys = append(candidateKeys,
 			key("?", "Help"),
-			theme.Age.Render("[q] Quit"),
+			theme.Age.Render("[q]Quit"),
 		)
 	} else {
 		// List Pane (Normal mode)
 		curTask := m.currentTask()
-		doneLabel := theme.CountProg.Render("[d] Done")
-		statusLabel := theme.CountOpen.Render("[s] Prog")
-		archiveLabel := theme.CountArchived.Render("[A] Arc")
+		doneLabel := theme.CountProg.Render("[d]Done")
+		statusLabel := theme.CountOpen.Render("[s]Prog")
+		archiveLabel := theme.CountArchived.Render("[A]Arc")
 		if curTask != nil {
 			if curTask.IsPost() {
 				if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
-					doneLabel = theme.CountDone.Render("[d] Reopen")
+					doneLabel = theme.CountDone.Render("[d]Reopen")
 				} else {
-					doneLabel = theme.CountProg.Render("[d] Resolve")
+					doneLabel = theme.CountProg.Render("[d]Resolve")
 				}
 			} else {
 				if curTask.Status == domain.StatusDone || curTask.Status == domain.StatusClosed {
-					doneLabel = theme.CountDone.Render("[d] Reopen")
+					doneLabel = theme.CountDone.Render("[d]Reopen")
 				}
 				if curTask.Status == domain.StatusInProgress {
-					statusLabel = theme.CountOpen.Render("[s] Open")
+					statusLabel = theme.CountOpen.Render("[s]Open")
 				}
 			}
 			if curTask.IsArchived() {
-				archiveLabel = theme.CountArchived.Render("[A] Unarc")
+				archiveLabel = theme.CountArchived.Render("[A]Unarc")
 			}
 		}
 
 		treeLabel := key("t", "Tree")
 		if m.treeViewMode {
-			treeLabel = theme.ModalKey.Render("[t] List")
+			treeLabel = theme.ModalKey.Render("[t]List")
 		}
-		hideDoneLabel := key("H", "HideDone")
+		hideDoneLabel := key("H", "Hide✓")
 		if m.hideDone {
-			hideDoneLabel = theme.FilterIndicator.Render("[H] ShowDone")
+			hideDoneLabel = theme.FilterIndicator.Render("[H]Show✓")
 		}
 
 		isPost := curTask != nil && curTask.IsPost()
@@ -245,7 +245,7 @@ func (m Model) renderFooter(width int) string {
 				key("O", "Kind"),
 				key("M", "Move"),
 				key("gl", "Link"),
-				key("Space", "Sel"),
+				key("Spc", "Sel"),
 				key("n", "New"),
 				key("e", "Edit"),
 				key("R", "Reply"),
@@ -261,10 +261,10 @@ func (m Model) renderFooter(width int) string {
 			}
 			candidateKeys = append(candidateKeys,
 				archiveLabel,
-				theme.DiffSub.Render("[x] Del"),
+				theme.DiffSub.Render("[x]Del"),
 				key("/", "Find"),
 				key("?", "Help"),
-				theme.Age.Render("[q] Quit"),
+				theme.Age.Render("[q]Quit"),
 			)
 		} else if width >= 80 {
 			candidateKeys = []string{
@@ -282,7 +282,7 @@ func (m Model) renderFooter(width int) string {
 				key("gt", "Topic"),
 				key("O", "Kind"),
 				key("M", "Move"),
-				key("Space", "Sel"),
+				key("Spc", "Sel"),
 				key("n", "New"),
 				key("e", "Edit"),
 			)
@@ -297,9 +297,9 @@ func (m Model) renderFooter(width int) string {
 			}
 			candidateKeys = append(candidateKeys,
 				archiveLabel,
-				theme.DiffSub.Render("[x] Del"),
+				theme.DiffSub.Render("[x]Del"),
 				key("/", "Find"),
-				theme.Age.Render("[q] Quit"),
+				theme.Age.Render("[q]Quit"),
 			)
 		} else {
 			// Ultra-compact footer for narrow screens (< 80 cols)
@@ -318,7 +318,7 @@ func (m Model) renderFooter(width int) string {
 				key("O", "Kind"),
 				doneLabel,
 				archiveLabel,
-				theme.DiffSub.Render("[x] Del"),
+				theme.DiffSub.Render("[x]Del"),
 				key("/", "Find"),
 				theme.Age.Render("[q]"),
 			)
@@ -331,16 +331,16 @@ func (m Model) renderFooter(width int) string {
 		kW := lipgloss.Width(k)
 		sepW := 0
 		if len(activeKeys) > 0 {
-			sepW = 2
+			sepW = 1
 		}
 		if currentWidth+sepW+kW > maxContentWidth {
-			break
+			continue
 		}
 		activeKeys = append(activeKeys, k)
 		currentWidth += sepW + kW
 	}
 
-	line := prefix + strings.Join(activeKeys, "  ")
+	line := prefix + strings.Join(activeKeys, " ")
 	if lipgloss.Width(line) > maxContentWidth {
 		line = truncateToWidth(line, maxContentWidth)
 	}

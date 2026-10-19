@@ -778,10 +778,10 @@ func TestTUIUndoStackOperations(t *testing.T) {
 		t.Errorf("Expected previous assignee 'initial-author', got %q", m.undoStack[0].Snapshots[0].PreviousAssignee)
 	}
 
-	// Footer must now display [u] Undo
+	// Footer must now display [u]Undo
 	footer := m.renderFooter(m.width)
-	if !strings.Contains(footer, "[u] Undo") {
-		t.Errorf("Expected footer to contain '[u] Undo' when undoStack is non-empty, got:\n%s", footer)
+	if !strings.Contains(footer, "[u]Undo") {
+		t.Errorf("Expected footer to contain '[u]Undo' when undoStack is non-empty, got:\n%s", footer)
 	}
 
 	// 3. Pop undo with 'u'

@@ -222,7 +222,7 @@ func (m Model) renderHeader(width int) string {
 		compactQuery = theme.FilterIndicator.Render(fmt.Sprintf("[%q]", m.filterText))
 	}
 
-	sep := "  ─  "
+	sep := " ─ "
 	full := title + " " + scopeBadge + " " + topicBadge
 	for _, md := range fullModes {
 		full += sep + md
