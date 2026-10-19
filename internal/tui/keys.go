@@ -463,7 +463,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "l", "right":
-		if m.activePane == PaneList && len(m.tasks) > 0 {
+		if m.activePane == PaneList && len(m.displayRows()) > 0 {
 			m.activePane = PaneDetail
 			maxOffset := m.maxDetailScrollOffset()
 			if m.detailScrollOffset > maxOffset {
@@ -716,17 +716,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.activePane != PaneList {
 			return m, nil
 		}
-		// Select all / Deselect all toggle
-		if len(m.tasks) > 0 {
-			if len(m.selected) == len(m.tasks) {
+		// Select all / Deselect all toggle over visible tasks
+		vis := m.visibleTasks()
+		if len(vis) > 0 {
+			if len(m.selected) == len(vis) {
 				m.selected = make(map[string]bool)
 				m.statusMsg = "Deselected all"
 			} else {
-				m.selected = make(map[string]bool, len(m.tasks))
-				for _, t := range m.tasks {
+				m.selected = make(map[string]bool, len(vis))
+				for _, t := range vis {
 					m.selected[t.ID] = true
 				}
-				m.statusMsg = fmt.Sprintf("Selected all (%d tasks)", len(m.tasks))
+				m.statusMsg = fmt.Sprintf("Selected all (%d tasks)", len(vis))
 			}
 		}
 
@@ -856,6 +857,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					break
 				}
 			}
+			m.recomputeBlockers(ids...)
+			m.clampScroll()
 			actionDesc := "Archived"
 			if !targetArchive {
 				actionDesc = "Unarchived"
@@ -872,24 +875,55 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.pushUndo(UndoArchive, fmt.Sprintf("Unarchived %s", cur.ID), snap)
 				cur.ArchivedAt = nil
 				cur.Status = domain.StatusOpen
+				m.recomputeBlockers(cur.ID)
+				m.clampScroll()
 				m.statusMsg = fmt.Sprintf("Unarchived %s (press 'u' to undo)", cur.ID)
 				return m, m.unarchiveTaskCmd(cur.ID)
 			}
 			m.pushUndo(UndoArchive, fmt.Sprintf("Archived %s", cur.ID), snap)
 			cur.ArchivedAt = &now
 			cur.Status = domain.StatusArchived
+			m.recomputeBlockers(cur.ID)
+			m.clampScroll()
 			m.statusMsg = fmt.Sprintf("Archived %s (press 'u' to undo)", cur.ID)
 			return m, m.archiveTaskCmd(cur.ID)
 		}
 		return m, nil
 
 	case "t":
+		prevRow, hasPrev := m.currentRow()
 		m.treeViewMode = !m.treeViewMode
-		m.clampScroll()
+		if hasPrev && prevRow.Task != nil {
+			m.reanchorCursor(prevRow.Task.ID, prevRow.Pointer, prevRow.Ghost)
+		} else {
+			m.clampScroll()
+		}
 		if m.treeViewMode {
 			m.statusMsg = "Tree view mode enabled"
 		} else {
 			m.statusMsg = "Standard list view enabled"
+		}
+		return m, nil
+
+	case "H", "D":
+		prevRow, hasPrev := m.currentRow()
+		m.hideDone = !m.hideDone
+		if m.hideDone && len(m.selected) > 0 {
+			for id := range m.selected {
+				if t := m.lookupItem(id); isDoneTask(t) {
+					delete(m.selected, id)
+				}
+			}
+		}
+		if hasPrev && prevRow.Task != nil {
+			m.reanchorCursor(prevRow.Task.ID, prevRow.Pointer, prevRow.Ghost)
+		} else {
+			m.clampScroll()
+		}
+		if m.hideDone {
+			m.statusMsg = "Done tasks hidden (press 'H' to show)"
+		} else {
+			m.statusMsg = "Done tasks visible"
 		}
 		return m, nil
 
@@ -954,9 +988,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		cur := m.currentTask()
 		if cur != nil {
+			prevRow, _ := m.currentRow()
 			if cur.Status == domain.StatusDone || cur.Status == domain.StatusClosed {
 				m.pushUndo(UndoStatusChange, fmt.Sprintf("Reopened %s", cur.ID), cloneTaskSnapshot(cur, nil))
 				cur.Status = domain.StatusOpen
+				m.recomputeBlockers(cur.ID)
+				m.reanchorCursor(cur.ID, prevRow.Pointer, prevRow.Ghost)
 				m.statusMsg = fmt.Sprintf("Reopened %s (press 'u' to undo)", cur.ID)
 				return m, m.reopenTaskCmd(cur.ID)
 			}
@@ -973,6 +1010,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.pushUndo(UndoStatusChange, fmt.Sprintf("Marked %s as DONE", cur.ID), cloneTaskSnapshot(cur, nil))
 			cur.Status = domain.StatusDone
+			if m.hideDone {
+				delete(m.selected, cur.ID)
+			}
+			m.recomputeBlockers(cur.ID)
+			m.reanchorCursor(cur.ID, prevRow.Pointer, prevRow.Ghost)
 			m.statusMsg = fmt.Sprintf("Marked %s as DONE (press 'u' to undo)", cur.ID)
 			return m, m.markDoneCmd(cur.ID)
 		}
@@ -985,6 +1027,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		cur := m.currentTask()
 		if cur != nil {
+			prevRow, _ := m.currentRow()
 			newStatus := domain.StatusInProgress
 			switch cur.Status {
 			case domain.StatusInProgress:
@@ -994,6 +1037,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.pushUndo(UndoStatusChange, fmt.Sprintf("Status change on %s", cur.ID), cloneTaskSnapshot(cur, nil))
 			cur.Status = newStatus
+			m.recomputeBlockers(cur.ID)
+			m.reanchorCursor(cur.ID, prevRow.Pointer, prevRow.Ghost)
 			m.statusMsg = fmt.Sprintf("Updated %s status to %s (press 'u' to undo)", cur.ID, newStatus)
 			return m, m.updateStatusCmd(cur.ID, newStatus)
 		}
@@ -1025,11 +1070,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusMsg = fmt.Sprintf("Undid: %s", lastUndo.Description)
 
 		// In-memory restoration for immediate responsiveness
+		var changedIDs []string
 		switch lastUndo.Kind {
 		case UndoStatusChange:
 			for _, snap := range lastUndo.Snapshots {
 				if snap.Task != nil {
 					snap.Task.Status = snap.PreviousStatus
+					changedIDs = append(changedIDs, snap.Task.ID)
 				}
 				for _, t := range m.tasks {
 					if snap.Task != nil && t.ID == snap.Task.ID {
@@ -1042,6 +1089,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if snap.Task != nil {
 					snap.Task.Assignee = snap.PreviousAssignee
 					snap.Task.Status = snap.PreviousStatus
+					changedIDs = append(changedIDs, snap.Task.ID)
 				}
 				for _, t := range m.tasks {
 					if snap.Task != nil && t.ID == snap.Task.ID {
@@ -1055,6 +1103,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if snap.Task != nil {
 					snap.Task.ArchivedAt = snap.PreviousArchivedAt
 					snap.Task.Status = snap.PreviousStatus
+					changedIDs = append(changedIDs, snap.Task.ID)
 				}
 				for _, t := range m.tasks {
 					if snap.Task != nil && t.ID == snap.Task.ID {
@@ -1064,6 +1113,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		m.recomputeBlockers(changedIDs...)
+		m.clampScroll()
 
 		return m, m.executeUndoCmd(lastUndo)
 

@@ -27,10 +27,7 @@ func (m Model) paneAt(l paneLayout, x, y int) Pane {
 
 // moveCursor moves the list cursor by delta, keeping it visible and resetting the detail viewport.
 func (m *Model) moveCursor(delta int) {
-	displayCount := len(m.tasks)
-	if m.treeViewMode {
-		displayCount = len(m.getTreeRows())
-	}
+	displayCount := len(m.displayRows())
 	next := min(max(m.cursor+delta, 0), max(displayCount-1, 0))
 	if next == m.cursor {
 		return

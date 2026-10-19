@@ -138,7 +138,8 @@ func (c *Client) call(action protocol.Action, payload any) (*protocol.Response, 
 }
 
 func (c *Client) callLocked(action protocol.Action, payload any) (*protocol.Response, error) {
-	if c.conn == nil {
+	hadConn := c.conn != nil
+	if !hadConn {
 		if err := c.connectLocked(); err != nil {
 			return nil, err
 		}
@@ -159,32 +160,43 @@ func (c *Client) callLocked(action protocol.Action, payload any) (*protocol.Resp
 		dbPath = c.cfg.DBPath
 	}
 
-	reqID := uuid.New().String()
-	req := protocol.Request{
-		ID:       reqID,
-		Action:   action,
-		Payload:  payloadBytes,
-		Scope:    c.Scope,
-		RepoPath: c.RepoPath,
-		DBPath:   dbPath,
+	sendAndRecv := func() (*protocol.Response, error) {
+		reqID := uuid.New().String()
+		req := protocol.Request{
+			ID:       reqID,
+			Action:   action,
+			Payload:  payloadBytes,
+			Scope:    c.Scope,
+			RepoPath: c.RepoPath,
+			DBPath:   dbPath,
+		}
+		if err := c.enc.Encode(req); err != nil {
+			_ = c.closeLocked()
+			return nil, fmt.Errorf("failed to send request: %w", err)
+		}
+		var resp protocol.Response
+		if err := c.dec.Decode(&resp); err != nil {
+			_ = c.closeLocked()
+			return nil, fmt.Errorf("failed to read response: %w", err)
+		}
+		return &resp, nil
 	}
 
-	if err := c.enc.Encode(req); err != nil {
-		_ = c.closeLocked()
-		return nil, fmt.Errorf("failed to send request: %w", err)
+	resp, err := sendAndRecv()
+	if err != nil && hadConn && action != protocol.ActionShutdown {
+		if reconnErr := c.connectLocked(); reconnErr == nil {
+			resp, err = sendAndRecv()
+		}
 	}
-
-	var resp protocol.Response
-	if err := c.dec.Decode(&resp); err != nil {
-		_ = c.closeLocked()
-		return nil, fmt.Errorf("failed to read response: %w", err)
+	if err != nil {
+		return nil, err
 	}
 
 	if !resp.Success {
 		return nil, fmt.Errorf("%s", resp.Error)
 	}
 
-	return &resp, nil
+	return resp, nil
 }
 
 func (c *Client) Ping() error {

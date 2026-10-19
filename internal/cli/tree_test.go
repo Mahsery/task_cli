@@ -130,3 +130,52 @@ func TestTreeForestAndRendering(t *testing.T) {
 		t.Fatalf("expected T-3 to be a root in reverse tree")
 	}
 }
+
+func TestBridgeHiddenDependencies(t *testing.T) {
+	// Chain: T-1 (open) -> T-2 (done) -> T-3 (done) -> T-4 (open)
+	// Diamond: T-1 (open) -> T-2 (done) -> T-6 (open) AND T-1 (open) -> T-5 (open) -> T-6 (open)
+	t1 := &domain.Task{ID: "T-1", Title: "Root", Status: domain.StatusOpen, Blocks: []string{"T-2", "T-5"}, TopicPath: "backend"}
+	t2 := &domain.Task{ID: "T-2", Title: "Done 1", Status: domain.StatusDone, DependsOn: []string{"T-1"}, Blocks: []string{"T-3", "T-6"}, TopicPath: "backend"}
+	t3 := &domain.Task{ID: "T-3", Title: "Done 2", Status: domain.StatusDone, DependsOn: []string{"T-2"}, Blocks: []string{"T-4"}, TopicPath: "backend"}
+	t4 := &domain.Task{ID: "T-4", Title: "Bridged Leaf", Status: domain.StatusOpen, DependsOn: []string{"T-3"}, TopicPath: "backend"}
+	t5 := &domain.Task{ID: "T-5", Title: "Active Branch", Status: domain.StatusOpen, DependsOn: []string{"T-1"}, Blocks: []string{"T-6"}, TopicPath: "backend"}
+	t6 := &domain.Task{ID: "T-6", Title: "Diamond Sink", Status: domain.StatusOpen, DependsOn: []string{"T-2", "T-5"}, TopicPath: "backend"}
+
+	allTasks := []*domain.Task{t1, t2, t3, t4, t5, t6}
+	visible := []*domain.Task{t1, t4, t5, t6}
+
+	bridged := bridgeHiddenDependencies(visible, allTasks)
+	taskMap := make(map[string]*domain.Task, len(bridged))
+	for _, tk := range bridged {
+		taskMap[tk.ID] = tk
+	}
+
+	// Pass a ghostLookup to verify hidden in-topic tasks (T-2, T-3) are NOT queried as cross-topic ghosts
+	forest := buildForestWith(bridged, taskMap, false, func(id string) *domain.Task {
+		t.Errorf("unexpected ghost lookup for hidden in-topic task %s", id)
+		return nil
+	})
+
+	if len(forest) != 1 || forest[0].Task.ID != "T-1" {
+		t.Fatalf("expected single root T-1, got %d roots", len(forest))
+	}
+	root := forest[0]
+	if len(root.Children) != 2 {
+		t.Fatalf("expected T-1 to have 2 children (T-5 and bridged T-4), got %d", len(root.Children))
+	}
+
+	// Verify reverse forest also bridges T-4 -> T-1 across hidden T-3 -> T-2
+	revForest := buildForestWith(bridged, taskMap, true, nil)
+	foundT4 := false
+	for _, r := range revForest {
+		if r.Task.ID == "T-4" {
+			foundT4 = true
+			if len(r.Children) != 1 || r.Children[0].Task.ID != "T-1" {
+				t.Fatalf("expected reverse tree under T-4 to bridge to T-1, got %+v", r.Children)
+			}
+		}
+	}
+	if !foundT4 {
+		t.Fatalf("expected T-4 to be a root in reverse forest")
+	}
+}

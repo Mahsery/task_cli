@@ -35,6 +35,7 @@ var (
 	listTasks     bool
 	listBranch    string
 	listIDsOnly   bool
+	listHideDone  bool
 )
 
 var listCmd = &cobra.Command{
@@ -45,6 +46,7 @@ var listCmd = &cobra.Command{
 Renders an aligned tabular view by default, single-line summaries with --short, or bare IDs with --ids.
 A positional @topic (or --topic) limits the list to one topic; add -r to include sub-topics.`,
 	Example: `  tk list
+  tk ls -H
   tk ls @hero-system
   tk ls @game -r
   tk ls -T bug-reports --posts
@@ -71,6 +73,7 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
 		}
 		if listTree {
 			treeTopic = listTopicRef
+			treeHideDone = listHideDone
 			return treeCmd.RunE(cmd, nil)
 		}
 		if listPosts && listTasks {
@@ -128,6 +131,9 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
 		if err := applyStatusFilter(&filter, listStatus); err != nil {
 			return err
 		}
+		if listHideDone && len(filter.Statuses) == 0 && !filter.OnlyOrphaned && !filter.OnlyArchived {
+			filter.Statuses = []domain.Status{domain.StatusOpen, domain.StatusInProgress}
+		}
 		if listPriority != "" {
 			p, err := domain.ParsePriority(listPriority)
 			if err != nil {
@@ -139,6 +145,15 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
 		tasks, err := taskClient.ListTasks(filter)
 		if err != nil {
 			return err
+		}
+		if listHideDone {
+			filtered := make([]*domain.Task, 0, len(tasks))
+			for _, t := range tasks {
+				if t.Status != domain.StatusDone && t.Status != domain.StatusClosed {
+					filtered = append(filtered, t)
+				}
+			}
+			tasks = filtered
 		}
 
 		if listIDsOnly {
@@ -220,6 +235,7 @@ func applyStatusFilter(filter *domain.TaskFilter, raw string) error {
 
 func init() {
 	listCmd.Flags().StringVarP(&listStatus, "status", "s", "", "Filter by status, comma-separated for multiple (open, in_progress, done, closed, orphan)")
+	listCmd.Flags().BoolVarP(&listHideDone, "hide-done", "H", false, "Hide completed (done and closed) tasks")
 	listCmd.Flags().StringVarP(&listPriority, "priority", "p", "", "Filter by priority (low, normal, high, urgent)")
 	listCmd.Flags().StringVarP(&listTag, "tag", "t", "", "Filter by tag")
 	listCmd.Flags().StringVarP(&listTagLabel, "label", "l", "", "Filter by tag (alias for -t, --tag)")

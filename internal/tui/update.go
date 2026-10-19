@@ -2,11 +2,22 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"task_cli/internal/domain"
 )
+
+func (m Model) postReloadCmd() tea.Cmd {
+	relCmd := m.fetchRelatedCmd()
+	if m.showDiff {
+		if t := m.currentTask(); t != nil && t.DiffContent == "" && t.CommitSHA != "" {
+			return tea.Batch(relCmd, m.fetchTaskDetailCmd(t.ID))
+		}
+	}
+	return relCmd
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -18,13 +29,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case reloadMsg:
 		m.applyReload(msg)
-		return m, m.fetchRelatedCmd()
+		return m, m.postReloadCmd()
 
 	case reloadErrMsg:
 		m.applyReload(msg.tasks)
 		m.err = msg.err
 		m.statusMsg = fmt.Sprintf("Error: %v", msg.err)
-		return m, m.fetchRelatedCmd()
+		return m, m.postReloadCmd()
 
 	case topicsMsg:
 		m.applyTopics(msg)
@@ -66,10 +77,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamSubscribedMsg:
 		m.eventCh = msg.ch
+		wasReconnecting := m.reconnectingStream
+		m.reconnectingStream = false
+		if wasReconnecting {
+			return m, tea.Batch(m.waitForEventCmd(), tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd()))
+		}
 		return m, m.waitForEventCmd()
 
+	case streamDisconnectedMsg:
+		m.eventCh = nil
+		if m.client == nil {
+			m.reconnectingStream = false
+			return m, nil
+		}
+		m.reconnectingStream = true
+		return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
+			return reconnectStreamMsg{}
+		})
+
+	case reconnectStreamMsg:
+		if m.eventCh != nil || m.client == nil {
+			m.reconnectingStream = false
+			return m, nil
+		}
+		return m, m.subscribeEventsCmd()
+
 	case daemonEventMsg:
-		return m, tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd(), m.waitForEventCmd())
+		return m, tea.Batch(m.waitForEventCmd(), tea.Sequence(m.fetchTopicsCmd(), m.fetchTasksCmd()))
 
 	case editTaskMsg:
 		return m.openEditTaskEditor(msg.task)
@@ -95,25 +129,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // applyReload installs a fresh task list, keeping cursor/scroll valid and pruning stale selections.
 func (m *Model) applyReload(tasks []*domain.Task) {
+	var prevRow TreeRow
+	var hasPrev bool
+	if !m.resetCursor {
+		prevRow, hasPrev = m.currentRow()
+	}
+	m.resetCursor = false
+
+	prevByID := m.taskByID
+	if prevByID == nil && len(m.tasks) > 0 {
+		prevByID = make(map[string]*domain.Task, len(m.tasks))
+		for _, old := range m.tasks {
+			prevByID[old.ID] = old
+		}
+	}
+
 	m.tasks = tasks
 	if m.isBoardView() {
 		sortBoard(m.tasks)
 	}
 	m.taskByID = make(map[string]*domain.Task, len(m.tasks))
 	for _, t := range m.tasks {
+		if old := prevByID[t.ID]; old != nil {
+			if t.DiffContent == "" && t.CommitSHA != "" && old.CommitSHA == t.CommitSHA {
+				t.DiffContent = old.DiffContent
+			}
+			if len(t.Commits) == 0 && len(old.Commits) > 0 && old.CommitSHA == t.CommitSHA {
+				t.Commits = old.Commits
+			}
+		}
 		m.taskByID[t.ID] = t
 	}
-	m.clampScroll()
+
 	if len(m.selected) > 0 {
 		for id := range m.selected {
-			if _, ok := m.taskByID[id]; !ok {
+			t, ok := m.taskByID[id]
+			if !ok || (m.hideDone && isDoneTask(t)) {
 				delete(m.selected, id)
 			}
 		}
 	}
+
 	if m.pendingSelect != nil {
 		target := m.pendingSelect
 		m.pendingSelect = nil
-		m.selectItem(target)
+		if !m.selectItem(target) {
+			m.clampScroll()
+		}
+		return
 	}
+
+	if hasPrev && prevRow.Task != nil {
+		m.reanchorCursor(prevRow.Task.ID, prevRow.Pointer, prevRow.Ghost)
+		return
+	}
+	m.clampScroll()
 }

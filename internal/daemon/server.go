@@ -1104,6 +1104,7 @@ func (s *Server) handleBackupRestore(req protocol.Request) protocol.Response {
 	s.dbs[dbPath] = newDB
 
 	go s.syncCentralBackup(newDB, backupKey)
+	s.publishTopics(fmt.Sprintf("↺ database restored from %s", filepath.Base(targetBackup)))
 
 	data, _ := json.Marshal(map[string]string{
 		"status":  "ok",

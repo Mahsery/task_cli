@@ -191,7 +191,7 @@ func (m Model) claimTaskCmd(taskID string) tea.Cmd {
 
 func (m Model) getSelectedIDs() []string {
 	var ids []string
-	for _, t := range m.tasks {
+	for _, t := range m.visibleTasks() {
 		if m.selected[t.ID] {
 			ids = append(ids, t.ID)
 		}
@@ -399,7 +399,7 @@ func (m Model) subscribeEventsCmd() tea.Cmd {
 	return func() tea.Msg {
 		ch, err := m.client.SubscribeEvents()
 		if err != nil || ch == nil {
-			return nil
+			return streamDisconnectedMsg{}
 		}
 		return streamSubscribedMsg{ch: ch}
 	}
@@ -413,8 +413,19 @@ func (m Model) waitForEventCmd() tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-ch
 		if !ok {
-			return nil
+			return streamDisconnectedMsg{}
 		}
-		return daemonEventMsg(ev)
+		// Coalesce burst events already queued on the channel into a single reload.
+		for {
+			select {
+			case nextEv, nextOK := <-ch:
+				if !nextOK {
+					return daemonEventMsg(ev)
+				}
+				ev = nextEv
+			default:
+				return daemonEventMsg(ev)
+			}
+		}
 	}
 }

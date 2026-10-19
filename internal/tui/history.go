@@ -95,20 +95,25 @@ func (m *Model) restoreNav(e navEntry) tea.Cmd {
 // selectItem moves the list cursor to target.ItemID (if visible) and applies its
 // anchor or scroll position. It reports whether the item was found.
 func (m *Model) selectItem(target *navTarget) bool {
-	rows := m.displayRows()
-	idx := -1
-	for i, r := range rows {
-		if r.Task != nil && r.Task.ID == target.ItemID && !r.Pointer && !r.Ghost {
-			idx = i
-			break
+	findRow := func(rows []TreeRow) int {
+		for i, r := range rows {
+			if r.Task != nil && r.Task.ID == target.ItemID && !r.Pointer && !r.Ghost {
+				return i
+			}
 		}
-	}
-	if idx < 0 {
 		for i, r := range rows {
 			if r.Task != nil && r.Task.ID == target.ItemID {
-				idx = i
-				break
+				return i
 			}
+		}
+		return -1
+	}
+
+	idx := findRow(m.displayRows())
+	if idx < 0 && m.hideDone {
+		if t := m.lookupItem(target.ItemID); isDoneTask(t) {
+			m.hideDone = false
+			idx = findRow(m.displayRows())
 		}
 	}
 	if idx < 0 {

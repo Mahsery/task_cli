@@ -1729,3 +1729,193 @@ func mustModel(t *testing.T, tm tea.Model) Model {
 	}
 	return m
 }
+
+func TestTUIHideDoneToggleAndCounts(t *testing.T) {
+	tasks := []*domain.Task{
+		{ID: "T-1", Title: "Open Task", Status: domain.StatusOpen, Priority: domain.PriorityNormal},
+		{ID: "T-2", Title: "Completed Task", Status: domain.StatusDone, Priority: domain.PriorityNormal},
+		{ID: "T-3", Title: "Closed Task", Status: domain.StatusClosed, Priority: domain.PriorityNormal},
+		{ID: "T-4", Title: "Active Task", Status: domain.StatusInProgress, Priority: domain.PriorityHigh, Assignee: "alice", UpdatedAt: time.Now()},
+	}
+
+	m := Model{
+		tasks:     tasks,
+		taskByID:  map[string]*domain.Task{"T-1": tasks[0], "T-2": tasks[1], "T-3": tasks[2], "T-4": tasks[3]},
+		selected:  map[string]bool{"T-1": true, "T-2": true},
+		cursor:    1, // focused on T-2 (done)
+		width:     140,
+		height:    28,
+		theme:     NewKanagawaTheme(),
+		undoStack: make([]UndoAction, 0),
+	}
+
+	// Press 'H' to hide done tasks
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'H'}})
+	m = mustModel(t, updated)
+	if !m.hideDone {
+		t.Fatalf("expected hideDone to be true after pressing 'H'")
+	}
+
+	rows := m.displayRows()
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 visible rows (T-1, T-4) when hideDone is true, got %d", len(rows))
+	}
+	if rows[0].Task.ID != "T-1" || rows[1].Task.ID != "T-4" {
+		t.Fatalf("expected visible rows [T-1, T-4], got [%s, %s]", rows[0].Task.ID, rows[1].Task.ID)
+	}
+
+	// Selection on hidden done task T-2 must be pruned automatically
+	if m.selected["T-2"] {
+		t.Fatalf("expected hidden done task T-2 to be pruned from selection")
+	}
+	if !m.selected["T-1"] {
+		t.Fatalf("expected visible task T-1 to remain selected")
+	}
+
+	// Header must still show accurate total Done count ("2 Done") plus "[HIDE DONE (H)]" badge
+	view := m.View()
+	if !strings.Contains(view, "2 Done") {
+		t.Errorf("expected header to retain total '2 Done' count while hideDone is active, got:\n%s", view)
+	}
+	if !strings.Contains(view, "[HIDE DONE (H)]") {
+		t.Errorf("expected header to display '[HIDE DONE (H)]' badge, got:\n%s", view)
+	}
+
+	// Press 'V' (Select All) -> must only select the 2 visible tasks
+	m.selected = make(map[string]bool)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'V'}})
+	m = mustModel(t, updated)
+	if len(m.selected) != 2 || !m.selected["T-1"] || !m.selected["T-4"] {
+		t.Fatalf("expected Select All ('V') to select only visible tasks [T-1, T-4], got %v", m.selected)
+	}
+
+	// Press 'D' in list pane -> toggles hideDone off
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'D'}})
+	m = mustModel(t, updated)
+	if m.hideDone {
+		t.Fatalf("expected hideDone to be false after pressing 'D'")
+	}
+	if len(m.displayRows()) != 4 {
+		t.Fatalf("expected all 4 tasks visible after unhiding, got %d", len(m.displayRows()))
+	}
+}
+
+func TestTUITreeBridgesAcrossHiddenDoneTasks(t *testing.T) {
+	// 1. Multi-hop hidden chain: T-1 (open) -> T-2 (done) -> T-3 (done) -> T-4 (open)
+	// 2. Diamond with 1 done branch and 1 open branch:
+	//    T-1 (open) -> T-2 (done) -> T-6 (open) AND T-1 (open) -> T-5 (open) -> T-6 (open)
+	//    Transitive reduction must NOT add a redundant direct shortcut T-1 -> T-6.
+	t1 := &domain.Task{ID: "T-1", Title: "Root Open", Status: domain.StatusOpen, Blocks: []string{"T-2", "T-5"}, TopicPath: "core"}
+	t2 := &domain.Task{ID: "T-2", Title: "Mid Done 1", Status: domain.StatusDone, DependsOn: []string{"T-1"}, Blocks: []string{"T-3", "T-6"}, TopicPath: "core"}
+	t3 := &domain.Task{ID: "T-3", Title: "Mid Done 2", Status: domain.StatusDone, DependsOn: []string{"T-2"}, Blocks: []string{"T-4"}, TopicPath: "core"}
+	t4 := &domain.Task{ID: "T-4", Title: "Leaf After Chain", Status: domain.StatusOpen, DependsOn: []string{"T-3"}, TopicPath: "core"}
+	t5 := &domain.Task{ID: "T-5", Title: "Mid Open", Status: domain.StatusOpen, DependsOn: []string{"T-1"}, Blocks: []string{"T-6"}, TopicPath: "core"}
+	t6 := &domain.Task{ID: "T-6", Title: "Diamond Join", Status: domain.StatusOpen, DependsOn: []string{"T-2", "T-5"}, TopicPath: "core"}
+
+	tasks := []*domain.Task{t1, t2, t3, t4, t5, t6}
+	m := Model{
+		tasks:        tasks,
+		topicPath:    "core", // topic view: showGhosts() == true
+		treeViewMode: true,
+		hideDone:     true,
+		width:        120,
+		height:       28,
+		theme:        NewKanagawaTheme(),
+	}
+
+	rows := m.getTreeRows()
+	// Expected visible tree:
+	// T-1 (depth 0)
+	// ├── T-4 (depth 1, bridged across T-2 -> T-3)
+	// └── T-5 (depth 1, direct)
+	//     └── T-6 (depth 2, under T-5 only; T-1 -> T-2 -> T-6 is transitively reduced!)
+	if len(rows) != 4 {
+		var ids []string
+		for _, r := range rows {
+			ids = append(ids, fmt.Sprintf("%s(d=%d,ptr=%v,ghost=%v)", r.Task.ID, r.Depth, r.Pointer, r.Ghost))
+		}
+		t.Fatalf("expected 4 rows in bridged tree without ghosts or duplicate pointers, got %d: %v", len(rows), ids)
+	}
+
+	want := []struct {
+		id    string
+		depth int
+		ptr   bool
+		ghost bool
+	}{
+		{"T-1", 0, false, false},
+		{"T-4", 1, false, false},
+		{"T-5", 1, false, false},
+		{"T-6", 2, false, false},
+	}
+	for i, w := range want {
+		r := rows[i]
+		if r.Task.ID != w.id || r.Depth != w.depth || r.Pointer != w.ptr || r.Ghost != w.ghost {
+			t.Errorf("row[%d] = {id:%s depth:%d ptr:%v ghost:%v}, want %+v",
+				i, r.Task.ID, r.Depth, r.Pointer, r.Ghost, w)
+		}
+	}
+}
+
+func TestTUIReactiveTreeAndCursorAnchoring(t *testing.T) {
+	t1 := &domain.Task{
+		ID: "T-1", Title: "Prereq", Status: domain.StatusOpen,
+		Reviewer: "alice", Tags: []string{"reviewed-by:alice"},
+		Blocks: []string{"T-2"},
+	}
+	t2 := &domain.Task{
+		ID: "T-2", Title: "Dependent", Status: domain.StatusOpen,
+		DependsOn: []string{"T-1"}, BlockedBy: []string{"T-1"}, IsBlocked: true,
+	}
+	t3 := &domain.Task{
+		ID: "T-3", Title: "Independent", Status: domain.StatusOpen,
+	}
+
+	m := Model{
+		tasks:        []*domain.Task{t1, t2, t3},
+		taskByID:     map[string]*domain.Task{"T-1": t1, "T-2": t2, "T-3": t3},
+		treeViewMode: true,
+		hideDone:     true,
+		cursor:       1, // focused on T-2 (child of T-1)
+		width:        120,
+		height:       24,
+		theme:        NewKanagawaTheme(),
+	}
+
+	if cur := m.currentTask(); cur == nil || cur.ID != "T-2" {
+		t.Fatalf("expected initial cursor on T-2, got %v", cur)
+	}
+
+	// 1. Live reload reorders tasks (e.g., T-3 moved to index 0) -> cursor must stay anchored on T-2!
+	reordered := []*domain.Task{t3, t1, t2}
+	updated, _ := m.Update(reloadMsg(reordered))
+	m = mustModel(t, updated)
+	if cur := m.currentTask(); cur == nil || cur.ID != "T-2" {
+		t.Fatalf("expected cursor to stay anchored on T-2 after reload reorder, got %v", cur)
+	}
+
+	// 2. Focus T-1 and press 'd' while hideDone == true:
+	//    T-1 immediately hides, T-2 immediately becomes unblocked (IsBlocked == false) and becomes a root!
+	m.reanchorCursor("T-1", false, false)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = mustModel(t, updated)
+
+	if t1.Status != domain.StatusDone {
+		t.Fatalf("expected T-1 status to be done, got %s", t1.Status)
+	}
+	if t2.IsBlocked || len(t2.BlockedBy) != 0 {
+		t.Fatalf("expected T-2 to be immediately unblocked in memory when T-1 is marked done, got IsBlocked=%v BlockedBy=%v", t2.IsBlocked, t2.BlockedBy)
+	}
+	rows := m.displayRows()
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 visible rows (T-3, T-2) after T-1 is marked done with hideDone=true, got %d", len(rows))
+	}
+	for _, r := range rows {
+		if r.Task.ID == "T-1" {
+			t.Fatalf("expected done task T-1 to be hidden immediately")
+		}
+		if r.Task.ID == "T-2" && r.Depth != 0 {
+			t.Fatalf("expected T-2 to be promoted to depth 0 root when T-1 is hidden, got depth %d", r.Depth)
+		}
+	}
+}

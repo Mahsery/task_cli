@@ -220,6 +220,10 @@ func (m Model) renderFooter(width int) string {
 		if m.treeViewMode {
 			treeLabel = theme.ModalKey.Render("[t] List")
 		}
+		hideDoneLabel := key("H", "HideDone")
+		if m.hideDone {
+			hideDoneLabel = theme.FilterIndicator.Render("[H] ShowDone")
+		}
 
 		isPost := curTask != nil && curTask.IsPost()
 
@@ -236,6 +240,7 @@ func (m Model) renderFooter(width int) string {
 			}
 			candidateKeys = append(candidateKeys,
 				treeLabel,
+				hideDoneLabel,
 				key("gt", "Topic"),
 				key("O", "Kind"),
 				key("M", "Move"),
@@ -273,6 +278,7 @@ func (m Model) renderFooter(width int) string {
 				candidateKeys = append(candidateKeys, key("<>", "Split"))
 			}
 			candidateKeys = append(candidateKeys,
+				hideDoneLabel,
 				key("gt", "Topic"),
 				key("O", "Kind"),
 				key("M", "Move"),

@@ -112,8 +112,11 @@ type Model struct {
 	showHelp           bool
 	narrowSidebarOpen  bool
 	eventCh            <-chan protocol.Event
+	reconnectingStream bool
 	chordBuffer        string
 	showArchived       bool
+	hideDone           bool
+	resetCursor        bool
 	input              textinput.Model
 	viewport           viewport.Model
 
@@ -220,6 +223,10 @@ type errMsg error
 type streamSubscribedMsg struct {
 	ch <-chan protocol.Event
 }
+
+type streamDisconnectedMsg struct{}
+
+type reconnectStreamMsg struct{}
 
 type daemonEventMsg protocol.Event
 

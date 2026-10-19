@@ -68,9 +68,18 @@ func (m Model) relatedIDs() []string {
 }
 
 func (m Model) fetchRelatedCmd() tea.Cmd {
-	ids := m.relatedIDs()
-	if len(ids) == 0 || m.client == nil {
+	if m.client == nil {
 		return nil
+	}
+	ids := m.relatedIDs()
+	if len(ids) == 0 {
+		if len(m.related) == 0 && len(m.missing) == 0 {
+			return nil
+		}
+		scope := m.scope
+		return func() tea.Msg {
+			return relatedMsg{scope: scope, found: make(map[string]*domain.Task), missing: make(map[string]bool)}
+		}
 	}
 	scope := m.scope
 	return func() tea.Msg {
@@ -481,18 +490,15 @@ func (m *Model) applyRelated(msg relatedMsg) {
 	if msg.scope != m.scope {
 		return
 	}
-	if m.related == nil {
-		m.related = make(map[string]*domain.Task)
-	}
+	m.related = make(map[string]*domain.Task, len(msg.found))
 	for k, v := range msg.found {
 		m.related[k] = v
 	}
-	if m.missing == nil {
-		m.missing = make(map[string]bool)
-	}
+	m.missing = make(map[string]bool, len(msg.missing))
 	for k, v := range msg.missing {
 		m.missing[k] = v
 	}
+	m.clampScroll()
 }
 
 // detailDoc constructs the rendered lines and navigation metadata for the detail pane.

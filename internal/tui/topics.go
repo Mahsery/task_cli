@@ -218,6 +218,7 @@ func (m *Model) selectTopic(path string) tea.Cmd {
 	}
 	m.topicPath = path
 	m.cursor = 0
+	m.resetCursor = true
 	m.scrollOffset = 0
 	m.detailScrollOffset = 0
 	m.selected = make(map[string]bool)
@@ -272,6 +273,7 @@ func (m *Model) cycleKindFilter() tea.Cmd {
 		m.statusMsg = "Filter: all items"
 	}
 	m.cursor = 0
+	m.resetCursor = true
 	m.scrollOffset = 0
 	m.detailScrollOffset = 0
 	m.selected = make(map[string]bool)
@@ -291,6 +293,7 @@ func (m *Model) setScope(scope string) {
 	m.topics = nil
 	m.sidebarCursor = 0
 	m.cursor = 0
+	m.resetCursor = true
 	m.scrollOffset = 0
 	m.detailScrollOffset = 0
 	m.selected = make(map[string]bool)

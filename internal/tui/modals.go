@@ -226,7 +226,7 @@ func (m Model) renderHelpModal(termWidth, termHeight int) string {
 		"  J / K, Ctrl+d/u    Half-page down / up",
 		"  gg / G             Jump to top / bottom (supports count prefix)",
 		"  Tab / Shift+Tab    Cycle active pane (Topics ↔ Tasks ↔ Details)",
-		"  t                  Toggle dependency DAG Tree View mode",
+		"  t / H (or D)       Toggle DAG Tree View / Hide or show done tasks",
 		"  B                  Toggle Topics sidebar / narrow-screen drawer",
 		"  < / > / =          Resize or reset split pane divider",
 		"",

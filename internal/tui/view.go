@@ -207,6 +207,10 @@ func (m Model) renderHeader(width int) string {
 		fullModes = append(fullModes, theme.ArchiveBadge.Render("[ARCHIVE VIEW]"))
 		compactModes = append(compactModes, theme.ArchiveBadge.Render("[arc]"))
 	}
+	if m.hideDone {
+		fullModes = append(fullModes, theme.FilterIndicator.Render("[HIDE DONE (H)]"))
+		compactModes = append(compactModes, theme.FilterIndicator.Render("[!done]"))
+	}
 
 	var fullQuery, compactQuery string
 	if m.isSearch {
@@ -295,7 +299,9 @@ func (m Model) renderListPane(l paneLayout) []string {
 	rows := m.displayRows()
 	if len(rows) == 0 {
 		emptyMsg := "  No items found. Press 'n' to create."
-		if t := m.currentTopic(); t != nil && t.Kind == domain.TopicGroup && t.ChildCount == 0 {
+		if m.hideDone && len(m.tasks) > 0 {
+			emptyMsg = fmt.Sprintf("  All %d item(s) done and hidden. Press 'H' to show.", len(m.tasks))
+		} else if t := m.currentTopic(); t != nil && t.Kind == domain.TopicGroup && t.ChildCount == 0 {
 			emptyMsg = "  Empty group. Press 'N' in sidebar to create a sub-topic."
 		}
 		lines = append(lines, theme.RowNormal.Render(emptyMsg))
