@@ -18,16 +18,18 @@ import (
 )
 
 var (
-	globalFlag bool
-	jsonFlag   bool
-	flagSocket string
-	flagTCP    string
-	flagDB     string
-	flagActor  string
-	cfg        *config.Config
-	taskClient *client.Client
-	scope      string
-	repoRoot   string
+	globalFlag   bool
+	jsonFlag     bool
+	flagSocket   string
+	flagTCP      string
+	flagDB       string
+	flagActor    string
+	maxLinesFlag int
+	showAllFlag  bool
+	cfg          *config.Config
+	taskClient   *client.Client
+	scope        string
+	repoRoot     string
 )
 
 var RootCmd = &cobra.Command{
@@ -114,6 +116,13 @@ func init() {
 	RootCmd.PersistentFlags().StringVar(&flagDB, "db", "", "Custom SQLite database file path (overrides repo/global DB and TK_DB)")
 	RootCmd.PersistentFlags().StringVar(&flagActor, "actor", "", "Explicit actor identity for task attribution (overrides TK_ACTOR/TK_AUTHOR/git)")
 	RootCmd.PersistentFlags().BoolVar(&noPagerFlag, "no-pager", false, "Disable interactive pager for long output")
+	RootCmd.PersistentFlags().IntVar(&maxLinesFlag, "max-lines", DefaultMaxLines, "Truncate output to at most N lines (0 = unlimited; env TK_MAX_LINES)")
+	RootCmd.PersistentFlags().IntVar(&maxLinesFlag, "lines-limit", DefaultMaxLines, "Alias for --max-lines")
+	_ = RootCmd.PersistentFlags().MarkHidden("lines-limit")
+	RootCmd.PersistentFlags().BoolVar(&showAllFlag, "all", false, "Show full untruncated output (same as --max-lines 0)")
+	RootCmd.PersistentFlags().BoolVar(&showAllFlag, "full", false, "Show full untruncated output (alias for --all)")
+	RootCmd.PersistentFlags().BoolVar(&showAllFlag, "no-truncate", false, "Disable output truncation (alias for --all)")
+	_ = RootCmd.PersistentFlags().MarkHidden("no-truncate")
 
 	RootCmd.AddCommand(newCmd)
 	RootCmd.AddCommand(claimCmd)

@@ -146,9 +146,10 @@ Use 'tk go <id> <n>' to open link number n.`,
 			fmt.Printf("%s has no links or backlinks.\n", t.ID)
 			return nil
 		}
-		fmt.Printf("%s: %s\n", t.ID, t.Title)
-		fmt.Print(renderLinksSection(t, links))
-		return nil
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%s: %s\n", t.ID, t.Title)
+		sb.WriteString(renderLinksSection(t, links))
+		return PrintWithPager(sb.String())
 	},
 }
 

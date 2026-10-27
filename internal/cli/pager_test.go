@@ -86,3 +86,82 @@ func TestIsASCIIOnly(t *testing.T) {
 		t.Errorf("Expected IsASCIIOnly() to be true when TERM=dumb")
 	}
 }
+
+func TestTruncateOutput(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 75; i++ {
+		b.WriteString("Line ")
+		b.WriteString(strings.Repeat("x", 5))
+		b.WriteString("\n")
+	}
+	raw := b.String()
+
+	// 1. Truncate to 50 lines
+	truncated, didTruncate := TruncateOutput(raw, 50)
+	if !didTruncate {
+		t.Fatalf("expected TruncateOutput to report truncation for 75 lines with maxLines=50")
+	}
+	if !strings.Contains(truncated, "output truncated: showing 50 of 75 lines (25 omitted)") {
+		t.Fatalf("expected truncation notice in output, got:\n%s", truncated)
+	}
+	if !strings.Contains(truncated, "--all") || !strings.Contains(truncated, "--max-lines") {
+		t.Fatalf("expected override instructions (--all / --max-lines) in truncation notice, got:\n%s", truncated)
+	}
+
+	// 2. Output under limit is untouched
+	short := "Line 1\nLine 2\nLine 3\n"
+	outShort, didTruncShort := TruncateOutput(short, 50)
+	if didTruncShort || outShort != short {
+		t.Fatalf("expected short output to be untouched, got (%q, %v)", outShort, didTruncShort)
+	}
+
+	// 3. Unlimited (maxLines <= 0) returns full content untouched
+	outAll, didTruncAll := TruncateOutput(raw, 0)
+	if didTruncAll || outAll != raw {
+		t.Fatalf("expected maxLines=0 to return full output untouched")
+	}
+}
+
+func TestResolveMaxLinesOverrides(t *testing.T) {
+	origMax := maxLinesFlag
+	origAll := showAllFlag
+	defer func() {
+		maxLinesFlag = origMax
+		showAllFlag = origAll
+	}()
+
+	maxLinesFlag = DefaultMaxLines
+	showAllFlag = false
+	t.Setenv("TK_MAX_LINES", "")
+
+	// Default is 50
+	if got := ResolveMaxLines(); got != DefaultMaxLines {
+		t.Fatalf("expected default ResolveMaxLines() = %d, got %d", DefaultMaxLines, got)
+	}
+
+	// Explicit --max-lines X
+	maxLinesFlag = 20
+	if got := ResolveMaxLines(); got != 20 {
+		t.Fatalf("expected ResolveMaxLines() = 20 when maxLinesFlag=20, got %d", got)
+	}
+
+	// Explicit --all / --full
+	showAllFlag = true
+	if got := ResolveMaxLines(); got != 0 {
+		t.Fatalf("expected ResolveMaxLines() = 0 when showAllFlag=true, got %d", got)
+	}
+	showAllFlag = false
+	maxLinesFlag = DefaultMaxLines
+
+	// Environment variable TK_MAX_LINES=15
+	t.Setenv("TK_MAX_LINES", "15")
+	if got := ResolveMaxLines(); got != 15 {
+		t.Fatalf("expected ResolveMaxLines() = 15 from TK_MAX_LINES=15, got %d", got)
+	}
+
+	// Environment variable TK_MAX_LINES=all
+	t.Setenv("TK_MAX_LINES", "all")
+	if got := ResolveMaxLines(); got != 0 {
+		t.Fatalf("expected ResolveMaxLines() = 0 from TK_MAX_LINES=all, got %d", got)
+	}
+}

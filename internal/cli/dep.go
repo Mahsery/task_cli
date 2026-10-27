@@ -90,48 +90,49 @@ var depShowCmd = &cobra.Command{
 			return outputJSON(data)
 		}
 
-		fmt.Printf("Dependency Graph for %s: %q\n", task.ID, task.Title)
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Dependency Graph for %s: %q\n", task.ID, task.Title)
 		statusBadge := fmt.Sprintf("[%s]", strings.ToUpper(string(task.Status)))
 		if task.IsBlocked {
 			statusBadge += " 🔒 BLOCKED"
 		} else if task.Status != domain.StatusDone && task.Status != domain.StatusClosed {
 			statusBadge += " ⚡ READY"
 		}
-		fmt.Printf("Current Status: %s\n\n", statusBadge)
+		fmt.Fprintf(&sb, "Current Status: %s\n\n", statusBadge)
 
-		fmt.Println("Prerequisites (Depends On):")
+		fmt.Fprintln(&sb, "Prerequisites (Depends On):")
 		if len(task.DependsOn) == 0 {
-			fmt.Println("  (none - independent root task)")
+			fmt.Fprintln(&sb, "  (none - independent root task)")
 		} else {
 			for _, depID := range task.DependsOn {
 				depTask, err := taskClient.GetTask(depID)
 				if err != nil {
-					fmt.Printf("  • %s (unresolved)\n", depID)
+					fmt.Fprintf(&sb, "  • %s (unresolved)\n", depID)
 				} else {
 					marker := "✓"
 					if depTask.Status != domain.StatusDone && depTask.Status != domain.StatusClosed {
 						marker = "✗ [UNFINISHED]"
 					}
-					fmt.Printf("  • %s %s [%s] %s\n", marker, depTask.ID, depTask.Status, depTask.Title)
+					fmt.Fprintf(&sb, "  • %s %s [%s] %s\n", marker, depTask.ID, depTask.Status, depTask.Title)
 				}
 			}
 		}
 
-		fmt.Println("\nDependents (Blocks):")
+		fmt.Fprintln(&sb, "\nDependents (Blocks):")
 		if len(task.Blocks) == 0 {
-			fmt.Println("  (none - does not block any tasks)")
+			fmt.Fprintln(&sb, "  (none - does not block any tasks)")
 		} else {
 			for _, blkID := range task.Blocks {
 				blkTask, err := taskClient.GetTask(blkID)
 				if err != nil {
-					fmt.Printf("  • %s (unresolved)\n", blkID)
+					fmt.Fprintf(&sb, "  • %s (unresolved)\n", blkID)
 				} else {
-					fmt.Printf("  • %s [%s] %s\n", blkTask.ID, blkTask.Status, blkTask.Title)
+					fmt.Fprintf(&sb, "  • %s [%s] %s\n", blkTask.ID, blkTask.Status, blkTask.Title)
 				}
 			}
 		}
 
-		return nil
+		return PrintWithPager(sb.String())
 	},
 }
 

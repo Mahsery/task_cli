@@ -68,8 +68,9 @@ func runBackupList() error {
 		return nil
 	}
 
-	fmt.Printf("%-32s %-10s %-18s %-10s %s\n", "BACKUP NAME", "SIZE", "CREATED", "LOCATION", "PATH")
-	fmt.Println(strings.Repeat("─", 98))
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%-32s %-10s %-18s %-10s %s\n", "BACKUP NAME", "SIZE", "CREATED", "LOCATION", "PATH")
+	fmt.Fprintln(&sb, strings.Repeat("─", 98))
 	for i, b := range backups {
 		sizeStr := formatFileSize(b.Size)
 		ageStr := formatAge(b.ModTime)
@@ -80,9 +81,9 @@ func runBackupList() error {
 		if locStr == "" {
 			locStr = "local"
 		}
-		fmt.Printf("%-32s %-10s %-18s %-10s %s\n", b.Name, sizeStr, ageStr, locStr, b.Path)
+		fmt.Fprintf(&sb, "%-32s %-10s %-18s %-10s %s\n", b.Name, sizeStr, ageStr, locStr, b.Path)
 	}
-	return nil
+	return PrintWithPager(sb.String())
 }
 
 func looksLikeFilePath(arg string) bool {

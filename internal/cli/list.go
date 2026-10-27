@@ -157,10 +157,11 @@ A positional @topic (or --topic) limits the list to one topic; add -r to include
 		}
 
 		if listIDsOnly {
+			var sb strings.Builder
 			for _, t := range tasks {
-				fmt.Println(t.ID)
+				fmt.Fprintln(&sb, t.ID)
 			}
-			return nil
+			return PrintWithPager(sb.String())
 		}
 
 		if jsonFlag {

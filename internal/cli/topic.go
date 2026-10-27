@@ -104,8 +104,7 @@ var topicTreeCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		fmt.Print(renderTopicTree(topics, len(unfiled), currentTopic()))
-		return nil
+		return PrintWithPager(renderTopicTree(topics, len(unfiled), currentTopic()))
 	},
 }
 

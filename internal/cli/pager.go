@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +18,77 @@ import (
 	"github.com/charmbracelet/x/term"
 )
 
+// DefaultMaxLines is the default maximum number of output lines before CLI output is truncated.
+const DefaultMaxLines = 50
+
 var noPagerFlag bool
+
+// ResolveMaxLines determines the active output line truncation limit.
+// A return value <= 0 means unlimited (no truncation).
+func ResolveMaxLines() int {
+	if showAllFlag || flagChanged("all") || flagChanged("full") || flagChanged("no-truncate") {
+		if showAllFlag {
+			return 0
+		}
+	}
+	if flagChanged("max-lines") || flagChanged("lines-limit") {
+		if maxLinesFlag <= 0 {
+			return 0
+		}
+		return maxLinesFlag
+	}
+	if maxLinesFlag != DefaultMaxLines {
+		if maxLinesFlag <= 0 {
+			return 0
+		}
+		return maxLinesFlag
+	}
+	if env := strings.TrimSpace(os.Getenv("TK_MAX_LINES")); env != "" {
+		lower := strings.ToLower(env)
+		if lower == "0" || lower == "all" || lower == "full" || lower == "none" || lower == "unlimited" {
+			return 0
+		}
+		if n, err := strconv.Atoi(env); err == nil {
+			if n <= 0 {
+				return 0
+			}
+			return n
+		}
+	}
+	return DefaultMaxLines
+}
+
+func flagChanged(name string) bool {
+	if RootCmd == nil {
+		return false
+	}
+	if f := RootCmd.PersistentFlags().Lookup(name); f != nil && f.Changed {
+		return true
+	}
+	return false
+}
+
+// TruncateOutput truncates text to at most maxLines lines. When truncated, it appends
+// a clear notice explaining how many lines were omitted and how to view more or all.
+// If maxLines <= 0 or the content has <= maxLines lines, content is returned unchanged.
+func TruncateOutput(content string, maxLines int) (string, bool) {
+	if maxLines <= 0 || content == "" {
+		return content, false
+	}
+
+	trimmed := strings.TrimSuffix(content, "\n")
+	lines := strings.Split(trimmed, "\n")
+	total := len(lines)
+	if total <= maxLines {
+		return content, false
+	}
+
+	omitted := total - maxLines
+	kept := strings.Join(lines[:maxLines], "\n")
+	notice := fmt.Sprintf("\n... [output truncated: showing %d of %d lines (%d omitted) — pass --all (or --max-lines 0) to view all, or --max-lines <N>]\n",
+		maxLines, total, omitted)
+	return kept + notice, true
+}
 
 // IsInteractiveTerminal reports whether execution is attached to a real, interactive
 // terminal (both stdout and stdin are TTYs), is not a dumb terminal, and is not running
@@ -133,11 +204,13 @@ func IsASCIIOnly() bool {
 	return termutil.IsASCIIOnly()
 }
 
-// PrintWithPager outputs text to stdout, automatically invoking a pager
-// (TK_PAGER / BAT_PAGER / PAGER / less -RFX) when output exceeds terminal height.
+// PrintWithPager outputs text to stdout, applying line truncation (DefaultMaxLines by default)
+// and automatically invoking a pager (TK_PAGER / BAT_PAGER / PAGER / less -RFX) when
+// output exceeds terminal height in an interactive terminal.
 // Bypasses the pager completely in non-interactive terminals, dumb terminals,
 // automated agent harnesses, or when explicitly requested.
 func PrintWithPager(content string) error {
+	content, _ = TruncateOutput(content, ResolveMaxLines())
 	if !IsInteractiveTerminal() || noPagerFlag || os.Getenv("TK_NO_PAGER") != "" || os.Getenv("PAGER") == "cat" {
 		_, err := fmt.Print(content)
 		return err

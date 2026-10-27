@@ -194,39 +194,39 @@ func getGitBranch(dir string) string {
 }
 
 func renderStatusText(r StatusReport) {
+	var sb strings.Builder
 	sep := strings.Repeat("─", 80)
 	if IsASCIIOnly() {
 		sep = strings.Repeat("-", 80)
 	}
 
-	fmt.Println(sep)
+	fmt.Fprintln(&sb, sep)
 	if r.Scope == "local" {
-		fmt.Printf("Repository Status (local):\n")
+		fmt.Fprintf(&sb, "Repository Status (local):\n")
 		if r.RepoPath != "" {
-			fmt.Printf("  Repo:    %s\n", r.RepoPath)
+			fmt.Fprintf(&sb, "  Repo:    %s\n", r.RepoPath)
 		}
 		if r.Branch != "" {
-			fmt.Printf("  Branch:  %s\n", r.Branch)
+			fmt.Fprintf(&sb, "  Branch:  %s\n", r.Branch)
 		}
 	} else {
-		fmt.Printf("Status (global scope):\n")
+		fmt.Fprintf(&sb, "Status (global scope):\n")
 	}
 	if r.Actor != "" {
-		fmt.Printf("  Actor:   %s\n", r.Actor)
+		fmt.Fprintf(&sb, "  Actor:   %s\n", r.Actor)
 	}
-	fmt.Println(sep)
+	fmt.Fprintln(&sb, sep)
 
 	// Summary
-	fmt.Printf("Summary:\n")
-	fmt.Printf("  Open: %d  •  Active: %d  •  Done: %d  •  Orphaned: %d  •  Archived: %d\n",
+	fmt.Fprintf(&sb, "Summary:\n")
+	fmt.Fprintf(&sb, "  Open: %d  •  Active: %d  •  Done: %d  •  Orphaned: %d  •  Archived: %d\n",
 		r.Summary.Open, r.Summary.InProgress, r.Summary.Done, r.Summary.Orphaned, r.Summary.Archived)
-	fmt.Printf("  Ready: %d  •  Blocked: %d  •  Needs Review: %d\n", r.Summary.Ready, r.Summary.Blocked, r.Summary.NeedsReview)
-	fmt.Println()
+	fmt.Fprintf(&sb, "  Ready: %d  •  Blocked: %d  •  Needs Review: %d\n\n", r.Summary.Ready, r.Summary.Blocked, r.Summary.NeedsReview)
 
 	// Active Tasks
-	fmt.Printf("Active Tasks (%d):\n", len(r.ActiveTasks))
+	fmt.Fprintf(&sb, "Active Tasks (%d):\n", len(r.ActiveTasks))
 	if len(r.ActiveTasks) == 0 {
-		fmt.Println("  (No tasks currently in progress)")
+		fmt.Fprintln(&sb, "  (No tasks currently in progress)")
 	} else {
 		for _, t := range r.ActiveTasks {
 			assigneeDesc := "unassigned"
@@ -246,32 +246,33 @@ func renderStatusText(r StatusReport) {
 				}
 			}
 			age := formatAge(t.CreatedAt)
-			fmt.Printf("  • %-6s [%-6s] %s\n", t.ID, t.Priority, t.Title)
-			fmt.Printf("    └─ %s, %s, started %s\n", assigneeDesc, reviewDesc, age)
+			fmt.Fprintf(&sb, "  • %-6s [%-6s] %s\n", t.ID, t.Priority, t.Title)
+			fmt.Fprintf(&sb, "    └─ %s, %s, started %s\n", assigneeDesc, reviewDesc, age)
 		}
 	}
-	fmt.Println()
+	fmt.Fprintln(&sb)
 
 	// Orphaned Tasks
 	if len(r.OrphanedTasks) > 0 {
-		fmt.Printf("⚠️  Orphaned Tasks (%d):\n", len(r.OrphanedTasks))
+		fmt.Fprintf(&sb, "⚠️  Orphaned Tasks (%d):\n", len(r.OrphanedTasks))
 		for _, t := range r.OrphanedTasks {
-			fmt.Printf("  • %-6s [%-6s] %s (age: %s)\n", t.ID, t.Priority, t.Title, formatAge(t.CreatedAt))
-			fmt.Printf("    └─ Hint: 'tk takeover %s' to claim, or 'tk archive %s' to archive\n", t.ID, t.ID)
+			fmt.Fprintf(&sb, "  • %-6s [%-6s] %s (age: %s)\n", t.ID, t.Priority, t.Title, formatAge(t.CreatedAt))
+			fmt.Fprintf(&sb, "    └─ Hint: 'tk takeover %s' to claim, or 'tk archive %s' to archive\n", t.ID, t.ID)
 		}
-		fmt.Println()
+		fmt.Fprintln(&sb)
 	}
 
 	// Blocked Tasks
 	if len(r.BlockedTasks) > 0 {
-		fmt.Printf("🔒 Blocked Tasks (%d):\n", len(r.BlockedTasks))
+		fmt.Fprintf(&sb, "🔒 Blocked Tasks (%d):\n", len(r.BlockedTasks))
 		for _, t := range r.BlockedTasks {
 			blockers := strings.Join(t.BlockedBy, ", ")
 			if blockers == "" {
 				blockers = strings.Join(t.DependsOn, ", ")
 			}
-			fmt.Printf("  • %-6s [%-6s] %s (blocked by: %s)\n", t.ID, t.Priority, t.Title, blockers)
+			fmt.Fprintf(&sb, "  • %-6s [%-6s] %s (blocked by: %s)\n", t.ID, t.Priority, t.Title, blockers)
 		}
-		fmt.Println()
+		fmt.Fprintln(&sb)
 	}
+	_ = PrintWithPager(sb.String())
 }

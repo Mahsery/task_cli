@@ -260,30 +260,31 @@ func runOrphanList(threshold time.Duration, actor string) error {
 		return nil
 	}
 
+	var sb strings.Builder
 	if len(orphanedTasks) > 0 {
-		fmt.Printf("Currently Orphaned Tasks (%d):\n", len(orphanedTasks))
+		fmt.Fprintf(&sb, "Currently Orphaned Tasks (%d):\n", len(orphanedTasks))
 		for _, t := range orphanedTasks {
-			fmt.Printf("  %-6s [%-11s] %-6s  %s (age: %s)\n",
+			fmt.Fprintf(&sb, "  %-6s [%-11s] %-6s  %s (age: %s)\n",
 				t.ID, t.Status, t.Priority, t.Title, formatAge(t.CreatedAt))
 		}
-		fmt.Println()
+		fmt.Fprintln(&sb)
 	}
 
 	if len(staleRes.Candidates) > 0 {
-		fmt.Printf("Stale Candidate Tasks (inactive > %s, unworked: %d):\n", threshold, len(staleRes.Candidates))
+		fmt.Fprintf(&sb, "Stale Candidate Tasks (inactive > %s, unworked: %d):\n", threshold, len(staleRes.Candidates))
 		for _, c := range staleRes.Candidates {
 			if c.Assignee != "" {
-				fmt.Printf("  %-6s [%-11s] (assigned: %q, inactive: %s)  %s\n",
+				fmt.Fprintf(&sb, "  %-6s [%-11s] (assigned: %q, inactive: %s)  %s\n",
 					c.TaskID, c.Status, c.Assignee, formatAge(c.LastActivity), c.Title)
 			} else {
-				fmt.Printf("  %-6s [%-11s] (unassigned, inactive: %s)  %s\n",
+				fmt.Fprintf(&sb, "  %-6s [%-11s] (unassigned, inactive: %s)  %s\n",
 					c.TaskID, c.Status, formatAge(c.LastActivity), c.Title)
 			}
 		}
-		fmt.Println("\nRun 'tk orphan --all' to reap stale candidates.")
+		fmt.Fprintln(&sb, "\nRun 'tk orphan --all' to reap stale candidates.")
 	}
 
-	return nil
+	return PrintWithPager(sb.String())
 }
 
 var orphanBackportCmd = &cobra.Command{
@@ -394,6 +395,7 @@ func init() {
 	orphanCmd.Flags().StringVar(&orphanActor, "actor", "", "Explicit actor identity")
 	orphanCmd.Flags().BoolVar(&orphanDryRun, "dry-run", false, "Preview matching tasks without modifying them")
 	orphanCmd.Flags().BoolVar(&orphanAll, "all", false, "Reap all stale tasks matching inactivity threshold")
+	orphanCmd.Flags().BoolVar(&orphanAll, "reap", false, "Reap all stale tasks matching inactivity threshold (alias for --all)")
 	orphanCmd.Flags().BoolVarP(&orphanList, "list", "l", false, "List currently orphaned tasks and stale candidates")
 	orphanCmd.Flags().BoolVar(&orphanBackport, "backport", false, "Scan historical tasks and tag stale/abandoned open tasks as orphaned")
 	orphanCmd.Flags().BoolVarP(&orphanForce, "yes", "y", false, "Confirm reaping without interactive prompt")

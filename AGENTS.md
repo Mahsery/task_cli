@@ -30,7 +30,7 @@
 | **Next Actionable** | `tk next [-q\|--json]` | Highest-priority unblocked task ready for work (`-q` prints only ID) |
 | **Dependency Tree** | `tk tree [@topic] [-r]` | DAG graph; `-r` shows prerequisite breakdown |
 | **List Backlog** | `tk list [--ready\|--blocked\|--tasks\|--posts\|--ids]` | Filterable table; supports `-s open,in_progress`, `@topic`, `-q`, `--ids` |
-| **Inspect Details** | `tk show <ID> [-n]` | Full spec, notes, diffs, backlinks; `-n` numbers lines for anchors |
+| **Inspect Details** | `tk show <ID> [-n] [--all\|--max-lines <N>]` | Spec, notes, diffs, backlinks (truncated to 50 lines by default; `--all` for full) |
 | **Create Task** | `tk new [-q] -t "Title" -p urgent -T <topic> [--after <ID>]` | Accepts `-d` description, positional title, or piped stdin; `-q` prints only ID |
 | **Create Board Post**| `tk post [-q] -t "Title" -T <board> [-d "Body"]` | Untracked bug report or idea (P-n); `-q` prints only ID |
 | **Reply / Note** | `tk reply <ID> -m "Comment text"` | Appends discussion note (supports `[[wiki links]]` and piped stdin) |

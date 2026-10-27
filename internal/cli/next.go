@@ -68,36 +68,37 @@ Ideal for AI agents, CI runners, and developers asking 'what should I work on ne
 				sep = "-"
 			}
 
-			fmt.Println(strings.Repeat(sep, 80))
-			fmt.Printf("NEXT ACTIONABLE TASK: %s\n", target.ID)
-			fmt.Println(strings.Repeat(sep, 80))
-			fmt.Printf("Title:    %s\n", target.Title)
-			fmt.Printf("Status:   %-12s Priority: %-12s\n", strings.ToUpper(string(target.Status)), strings.ToUpper(string(target.Priority)))
+			var sb strings.Builder
+			fmt.Fprintln(&sb, strings.Repeat(sep, 80))
+			fmt.Fprintf(&sb, "NEXT ACTIONABLE TASK: %s\n", target.ID)
+			fmt.Fprintln(&sb, strings.Repeat(sep, 80))
+			fmt.Fprintf(&sb, "Title:    %s\n", target.Title)
+			fmt.Fprintf(&sb, "Status:   %-12s Priority: %-12s\n", strings.ToUpper(string(target.Status)), strings.ToUpper(string(target.Priority)))
 			if target.TopicPath != "" {
-				fmt.Printf("Topic:    @%s\n", target.TopicPath)
+				fmt.Fprintf(&sb, "Topic:    @%s\n", target.TopicPath)
 			} else if len(target.Tags) > 0 {
-				fmt.Printf("Tags:     [%s]\n", strings.Join(target.Tags, ", "))
+				fmt.Fprintf(&sb, "Tags:     [%s]\n", strings.Join(target.Tags, ", "))
 			}
 			if target.Assignee != "" {
-				fmt.Printf("Assignee: %s\n", target.Assignee)
+				fmt.Fprintf(&sb, "Assignee: %s\n", target.Assignee)
 			}
 			if len(target.DependsOn) > 0 {
-				fmt.Printf("Prereqs:  [%s] (All prerequisites completed ✓)\n", strings.Join(target.DependsOn, ", "))
+				fmt.Fprintf(&sb, "Prereqs:  [%s] (All prerequisites completed ✓)\n", strings.Join(target.DependsOn, ", "))
 			}
 			if len(target.Blocks) > 0 {
-				fmt.Printf("Unblocks: [%s] when completed\n", strings.Join(target.Blocks, ", "))
+				fmt.Fprintf(&sb, "Unblocks: [%s] when completed\n", strings.Join(target.Blocks, ", "))
 			}
 			if target.Description != "" {
-				fmt.Printf("\nDescription:\n%s\n", target.Description)
+				fmt.Fprintf(&sb, "\nDescription:\n%s\n", target.Description)
 			}
-			fmt.Println(strings.Repeat(sep, 80))
-			fmt.Println("Recommended commands:")
+			fmt.Fprintln(&sb, strings.Repeat(sep, 80))
+			fmt.Fprintln(&sb, "Recommended commands:")
 			if target.Status == domain.StatusOpen {
-				fmt.Printf("  tk claim %s             # Claim this task\n", target.ID)
+				fmt.Fprintf(&sb, "  tk claim %s             # Claim this task\n", target.ID)
 			}
-			fmt.Printf("  tk show %s              # Inspect details and notes\n", target.ID)
-			fmt.Printf("  tk done %s              # Mark completed when finished\n", target.ID)
-			return nil
+			fmt.Fprintf(&sb, "  tk show %s              # Inspect details and notes\n", target.ID)
+			fmt.Fprintf(&sb, "  tk done %s              # Mark completed when finished\n", target.ID)
+			return PrintWithPager(sb.String())
 		}
 
 		if nextQuiet {
@@ -137,13 +138,14 @@ Ideal for AI agents, CI runners, and developers asking 'what should I work on ne
 		}
 
 		if len(activeBlocked) > 0 {
-			fmt.Printf("No ready tasks available right now.\n\n")
-			fmt.Printf("Found %d open task(s) currently BLOCKED by prerequisites:\n", len(activeBlocked))
+			var sb strings.Builder
+			fmt.Fprintf(&sb, "No ready tasks available right now.\n\n")
+			fmt.Fprintf(&sb, "Found %d open task(s) currently BLOCKED by prerequisites:\n", len(activeBlocked))
 			for _, t := range activeBlocked {
-				fmt.Printf("  🔒 %s: %s (waiting on: %s)\n", t.ID, t.Title, strings.Join(t.BlockedBy, ", "))
+				fmt.Fprintf(&sb, "  🔒 %s: %s (waiting on: %s)\n", t.ID, t.Title, strings.Join(t.BlockedBy, ", "))
 			}
-			fmt.Printf("\nComplete the unfinished prerequisites above or use 'tk dep rm' to unblock.\n")
-			return nil
+			fmt.Fprintf(&sb, "\nComplete the unfinished prerequisites above or use 'tk dep rm' to unblock.\n")
+			return PrintWithPager(sb.String())
 		}
 
 		fmt.Println("No pending tasks! The backlog is clear.")

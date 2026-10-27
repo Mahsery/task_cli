@@ -68,8 +68,9 @@ func runRestoreList() error {
 		return nil
 	}
 
-	fmt.Printf("%-8s %-12s %-10s %-40s %s\n", "ID", "STATUS", "PRIORITY", "TITLE", "TOPIC")
-	fmt.Println(strings.Repeat("─", 88))
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%-8s %-12s %-10s %-40s %s\n", "ID", "STATUS", "PRIORITY", "TITLE", "TOPIC")
+	fmt.Fprintln(&sb, strings.Repeat("─", 88))
 	for _, t := range tombstones {
 		topicStr := "-"
 		if t.TopicPath != "" {
@@ -81,9 +82,9 @@ func runRestoreList() error {
 		if len(title) > 38 {
 			title = title[:35] + "..."
 		}
-		fmt.Printf("%-8s %-12s %-10s %-40s %s\n", t.ID, t.Status, t.Priority, title, topicStr)
+		fmt.Fprintf(&sb, "%-8s %-12s %-10s %-40s %s\n", t.ID, t.Status, t.Priority, title, topicStr)
 	}
-	return nil
+	return PrintWithPager(sb.String())
 }
 
 func init() {

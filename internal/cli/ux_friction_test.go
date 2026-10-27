@@ -426,3 +426,111 @@ func TestNonInteractiveConfirmationGuards(t *testing.T) {
 		t.Fatalf("expected non-interactive guard error from topicRmCmd, got: %v", err)
 	}
 }
+
+func TestCLITruncationOnShowAndList(t *testing.T) {
+	setupRealDaemonForCLITest(t)
+	t.Setenv("TERM", "dumb")
+
+	origMax := maxLinesFlag
+	origAll := showAllFlag
+	defer func() {
+		maxLinesFlag = origMax
+		showAllFlag = origAll
+		newQuiet = false
+		newDescription = ""
+	}()
+
+	maxLinesFlag = DefaultMaxLines
+	showAllFlag = false
+
+	// Build a task with a 100-line description
+	var descBuilder strings.Builder
+	for i := 1; i <= 100; i++ {
+		descBuilder.WriteString("Specification line content for context testing\n")
+	}
+	newQuiet = true
+	newDescription = descBuilder.String()
+	outID, err := captureStdout(t, func() error {
+		return newCmd.RunE(newCmd, []string{"Huge Spec Task"})
+	})
+	newQuiet = false
+	newDescription = ""
+	if err != nil {
+		t.Fatalf("create task failed: %v", err)
+	}
+	taskID := strings.TrimSpace(outID)
+
+	// 1. Default 'tk show' truncates to 50 lines and prints truncation notice
+	showOut, err := captureStdout(t, func() error {
+		return showCmd.RunE(showCmd, []string{taskID})
+	})
+	if err != nil {
+		t.Fatalf("tk show failed: %v", err)
+	}
+	if !strings.Contains(showOut, "output truncated: showing 50 of") {
+		t.Fatalf("expected default tk show output to be truncated at 50 lines, got:\n%s", showOut)
+	}
+
+	// 2. 'tk show --max-lines 15' truncates to 15 lines
+	maxLinesFlag = 15
+	showOut15, err := captureStdout(t, func() error {
+		return showCmd.RunE(showCmd, []string{taskID})
+	})
+	if err != nil {
+		t.Fatalf("tk show --max-lines 15 failed: %v", err)
+	}
+	if !strings.Contains(showOut15, "output truncated: showing 15 of") {
+		t.Fatalf("expected tk show --max-lines 15 output to be truncated at 15 lines, got:\n%s", showOut15)
+	}
+
+	// 3. 'tk show --all' shows full output without truncation
+	maxLinesFlag = DefaultMaxLines
+	showAllFlag = true
+	showOutAll, err := captureStdout(t, func() error {
+		return showCmd.RunE(showCmd, []string{taskID})
+	})
+	if err != nil {
+		t.Fatalf("tk show --all failed: %v", err)
+	}
+	if strings.Contains(showOutAll, "output truncated:") {
+		t.Fatalf("expected tk show --all to NOT truncate output, got:\n%s", showOutAll)
+	}
+	if strings.Count(showOutAll, "Specification line content for context testing") != 100 {
+		t.Fatalf("expected all 100 description lines in tk show --all, got %d", strings.Count(showOutAll, "Specification line content for context testing"))
+	}
+
+	// 4. Create 60 tasks and verify 'tk list' truncates by default and '--all' shows all
+	showAllFlag = false
+	maxLinesFlag = DefaultMaxLines
+	newQuiet = true
+	for i := 0; i < 60; i++ {
+		_, err := captureStdout(t, func() error {
+			return newCmd.RunE(newCmd, []string{"Bulk Task Item"})
+		})
+		if err != nil {
+			t.Fatalf("bulk create task failed: %v", err)
+		}
+	}
+	newQuiet = false
+
+	listOut, err := captureStdout(t, func() error {
+		return listCmd.RunE(listCmd, nil)
+	})
+	if err != nil {
+		t.Fatalf("tk list failed: %v", err)
+	}
+	if !strings.Contains(listOut, "output truncated: showing 50 of") {
+		t.Fatalf("expected default tk list with 61 tasks to truncate at 50 lines, got:\n%s", listOut)
+	}
+
+	showAllFlag = true
+	listOutAll, err := captureStdout(t, func() error {
+		return listCmd.RunE(listCmd, nil)
+	})
+	if err != nil {
+		t.Fatalf("tk list --all failed: %v", err)
+	}
+	if strings.Contains(listOutAll, "output truncated:") {
+		t.Fatalf("expected tk list --all to NOT truncate, got:\n%s", listOutAll)
+	}
+}

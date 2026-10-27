@@ -552,6 +552,7 @@ func init() {
 	treeCmd.Flags().StringVarP(&treeStatus, "status", "s", "", "Filter tasks by status, comma-separated for multiple (open, in_progress, done, closed, orphan)")
 	treeCmd.Flags().BoolVarP(&treeReverse, "reverse", "r", false, "Show reverse tree (prerequisite breakdown)")
 	treeCmd.Flags().BoolVarP(&treeAll, "all", "a", false, "Include closed and done tasks")
+	treeCmd.Flags().BoolVar(&treeAll, "include-done", false, "Include closed and done tasks (alias for -a)")
 	treeCmd.Flags().BoolVarP(&treeHideDone, "hide-done", "H", false, "Hide completed (done and closed) tasks while bridging remaining connections")
 	treeCmd.Flags().StringVarP(&treeTopic, "topic", "T", "", "Only tasks in this topic; related tasks elsewhere appear as ghost nodes")
 
